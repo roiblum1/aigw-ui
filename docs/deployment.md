@@ -151,7 +151,7 @@ objects labelled `app.kubernetes.io/managed-by=aigw-ui` on each cluster.
 
 ## Tested on
 
-OpenShift 4.20 (Kubernetes 1.33) on AWS, chart version 0.1.1:
+OpenShift 4.20 (Kubernetes 1.33) on AWS, chart version 0.1.1 (0.2.0 has not been deployed there):
 
 - fresh install, both pods ready under `restricted-v2` with no restarts;
 - UI and API through the Route, HTTP redirected to HTTPS;

@@ -16,6 +16,11 @@ type Cluster struct {
 
 	DiscoveryMessage string     `json:"discovery_message"`
 	DiscoveredAt     *time.Time `json:"discovered_at"`
+
+	// GatewayURL is the address of the cluster's gateway. When set, models are
+	// listed from its /v1/models endpoint.
+	GatewayURL        string `json:"gateway_url"`
+	HasDiscoveryToken bool   `json:"has_discovery_token"`
 }
 
 const (
@@ -26,8 +31,13 @@ const (
 // BackendRef is an AIServiceBackend that already exists on a cluster and the
 // model name the route sends to it.
 type BackendRef struct {
-	Name  string `json:"name"`
-	Model string `json:"model"`
+	Name string `json:"name"`
+	// Namespace is empty for the cluster's gateway namespace.
+	Namespace string `json:"namespace,omitempty"`
+	Model     string `json:"model"`
+	// Override reports whether the route sets modelNameOverride for this
+	// backend. The gateway documents quota matching only for that case.
+	Override bool `json:"override"`
 }
 
 type Endpoint struct {
@@ -56,6 +66,8 @@ type Model struct {
 	DefaultWindow string     `json:"default_window"`
 	CreatedAt     time.Time  `json:"created_at"`
 	Endpoints     []Endpoint `json:"endpoints"`
+	// QuotaCapable is false when no cluster has anything a quota can attach to.
+	QuotaCapable bool `json:"quota_capable"`
 }
 
 type Tenant struct {

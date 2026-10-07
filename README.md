@@ -21,7 +21,7 @@ cluster.
 ## What it does
 
 - **Clusters**: register LLM clusters, test the connection, see sync status, preview the YAML before it is applied.
-- **Models**: discovered automatically from each cluster's `AIGatewayRoute` objects every minute. Models can also be added by hand.
+- **Models**: discovered automatically every minute from each gateway's `/v1/models` and its `AIGatewayRoute` objects. Models can also be added by hand.
 - **Tenants**: one tenant per team, with API keys that can be issued and revoked.
 - **Quotas**: a token budget per tenant per model, per minute, hour or day, rendered as `QuotaPolicy` on every cluster.
 - **API**: everything the UI does is available over REST for a self-service portal.

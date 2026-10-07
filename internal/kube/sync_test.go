@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/rest"
 )
 
@@ -48,5 +49,53 @@ func TestSyncPrunesOnlyManagedObjects(t *testing.T) {
 	}
 	if len(deleted) != 1 || !strings.HasSuffix(deleted[0], "/aigatewayroutes/ours-stale") || res.Pruned != 1 {
 		t.Errorf("deleted %v (pruned %d), want only ours-stale", deleted, res.Pruned)
+	}
+}
+
+// A QuotaPolicy left in a namespace that no longer holds a backend is removed,
+// and objects are applied to their own namespace.
+func TestSyncQuotaPoliciesAcrossNamespaces(t *testing.T) {
+	var deleted, applied []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPatch:
+			applied = append(applied, r.URL.Path)
+			w.Write([]byte(`{"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"QuotaPolicy","metadata":{"name":"glm"}}`))
+		case r.Method == http.MethodDelete:
+			deleted = append(deleted, r.URL.Path)
+			w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Success"}`))
+		case r.URL.Path == "/apis/aigateway.envoyproxy.io/v1alpha1/quotapolicies":
+			w.Write([]byte(`{"apiVersion":"v1","kind":"List","metadata":{},"items":[
+				{"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"QuotaPolicy","metadata":{"name":"glm","namespace":"team-b","labels":{"app.kubernetes.io/managed-by":"aigw-ui"}}},
+				{"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"QuotaPolicy","metadata":{"name":"glm","namespace":"old-team","labels":{"app.kubernetes.io/managed-by":"aigw-ui"}}}
+			]}`))
+		case strings.Contains(r.URL.Path, "/secrets/"):
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}`))
+		default:
+			w.Write([]byte(`{"apiVersion":"v1","kind":"List","metadata":{},"items":[]}`))
+		}
+	}))
+	defer srv.Close()
+
+	client, err := newFromConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := &unstructured.Unstructured{}
+	policy.SetAPIVersion("aigateway.envoyproxy.io/v1alpha1")
+	policy.SetKind("QuotaPolicy")
+	policy.SetNamespace("team-b")
+	policy.SetName("glm")
+
+	if _, err := client.Sync(context.Background(), "ai-gateway", []*unstructured.Unstructured{policy}); err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != 1 || !strings.Contains(applied[0], "/namespaces/team-b/quotapolicies/glm") {
+		t.Errorf("applied %v, want the policy in team-b", applied)
+	}
+	if len(deleted) != 1 || !strings.Contains(deleted[0], "/namespaces/old-team/quotapolicies/glm") {
+		t.Errorf("deleted %v, want only the stale policy in old-team", deleted)
 	}
 }

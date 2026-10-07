@@ -138,3 +138,30 @@ func TestDiscoveredModel(t *testing.T) {
 	}
 	objs[0].DeepCopy()
 }
+
+func TestQuotaPolicyPerBackendNamespace(t *testing.T) {
+	quota := []TenantQuota{{TenantSlug: "team-a", Limit: 10, Window: "1h"}}
+	s := State{Namespace: "ai-gateway", GatewayName: "llm", Models: []Model{
+		{Name: "glm", Slug: "glm", DefaultLimit: 1, DefaultWindow: "1d", Quotas: quota, Existing: []Target{
+			{Namespace: "team-b", Backend: "glm-b", Model: "glm"},
+			{Backend: "glm-a", Model: "glm"}, // empty namespace is the gateway namespace
+			{Namespace: "team-b", Backend: "glm-b2", Model: "glm"},
+		}},
+		// Listed by the gateway but served from something a quota cannot target.
+		{Name: "judge", Slug: "judge", DefaultLimit: 1, DefaultWindow: "1d", Quotas: quota, Existing: []Target{}},
+	}}
+	objs := Objects(s)
+	if len(objs) != 2 {
+		t.Fatalf("got %v, want one QuotaPolicy in each of two namespaces", kinds(objs))
+	}
+	for i, want := range []struct {
+		ns      string
+		targets int
+	}{{"ai-gateway", 1}, {"team-b", 2}} {
+		targets, _, _ := unstructured.NestedSlice(objs[i].Object, "spec", "targetRefs")
+		if objs[i].GetNamespace() != want.ns || len(targets) != want.targets || objs[i].GetName() != "glm" {
+			t.Errorf("policy %d: %s/%s with %d targets, want %s/glm with %d",
+				i, objs[i].GetNamespace(), objs[i].GetName(), len(targets), want.ns, want.targets)
+		}
+	}
+}

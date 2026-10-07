@@ -38,8 +38,10 @@ type TenantQuota struct {
 // Target is an AIServiceBackend and the model name requests carry when they
 // reach it. QuotaPolicy matches on both.
 type Target struct {
-	Backend string
-	Model   string
+	// Namespace of the backend. Empty means the cluster's gateway namespace.
+	Namespace string
+	Backend   string
+	Model     string
 }
 
 type Model struct {
@@ -90,8 +92,8 @@ func Objects(s State) []*unstructured.Unstructured {
 		if m.Existing == nil {
 			out = append(out, backend(s, m), aiServiceBackend(s, m), route(s, m))
 		}
-		if len(m.Quotas) > 0 && len(m.targets()) > 0 {
-			out = append(out, quotaPolicy(s, m))
+		if len(m.Quotas) > 0 {
+			out = append(out, quotaPolicies(s, m)...)
 		}
 	}
 	if s.AuthEnabled {
@@ -156,7 +158,31 @@ func route(s State, m Model) *unstructured.Unstructured {
 	return u
 }
 
-func quotaPolicy(s State, m Model) *unstructured.Unstructured {
+// quotaPolicies returns one QuotaPolicy per namespace that holds a backend of
+// the model, because a policy can only target backends in its own namespace.
+// A model without backends gets none.
+func quotaPolicies(s State, m Model) []*unstructured.Unstructured {
+	byNamespace := map[string][]Target{}
+	var namespaces []string
+	for _, t := range m.targets() {
+		ns := t.Namespace
+		if ns == "" {
+			ns = s.Namespace
+		}
+		if _, ok := byNamespace[ns]; !ok {
+			namespaces = append(namespaces, ns)
+		}
+		byNamespace[ns] = append(byNamespace[ns], t)
+	}
+	sort.Strings(namespaces)
+	out := make([]*unstructured.Unstructured, 0, len(namespaces))
+	for _, ns := range namespaces {
+		out = append(out, quotaPolicy(ns, m, byNamespace[ns]))
+	}
+	return out
+}
+
+func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unstructured {
 	quotas := append([]TenantQuota(nil), m.Quotas...)
 	sort.Slice(quotas, func(i, j int) bool { return quotas[i].TenantSlug < quotas[j].TenantSlug })
 
@@ -175,7 +201,7 @@ func quotaPolicy(s State, m Model) *unstructured.Unstructured {
 	// One target per backend and one quota entry per distinct model name.
 	var targetRefs, perModel []any
 	seenBackend, seenModel := map[string]bool{}, map[string]bool{}
-	for _, t := range m.targets() {
+	for _, t := range targets {
 		if !seenBackend[t.Backend] {
 			seenBackend[t.Backend] = true
 			targetRefs = append(targetRefs, map[string]any{"group": "aigateway.envoyproxy.io", "kind": "AIServiceBackend", "name": t.Backend})
@@ -196,7 +222,7 @@ func quotaPolicy(s State, m Model) *unstructured.Unstructured {
 		}
 	}
 
-	u := object(aigwAPI, "QuotaPolicy", s.Namespace, m.Slug)
+	u := object(aigwAPI, "QuotaPolicy", namespace, m.Slug)
 	u.Object["spec"] = map[string]any{"targetRefs": targetRefs, "perModelQuotas": perModel}
 	return u
 }

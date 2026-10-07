@@ -6,6 +6,7 @@
 |---|---|---|
 | Cluster kubeconfigs | Postgres, `clusters.kubeconfig_enc` | AES-256-GCM |
 | Tenant API keys | Postgres, `api_keys.key_enc` | AES-256-GCM |
+| Gateway key for `/v1/models` | Postgres, `clusters.discovery_token_enc` | AES-256-GCM |
 | Encryption key | Kubernetes Secret `<release>-auth` on the hub | Kubernetes RBAC, etcd encryption if enabled |
 | Admin token | Kubernetes Secret `<release>-auth` on the hub | same |
 | Postgres password | Kubernetes Secret `<release>-postgresql` | same |

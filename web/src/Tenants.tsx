@@ -240,8 +240,9 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
           <select required value={quota.model_id} onChange={(e) => setQuota({ ...quota, model_id: e.target.value })}>
             <option value="">Select a model…</option>
             {data.models.map((m) => (
-              <option key={m.id} value={m.id}>
+              <option key={m.id} value={m.id} disabled={!m.quota_capable}>
                 {m.name}
+                {m.quota_capable ? "" : " (no quota possible)"}
               </option>
             ))}
           </select>

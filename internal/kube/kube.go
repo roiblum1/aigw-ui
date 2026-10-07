@@ -79,13 +79,23 @@ type SyncResult struct {
 	Pruned  int `json:"pruned"`
 }
 
-// Sync makes the managed objects in namespace match desired.
+// Sync makes the managed objects match desired. Everything lives in namespace
+// except QuotaPolicies, which sit next to the backends they target and so can
+// be in any namespace.
 func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstructured.Unstructured) (SyncResult, error) {
 	var res SyncResult
 	force := true
 	want := map[string]bool{}
+	quotaNamespaces := map[string]bool{namespace: true}
 
 	for _, obj := range desired {
+		ns := obj.GetNamespace()
+		if ns == "" {
+			ns = namespace
+		}
+		if obj.GetKind() == "QuotaPolicy" {
+			quotaNamespaces[ns] = true
+		}
 		gvr, ok := gvrFor(obj.GetKind())
 		if !ok {
 			return res, fmt.Errorf("unsupported kind %s", obj.GetKind())
@@ -94,18 +104,24 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 		if err != nil {
 			return res, err
 		}
-		_, err = c.dyn.Resource(gvr).Namespace(namespace).Patch(ctx, obj.GetName(), types.ApplyPatchType, body,
+		_, err = c.dyn.Resource(gvr).Namespace(ns).Patch(ctx, obj.GetName(), types.ApplyPatchType, body,
 			metav1.PatchOptions{FieldManager: fieldManager, Force: &force})
 		if err != nil {
-			return res, fmt.Errorf("apply %s/%s: %w", obj.GetKind(), obj.GetName(), describe(err))
+			return res, fmt.Errorf("apply %s %s/%s: %w", obj.GetKind(), ns, obj.GetName(), describe(err))
 		}
-		want[obj.GetKind()+"/"+obj.GetName()] = true
+		want[obj.GetKind()+"/"+ns+"/"+obj.GetName()] = true
 		res.Applied++
 	}
 
 	selector := render.ManagedLabel + "=" + render.ManagedValue
 	for _, m := range managed {
-		items, err := c.managedObjects(ctx, namespace, m.Kind, m.GVR, selector)
+		var items []unstructured.Unstructured
+		var err error
+		if m.Kind == "QuotaPolicy" {
+			items, err = c.managedQuotaPolicies(ctx, m.GVR, selector, quotaNamespaces)
+		} else {
+			items, err = c.managedObjects(ctx, namespace, m.Kind, m.GVR, selector)
+		}
 		if err != nil {
 			return res, fmt.Errorf("list %s: %w", m.Kind, describe(err))
 		}
@@ -115,17 +131,46 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 			if item.GetLabels()[render.ManagedLabel] != render.ManagedValue {
 				continue
 			}
-			if want[m.Kind+"/"+item.GetName()] {
+			if want[m.Kind+"/"+item.GetNamespace()+"/"+item.GetName()] {
 				continue
 			}
-			err := c.dyn.Resource(m.GVR).Namespace(namespace).Delete(ctx, item.GetName(), metav1.DeleteOptions{})
+			err := c.dyn.Resource(m.GVR).Namespace(item.GetNamespace()).Delete(ctx, item.GetName(), metav1.DeleteOptions{})
 			if err != nil && !apierrors.IsNotFound(err) {
-				return res, fmt.Errorf("delete %s/%s: %w", m.Kind, item.GetName(), describe(err))
+				return res, fmt.Errorf("delete %s %s/%s: %w", m.Kind, item.GetNamespace(), item.GetName(), describe(err))
 			}
 			res.Pruned++
 		}
 	}
 	return res, nil
+}
+
+// managedQuotaPolicies returns this tool's QuotaPolicies in every namespace, so
+// one left behind in a namespace that no longer has a backend is still found.
+// Credentials that may not list across namespaces fall back to the namespaces
+// in use now.
+func (c *Client) managedQuotaPolicies(ctx context.Context, gvr schema.GroupVersionResource, selector string, namespaces map[string]bool) ([]unstructured.Unstructured, error) {
+	list, err := c.dyn.Resource(gvr).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if missingKind(err) {
+		return nil, nil
+	}
+	if err == nil {
+		return list.Items, nil
+	}
+	if !apierrors.IsForbidden(err) {
+		return nil, err
+	}
+	var items []unstructured.Unstructured
+	for ns := range namespaces {
+		list, err := c.dyn.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		if missingKind(err) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, list.Items...)
+	}
+	return items, nil
 }
 
 // managedObjects returns the candidates for pruning. Secrets are looked up by

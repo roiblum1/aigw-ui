@@ -51,11 +51,17 @@ succeeded.
   "namespace": "ai-gateway",
   "gateway_name": "llm",
   "auth_enabled": false,
-  "kubeconfig": "apiVersion: v1\nkind: Config\n..."
+  "kubeconfig": "apiVersion: v1\nkind: Config\n...",
+  "gateway_url": "http://192.168.1.9",
+  "discovery_token": ""
 }
 ```
 
-The kubeconfig is never returned.
+`gateway_url` and `discovery_token` are optional. The URL must be the address
+only; a path such as `/v1/models` is rejected. The kubeconfig and the token
+are never returned. A cluster reports `has_discovery_token` instead. On
+update, an empty `discovery_token` keeps the stored one, and clearing
+`gateway_url` removes it.
 
 ## Models
 
@@ -95,7 +101,8 @@ by `GET` with `"source": "discovered"` and cannot be set.
 | DELETE | `/quotas/{id}` | | 204 |
 
 `window` is `1m`, `1h` or `1d`. `PUT .../quotas` creates the quota or replaces
-the existing one for that model. The `secret` of a key is returned only by the
+the existing one for that model. It returns 400 when the model has nothing a
+quota can attach to (`"quota_capable": false` in `GET /models`). The `secret` of a key is returned only by the
 call that creates it.
 
 ## Example: what a portal does when a request is approved

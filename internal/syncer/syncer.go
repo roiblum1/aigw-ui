@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"aigw-ui/internal/gateway"
 	"aigw-ui/internal/kube"
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
@@ -178,7 +179,12 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	found, err := client.Discover(ctx, c.Namespace)
+	var found []kube.DiscoveredModel
+	if c.GatewayURL != "" {
+		found, err = s.discoverViaGateway(ctx, c, client)
+	} else {
+		found, err = client.Discover(ctx, c.Namespace)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -186,7 +192,11 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 	for _, f := range found {
 		m := store.DiscoveredModel{Name: f.Name}
 		for _, b := range f.Backends {
-			m.Backends = append(m.Backends, store.BackendRef{Name: b.Name, Model: b.Model})
+			ns := b.Namespace
+			if ns == c.Namespace {
+				ns = "" // stored as "the gateway namespace" so it follows a change of that setting
+			}
+			m.Backends = append(m.Backends, store.BackendRef{Name: b.Name, Namespace: ns, Model: b.Model, Override: b.Override})
 		}
 		models = append(models, m)
 	}
@@ -198,4 +208,33 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 		s.Changed(ctx)
 	}
 	return len(models), nil
+}
+
+// discoverViaGateway takes the list of models from the gateway itself, which
+// knows every route attached to it whatever its namespace or backend type, and
+// looks up each model's backends from the routes so quotas can be attached.
+// If either source fails the poll fails and nothing changes: saving the names
+// without their backends would remove the quota policies already in place.
+func (s *Syncer) discoverViaGateway(ctx context.Context, c store.Cluster, client *kube.Client) ([]kube.DiscoveredModel, error) {
+	token, err := s.st.DiscoveryToken(ctx, c.ID)
+	if err != nil {
+		return nil, err
+	}
+	names, err := gateway.ListModels(ctx, c.GatewayURL, token)
+	if err != nil {
+		return nil, fmt.Errorf("list models from the gateway: %w", err)
+	}
+	routes, err := client.DiscoverAttached(ctx, c.Namespace, c.GatewayName)
+	if err != nil {
+		return nil, fmt.Errorf("read routes for the backends: %w", err)
+	}
+	byName := make(map[string]kube.DiscoveredModel, len(routes))
+	for _, r := range routes {
+		byName[r.Name] = r
+	}
+	found := make([]kube.DiscoveredModel, 0, len(names))
+	for _, name := range names {
+		found = append(found, kube.DiscoveredModel{Name: name, Backends: byName[name].Backends})
+	}
+	return found, nil
 }

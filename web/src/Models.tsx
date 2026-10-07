@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Boxes, Plus, Radar } from "lucide-react";
-import { api, type Cluster, type Model, type Window } from "./api";
+import { api, type Cluster, type Endpoint, type Model, type Window } from "./api";
 import {
   Empty,
   ErrorBanner,
@@ -84,6 +84,11 @@ export default function Models() {
                   <td>
                     <div className="strong">{m.name}</div>
                     <div className="detail mono">{m.slug}</div>
+                    {!m.quota_capable && m.endpoints.length > 0 && (
+                      <span className="tag warn" title="No cluster serves this model from an AIServiceBackend, and a QuotaPolicy cannot target anything else.">
+                        no quota possible
+                      </span>
+                    )}
                   </td>
                   <td>
                     {m.endpoints.length === 0 && <span className="detail">Not exposed on any cluster</span>}
@@ -93,7 +98,7 @@ export default function Models() {
                         {e.source === "discovered" ? (
                           <>
                             <span className="tag">discovered</span>
-                            <span className="detail mono">{e.backends?.map((b) => b.name).join(", ")}</span>
+                            <BackendList endpoint={e} />
                           </>
                         ) : (
                           <>
@@ -129,6 +134,33 @@ export default function Models() {
           onClose={() => setEditing(null)}
           onSaved={reload}
         />
+      )}
+    </>
+  );
+}
+
+/** The backends a discovered endpoint's quota attaches to, with what limits it. */
+function BackendList({ endpoint }: { endpoint: Endpoint }) {
+  const backends = endpoint.backends ?? [];
+  if (backends.length === 0) {
+    return (
+      <span className="tag warn" title="This cluster does not serve the model from an AIServiceBackend, so a quota cannot be attached here.">
+        no quota here
+      </span>
+    );
+  }
+  return (
+    <>
+      <span className="detail mono">
+        {backends.map((b) => (b.namespace ? `${b.namespace}/${b.name}` : b.name)).join(", ")}
+      </span>
+      {backends.some((b) => !b.override) && (
+        <span
+          className="tag warn"
+          title="The route sets no modelNameOverride for this backend. The gateway documents quota matching only against modelNameOverride, so check that the quota takes effect."
+        >
+          quota unverified
+        </span>
       )}
     </>
   );
@@ -212,7 +244,7 @@ function ModelForm(props: {
               <div className="endpoint-line">
                 <span className="strong">{c.name}</span>
                 <span className="tag">discovered</span>
-                <span className="detail mono">{found.backends?.map((b) => b.name).join(", ")}</span>
+                <BackendList endpoint={found} />
               </div>
               <p className="detail">Already exposed by this cluster's own route. Nothing is created for it here.</p>
             </div>

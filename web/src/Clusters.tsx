@@ -21,6 +21,8 @@ const emptyCluster: ClusterInput = {
   gateway_name: "",
   auth_enabled: false,
   kubeconfig: "",
+  gateway_url: "",
+  discovery_token: "",
 };
 
 export default function Clusters() {
@@ -152,7 +154,9 @@ export default function Clusters() {
 
 function ClusterForm(props: { cluster: Cluster | null; onClose: () => void; onSaved: () => Promise<void> }) {
   const { cluster } = props;
-  const [form, setForm] = useState<ClusterInput>(cluster ? { ...cluster, kubeconfig: "" } : emptyCluster);
+  const [form, setForm] = useState<ClusterInput>(
+    cluster ? { ...cluster, kubeconfig: "", discovery_token: "" } : emptyCluster,
+  );
   const set = (patch: Partial<ClusterInput>) => setForm((f) => ({ ...f, ...patch }));
 
   const save = async () => {
@@ -163,6 +167,8 @@ function ClusterForm(props: { cluster: Cluster | null; onClose: () => void; onSa
       gateway_name: form.gateway_name,
       auth_enabled: form.auth_enabled,
       kubeconfig: form.kubeconfig,
+      gateway_url: form.gateway_url,
+      discovery_token: form.discovery_token,
     };
     if (cluster) await api.updateCluster(cluster.id, body);
     else await api.createCluster(body);
@@ -208,6 +214,35 @@ function ClusterForm(props: { cluster: Cluster | null; onClose: () => void; onSa
           onChange={(e) => set({ kubeconfig: e.target.value })}
         />
       </Field>
+      <h3>Model discovery</h3>
+      <div className="grid-2">
+        <Field
+          label="Gateway URL"
+          hint="The gateway's address, without a path. Models are then listed from its /v1/models. Leave empty to read routes in the gateway namespace only."
+        >
+          <input
+            value={form.gateway_url}
+            placeholder="http://192.168.1.9"
+            onChange={(e) => set({ gateway_url: e.target.value })}
+          />
+        </Field>
+        <Field
+          label="API key for /v1/models"
+          hint={
+            cluster?.has_discovery_token
+              ? "A key is stored. Leave empty to keep it."
+              : "Only needed when the gateway requires a key."
+          }
+        >
+          <input
+            type="password"
+            autoComplete="off"
+            disabled={!form.gateway_url}
+            value={form.discovery_token}
+            onChange={(e) => set({ discovery_token: e.target.value })}
+          />
+        </Field>
+      </div>
       <label className="check">
         <input type="checkbox" checked={form.auth_enabled} onChange={(e) => set({ auth_enabled: e.target.checked })} />
         <span>

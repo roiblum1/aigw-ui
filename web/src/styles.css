@@ -420,6 +420,11 @@
     font-weight: 600;
     white-space: nowrap;
   }
+  .tag.warn {
+    background: var(--warning-soft);
+    color: var(--warning);
+    cursor: help;
+  }
   .tag.manual {
     background: var(--muted);
     color: var(--muted-foreground);

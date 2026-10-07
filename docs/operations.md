@@ -48,6 +48,9 @@ same message is shown in the cluster's row in the UI.
 | `connection refused` or a timeout | The hub cannot reach the cluster's API | Check routing and firewalls from the hub to port 6443 |
 | `Unauthorized` or `forbidden` in the sync message | The kubeconfig's token expired or lacks rights | Edit the cluster and paste a new kubeconfig |
 | No models appear | No `AIGatewayRoute` in the gateway namespace matches the model header exactly | Check `oc get aigatewayroutes -n <namespace>`; see [architecture.md](architecture.md) |
+| Discovery says `GET /v1/models returned 401 Unauthorized` | The gateway requires a key for its model list | Edit the cluster and set the API key for `/v1/models` |
+| Discovery says `read routes for the backends: ... forbidden` | The kubeconfig cannot list routes in all namespaces | Use a kubeconfig that can, or clear the Gateway URL |
+| A model shows "no quota possible" | It is served only from something other than an `AIServiceBackend` | Expected; a `QuotaPolicy` cannot target it |
 | A cluster stays Pending | `config.autoSync` is off, or the last sync is still running | Press **Sync** |
 | Server logs `waiting for postgres` at start | The database is still starting | Normal on a fresh install; it waits up to two minutes |
 | Server exits with `ENCRYPTION_KEY must be 32 bytes` | The Secret value is not 32 random bytes in base64 | Recreate it with `openssl rand -base64 32` |
@@ -57,13 +60,15 @@ same message is shown in the cluster's row in the UI.
 ## Checking what is on a cluster
 
 ```sh
-oc get backends,aiservicebackends,aigatewayroutes,quotapolicies,securitypolicies,secrets \
+oc get backends,aiservicebackends,aigatewayroutes,securitypolicies,secrets \
   -n <gateway namespace> -l app.kubernetes.io/managed-by=aigw-ui
+oc get quotapolicies -A -l app.kubernetes.io/managed-by=aigw-ui
 ```
 
 ## Removing everything from a cluster by hand
 
 ```sh
-oc delete backends,aiservicebackends,aigatewayroutes,quotapolicies,securitypolicies,secrets \
+oc delete backends,aiservicebackends,aigatewayroutes,securitypolicies,secrets \
   -n <gateway namespace> -l app.kubernetes.io/managed-by=aigw-ui
+oc delete quotapolicies -A -l app.kubernetes.io/managed-by=aigw-ui
 ```

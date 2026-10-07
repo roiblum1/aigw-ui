@@ -12,6 +12,8 @@ export interface Cluster {
   synced_at: string | null;
   discovery_message: string;
   discovered_at: string | null;
+  gateway_url: string;
+  has_discovery_token: boolean;
 }
 
 export interface ClusterInput {
@@ -21,6 +23,8 @@ export interface ClusterInput {
   gateway_name: string;
   auth_enabled: boolean;
   kubeconfig: string;
+  gateway_url: string;
+  discovery_token: string;
 }
 
 export interface Endpoint {
@@ -31,7 +35,8 @@ export interface Endpoint {
   upstream_model: string;
   /** "discovered" endpoints come from the cluster's own routes and are read-only. */
   source?: "manual" | "discovered";
-  backends?: { name: string; model: string }[];
+  /** Empty when the cluster has nothing a quota can attach to for this model. */
+  backends?: { name: string; namespace?: string; model: string; override: boolean }[];
 }
 
 export interface Model {
@@ -41,6 +46,7 @@ export interface Model {
   default_limit: number;
   default_window: Window;
   endpoints: Endpoint[];
+  quota_capable: boolean;
 }
 
 export interface ModelInput {

@@ -134,11 +134,12 @@ func affected(tag pgconn.CommandTag, err error) error {
 
 // ---- clusters ----
 
-const clusterCols = `id, name, site, namespace, gateway_name, auth_enabled, sync_status, sync_message, synced_at, created_at, discovery_message, discovered_at`
+const clusterCols = `id, name, site, namespace, gateway_name, auth_enabled, sync_status, sync_message, synced_at, created_at,
+	discovery_message, discovered_at, gateway_url, discovery_token_enc IS NOT NULL`
 
 func scanCluster(row pgx.Row) (Cluster, error) {
 	var c Cluster
-	err := row.Scan(&c.ID, &c.Name, &c.Site, &c.Namespace, &c.GatewayName, &c.AuthEnabled, &c.SyncStatus, &c.SyncMessage, &c.SyncedAt, &c.CreatedAt, &c.DiscoveryMessage, &c.DiscoveredAt)
+	err := row.Scan(&c.ID, &c.Name, &c.Site, &c.Namespace, &c.GatewayName, &c.AuthEnabled, &c.SyncStatus, &c.SyncMessage, &c.SyncedAt, &c.CreatedAt, &c.DiscoveryMessage, &c.DiscoveredAt, &c.GatewayURL, &c.HasDiscoveryToken)
 	return c, mapErr(err)
 }
 
@@ -163,31 +164,59 @@ func (s *Store) GetCluster(ctx context.Context, id string) (Cluster, error) {
 	return scanCluster(s.db.QueryRow(ctx, `SELECT `+clusterCols+` FROM clusters WHERE id = $1`, id))
 }
 
-func (s *Store) CreateCluster(ctx context.Context, c Cluster, kubeconfig []byte) (Cluster, error) {
+// sealOptional encrypts a value, or returns nil for an empty one.
+func (s *Store) sealOptional(plain []byte) ([]byte, error) {
+	if len(plain) == 0 {
+		return nil, nil
+	}
+	return s.box.Seal(plain)
+}
+
+func (s *Store) CreateCluster(ctx context.Context, c Cluster, kubeconfig []byte, discoveryToken string) (Cluster, error) {
 	enc, err := s.box.Seal(kubeconfig)
 	if err != nil {
 		return Cluster{}, err
 	}
+	token, err := s.sealOptional([]byte(discoveryToken))
+	if err != nil {
+		return Cluster{}, err
+	}
 	return scanCluster(s.db.QueryRow(ctx,
-		`INSERT INTO clusters (name, site, namespace, gateway_name, auth_enabled, kubeconfig_enc)
-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+clusterCols,
-		c.Name, c.Site, c.Namespace, c.GatewayName, c.AuthEnabled, enc))
+		`INSERT INTO clusters (name, site, namespace, gateway_name, auth_enabled, kubeconfig_enc, gateway_url, discovery_token_enc)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING `+clusterCols,
+		c.Name, c.Site, c.Namespace, c.GatewayName, c.AuthEnabled, enc, c.GatewayURL, token))
 }
 
-// UpdateCluster keeps the stored kubeconfig when kubeconfig is empty.
-func (s *Store) UpdateCluster(ctx context.Context, c Cluster, kubeconfig []byte) (Cluster, error) {
-	var enc []byte
-	if len(kubeconfig) > 0 {
-		var err error
-		if enc, err = s.box.Seal(kubeconfig); err != nil {
-			return Cluster{}, err
-		}
+// UpdateCluster keeps the stored kubeconfig and discovery token when the new
+// value is empty. The token is dropped when the gateway URL is removed.
+func (s *Store) UpdateCluster(ctx context.Context, c Cluster, kubeconfig []byte, discoveryToken string) (Cluster, error) {
+	enc, err := s.sealOptional(kubeconfig)
+	if err != nil {
+		return Cluster{}, err
+	}
+	token, err := s.sealOptional([]byte(discoveryToken))
+	if err != nil {
+		return Cluster{}, err
 	}
 	return scanCluster(s.db.QueryRow(ctx,
 		`UPDATE clusters SET name = $2, site = $3, namespace = $4, gateway_name = $5, auth_enabled = $6,
-		        kubeconfig_enc = COALESCE($7, kubeconfig_enc), sync_status = 'pending'
+		        kubeconfig_enc = COALESCE($7, kubeconfig_enc), sync_status = 'pending', gateway_url = $8,
+		        discovery_token_enc = CASE WHEN $8 = '' THEN NULL ELSE COALESCE($9, discovery_token_enc) END
 		 WHERE id = $1 RETURNING `+clusterCols,
-		c.ID, c.Name, c.Site, c.Namespace, c.GatewayName, c.AuthEnabled, enc))
+		c.ID, c.Name, c.Site, c.Namespace, c.GatewayName, c.AuthEnabled, enc, c.GatewayURL, token))
+}
+
+// DiscoveryToken returns the cluster's token for /v1/models, or "" if none is set.
+func (s *Store) DiscoveryToken(ctx context.Context, id string) (string, error) {
+	var enc []byte
+	if err := s.db.QueryRow(ctx, `SELECT discovery_token_enc FROM clusters WHERE id = $1`, id).Scan(&enc); err != nil {
+		return "", mapErr(err)
+	}
+	if enc == nil {
+		return "", nil
+	}
+	plain, err := s.box.Open(enc)
+	return string(plain), err
 }
 
 func (s *Store) DeleteCluster(ctx context.Context, id string) error {
@@ -255,6 +284,7 @@ func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
 		}
 		if m := byID[modelID]; m != nil {
 			m.Endpoints = append(m.Endpoints, e)
+			m.QuotaCapable = m.QuotaCapable || e.Source == SourceManual || len(e.Backends) > 0
 		}
 	}
 	return models, rows.Err()
@@ -501,7 +531,7 @@ func (s *Store) RenderState(ctx context.Context, clusterID string) (render.State
 		if source == SourceDiscovered {
 			m.Existing = make([]render.Target, 0, len(backends))
 			for _, b := range backends {
-				m.Existing = append(m.Existing, render.Target{Backend: b.Name, Model: b.Model})
+				m.Existing = append(m.Existing, render.Target{Namespace: b.Namespace, Backend: b.Name, Model: b.Model})
 			}
 		}
 		index[id] = len(st.Models)
@@ -559,8 +589,9 @@ func (s *Store) RenderState(ctx context.Context, clusterID string) (render.State
 // ApplyDiscovery records the models found on one cluster. It creates models
 // that are new, updates this cluster's discovered endpoints and drops the ones
 // that are gone. It never deletes a model, because that would also delete the
-// tenants' quotas on it, and it never touches manual endpoints. It reports
-// whether anything that affects rendering changed.
+// tenants' quotas on it, and it never touches manual endpoints. A model may
+// have no backends: it is then listed, but a quota cannot be attached to it.
+// It reports whether anything that affects rendering changed.
 func (s *Store) ApplyDiscovery(ctx context.Context, clusterID string, found []DiscoveredModel) (bool, error) {
 	changed := false
 	var skipped []string
@@ -568,9 +599,6 @@ func (s *Store) ApplyDiscovery(ctx context.Context, clusterID string, found []Di
 
 	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
 		for _, d := range found {
-			if len(d.Backends) == 0 {
-				continue
-			}
 			slug := render.Slug(d.Name)
 			if slug == "" {
 				skipped = append(skipped, d.Name)
@@ -595,9 +623,16 @@ func (s *Store) ApplyDiscovery(ctx context.Context, clusterID string, found []Di
 			}
 			names = append(names, d.Name)
 
+			if d.Backends == nil {
+				d.Backends = []BackendRef{}
+			}
 			backends, err := json.Marshal(d.Backends)
 			if err != nil {
 				return err
+			}
+			upstream := d.Name
+			if len(d.Backends) > 0 {
+				upstream = d.Backends[0].Model
 			}
 			tag, err := tx.Exec(ctx,
 				`INSERT INTO model_endpoints (model_id, cluster_id, upstream_model, source, backends)
@@ -606,7 +641,7 @@ func (s *Store) ApplyDiscovery(ctx context.Context, clusterID string, found []Di
 				     SET upstream_model = EXCLUDED.upstream_model, backends = EXCLUDED.backends
 				     WHERE model_endpoints.source = 'discovered'
 				       AND (model_endpoints.backends, model_endpoints.upstream_model) IS DISTINCT FROM (EXCLUDED.backends, EXCLUDED.upstream_model)`,
-				modelID, clusterID, d.Backends[0].Model, string(backends))
+				modelID, clusterID, upstream, string(backends))
 			if err != nil {
 				return err
 			}
@@ -636,4 +671,21 @@ func (s *Store) SetDiscoveryError(ctx context.Context, clusterID, message string
 	_, err := s.db.Exec(ctx, `UPDATE clusters SET discovery_message = $2, discovered_at = now() WHERE id = $1`,
 		clusterID, "failed: "+message)
 	return err
+}
+
+// QuotaCapable reports whether any cluster has something a quota on this model
+// can attach to: a manual endpoint, or a discovered AIServiceBackend.
+func (s *Store) QuotaCapable(ctx context.Context, modelID string) (bool, error) {
+	var exists, capable bool
+	err := s.db.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM models WHERE id = $1),
+		        EXISTS (SELECT 1 FROM model_endpoints WHERE model_id = $1 AND (source = 'manual' OR jsonb_array_length(backends) > 0))`,
+		modelID).Scan(&exists, &capable)
+	if err != nil {
+		return false, mapErr(err)
+	}
+	if !exists {
+		return false, ErrNotFound
+	}
+	return capable, nil
 }

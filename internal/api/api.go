@@ -16,6 +16,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
+	"aigw-ui/internal/gateway"
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/syncer"
@@ -168,9 +169,23 @@ type clusterBody struct {
 	GatewayName string `json:"gateway_name"`
 	AuthEnabled bool   `json:"auth_enabled"`
 	Kubeconfig  string `json:"kubeconfig"`
+	// GatewayURL is optional. DiscoveryToken is write-only; empty keeps the stored one.
+	GatewayURL     string `json:"gateway_url"`
+	DiscoveryToken string `json:"discovery_token"`
 }
 
-func (b clusterBody) validate(needKubeconfig bool) error {
+func (b *clusterBody) validate(needKubeconfig bool) error {
+	b.GatewayURL = strings.TrimSpace(b.GatewayURL)
+	b.DiscoveryToken = strings.TrimSpace(b.DiscoveryToken)
+	if b.GatewayURL != "" {
+		normalized, err := gateway.NormalizeURL(b.GatewayURL)
+		if err != nil {
+			return invalid("gateway_url %v", err)
+		}
+		b.GatewayURL = normalized
+	} else if b.DiscoveryToken != "" {
+		return invalid("discovery_token needs a gateway_url")
+	}
 	switch {
 	case !dnsLabel.MatchString(b.Name):
 		return invalid("name must be lowercase letters, digits and dashes")
@@ -185,7 +200,7 @@ func (b clusterBody) validate(needKubeconfig bool) error {
 }
 
 func (b clusterBody) cluster(id string) store.Cluster {
-	return store.Cluster{ID: id, Name: b.Name, Site: b.Site, Namespace: b.Namespace, GatewayName: b.GatewayName, AuthEnabled: b.AuthEnabled}
+	return store.Cluster{ID: id, Name: b.Name, Site: b.Site, Namespace: b.Namespace, GatewayName: b.GatewayName, AuthEnabled: b.AuthEnabled, GatewayURL: b.GatewayURL}
 }
 
 func (s *Server) listClusters(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +222,7 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	c, err := s.st.CreateCluster(r.Context(), b.cluster(""), []byte(b.Kubeconfig))
+	c, err := s.st.CreateCluster(r.Context(), b.cluster(""), []byte(b.Kubeconfig), b.DiscoveryToken)
 	if err != nil {
 		fail(w, err)
 		return
@@ -233,7 +248,7 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	c, err := s.st.UpdateCluster(r.Context(), b.cluster(r.PathValue("id")), []byte(strings.TrimSpace(b.Kubeconfig)))
+	c, err := s.st.UpdateCluster(r.Context(), b.cluster(r.PathValue("id")), []byte(strings.TrimSpace(b.Kubeconfig)), b.DiscoveryToken)
 	if err != nil {
 		fail(w, err)
 		return
@@ -566,6 +581,16 @@ func (s *Server) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	case !validWindow(b.Window):
 		fail(w, invalid("window must be 1m, 1h or 1d"))
+		return
+	}
+	// A quota on a model with nothing to attach it to would silently do nothing.
+	capable, err := s.st.QuotaCapable(r.Context(), b.ModelID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if !capable {
+		fail(w, invalid("this model has no AIServiceBackend on any cluster, so a quota cannot be applied to it"))
 		return
 	}
 	id := r.PathValue("id")

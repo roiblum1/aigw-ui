@@ -21,6 +21,8 @@ const routeList = `{
        {"matches": [{"headers": [{"name": "X-AI-EG-Model", "value": "embed"}]},
                     {"headers": [{"type": "RegularExpression", "name": "x-ai-eg-model", "value": "gpt-.*"}]}],
         "backendRefs": [{"name": "embed"}, {"name": "other-ns", "namespace": "elsewhere"}]},
+       {"matches": [{"headers": [{"type": "Exact", "name": "x-ai-eg-model", "value": "judge"}]}],
+        "backendRefs": [{"name": "judge-pool", "group": "inference.networking.k8s.io", "kind": "InferencePool"}]},
        {"matches": [{"headers": [{"type": "Exact", "name": "x-tenant", "value": "not-a-model"}]}],
         "backendRefs": [{"name": "ignored"}]}
      ]}},
@@ -60,9 +62,17 @@ func TestDiscover(t *testing.T) {
 	}
 	want := []DiscoveredModel{
 		// Listed by two routes, reported once. The fallback has no override, so it gets the route's model name.
-		{Name: "GLM5.3", Backends: []ModelBackend{{Name: "glm-fallback", Model: "GLM5.3"}, {Name: "glm-primary", Model: "glm-5.3"}}},
-		// Header names are case-insensitive; the backend in another namespace cannot be targeted.
-		{Name: "embed", Backends: []ModelBackend{{Name: "embed", Model: "embed"}}},
+		{Name: "GLM5.3", Backends: []ModelBackend{
+			{Name: "glm-fallback", Namespace: "ai-gateway", Model: "GLM5.3"},
+			{Name: "glm-primary", Namespace: "ai-gateway", Model: "glm-5.3", Override: true},
+		}},
+		// Header names are case-insensitive; a backend in another namespace keeps its namespace.
+		{Name: "embed", Backends: []ModelBackend{
+			{Name: "embed", Namespace: "ai-gateway", Model: "embed"},
+			{Name: "other-ns", Namespace: "elsewhere", Model: "embed"},
+		}},
+		// Served only from an InferencePool: listed, but nothing a quota can attach to.
+		{Name: "judge"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got  %+v\nwant %+v", got, want)
@@ -78,5 +88,45 @@ func TestDiscoverMissingCRD(t *testing.T) {
 	}
 	if _, err := client.Discover(context.Background(), "ai-gateway"); err == nil {
 		t.Error("want an error when the AIGatewayRoute CRD is not installed")
+	}
+}
+
+func TestDiscoverAttached(t *testing.T) {
+	const list = `{"apiVersion":"v1","kind":"List","metadata":{},"items":[
+	  {"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"AIGatewayRoute","metadata":{"name":"a","namespace":"team-a"},
+	   "spec":{"parentRefs":[{"name":"llm","namespace":"ai-gateway"}],
+	           "rules":[{"matches":[{"headers":[{"name":"x-ai-eg-model","value":"glm-5.3"}]}],"backendRefs":[{"name":"glm","modelNameOverride":"glm"}]}]}},
+	  {"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"AIGatewayRoute","metadata":{"name":"b","namespace":"ai-gateway"},
+	   "spec":{"parentRefs":[{"name":"llm"}],
+	           "rules":[{"matches":[{"headers":[{"name":"x-ai-eg-model","value":"judge"}]}],"backendRefs":[{"name":"judge"}]}]}},
+	  {"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"AIGatewayRoute","metadata":{"name":"c","namespace":"team-a"},
+	   "spec":{"parentRefs":[{"name":"llm"}],
+	           "rules":[{"matches":[{"headers":[{"name":"x-ai-eg-model","value":"other-gateway"}]}],"backendRefs":[{"name":"x"}]}]}}
+	]}`
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(list))
+	}))
+	defer srv.Close()
+	client, err := newFromConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.DiscoverAttached(context.Background(), "ai-gateway", "llm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/apis/aigateway.envoyproxy.io/v1alpha1/aigatewayroutes"; gotPath != want {
+		t.Errorf("listed %s, want the all-namespaces path %s", gotPath, want)
+	}
+	// Route c names a gateway "llm" in its own namespace team-a, which is a different gateway.
+	want := []DiscoveredModel{
+		{Name: "glm-5.3", Backends: []ModelBackend{{Name: "glm", Namespace: "team-a", Model: "glm", Override: true}}},
+		{Name: "judge", Backends: []ModelBackend{{Name: "judge", Namespace: "ai-gateway", Model: "judge"}}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got  %+v\nwant %+v", got, want)
 	}
 }
