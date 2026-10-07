@@ -74,7 +74,7 @@ export default function Models() {
               <tr>
                 <th>Model</th>
                 <th>Served from</th>
-                <th>Pool for tenants without a quota</th>
+                <th>Shared pool</th>
                 <th />
               </tr>
             </thead>
@@ -296,10 +296,12 @@ function ModelForm(props: {
         );
       })}
 
-      <h3>Pool for tenants without a quota</h3>
+      <h3>Shared pool</h3>
       <p className="hint">
-        Applies once at least one tenant has a quota on this model. All tenants without their own quota share this
-        pool, so keep it small to make a quota mandatory.
+        Applies once at least one tenant has a quota on this model. Every request draws from this pool as well as
+        from the tenant's own quota, and is let through while either has tokens left. Keep it at 1 to hold every
+        tenant strictly to its quota. Set it to what the model can serve to let tenants borrow what others leave
+        unused.
       </p>
       <div className="grid-2">
         <Field label="Tokens">

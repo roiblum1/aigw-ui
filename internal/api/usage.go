@@ -33,11 +33,26 @@ type usageRow struct {
 	Counters []usageCounter `json:"counters"`
 }
 
+// usagePool is the default bucket of a model: every request to the model is
+// charged to it, and a tenant whose own quota is used up can still go on
+// while the pool has tokens left.
+type usagePool struct {
+	ModelID   string         `json:"model_id"`
+	ModelName string         `json:"model_name"`
+	Limit     int64          `json:"limit"`
+	Window    string         `json:"window"`
+	Used      int64          `json:"used"`
+	ResetsAt  time.Time      `json:"resets_at"`
+	Counters  []usageCounter `json:"counters"`
+}
+
 type usageResponse struct {
 	// Enabled is false when the server has no Redis to read from.
 	Enabled bool       `json:"enabled"`
 	At      time.Time  `json:"at"`
 	Quotas  []usageRow `json:"quotas"`
+	// Pools is left out when the request asks for one tenant.
+	Pools []usagePool `json:"pools"`
 	// CanReset reports whether the server is allowed to reset a quota's usage.
 	CanReset bool `json:"can_reset"`
 	// Hint explains an empty result when it can.
@@ -87,6 +102,13 @@ func (s *Server) quotaCounters(ctx context.Context, now time.Time, tenantID stri
 		}
 		for _, ct := range render.Counters(state) {
 			id, model := tenantBySlug[ct.TenantSlug], modelBySlug[ct.ModelSlug]
+			if ct.Pool {
+				// The pool has no tenant; it is keyed by an empty slug.
+				id = "pool"
+				if tenantID != "" {
+					continue
+				}
+			}
 			if id == "" || model[0] == "" || (tenantID != "" && tenantID != id) {
 				continue
 			}
@@ -117,7 +139,7 @@ func (s *Server) quotaCounters(ctx context.Context, now time.Time, tenantID stri
 func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := time.Now()
-	resp := usageResponse{Enabled: s.usageReader != nil, At: now.UTC(), Quotas: []usageRow{}}
+	resp := usageResponse{Enabled: s.usageReader != nil, At: now.UTC(), Quotas: []usageRow{}, Pools: []usagePool{}}
 	if s.usageReader == nil {
 		writeJSON(w, http.StatusOK, resp)
 		return
@@ -145,9 +167,17 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 		row.Counters = append(row.Counters, usageCounter{Backend: c.backend, Clusters: c.clusters, Used: used})
 		row.Used = max(row.Used, used)
 	}
-	for _, row := range rows {
+	for id, row := range rows {
+		if id[0] == "" {
+			resp.Pools = append(resp.Pools, usagePool{
+				ModelID: row.ModelID, ModelName: row.ModelName, Limit: row.Limit, Window: row.Window,
+				Used: row.Used, ResetsAt: row.ResetsAt, Counters: row.Counters,
+			})
+			continue
+		}
 		resp.Quotas = append(resp.Quotas, *row)
 	}
+	sort.Slice(resp.Pools, func(i, j int) bool { return resp.Pools[i].ModelName < resp.Pools[j].ModelName })
 	sort.Slice(resp.Quotas, func(i, j int) bool {
 		a, b := resp.Quotas[i], resp.Quotas[j]
 		if a.TenantSlug != b.TenantSlug {
@@ -194,7 +224,7 @@ func (s *Server) resetUsage(w http.ResponseWriter, r *http.Request) {
 	var keys []string
 	var tenant, model string
 	for _, c := range counters {
-		if row := rows[[2]string{c.tenant, c.model}]; row.ModelID == modelID {
+		if row := rows[[2]string{c.tenant, c.model}]; row.ModelID == modelID && c.tenant != "" {
 			keys = append(keys, c.redis)
 			tenant, model = row.TenantSlug, row.ModelName
 		}

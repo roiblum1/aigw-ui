@@ -102,12 +102,19 @@ whether its request reached the clusters.
         {"backend": "ai-gateway/glm5-3", "clusters": ["site1-a", "site2-a"], "used": 46800}
       ]
     }
+  ],
+  "pools": [
+    {"model_id": "<id>", "model_name": "GLM5.3", "limit": 2500000, "window": "1d",
+     "used": 1182572, "resets_at": "2026-10-09T00:00:00Z", "counters": [ ... ]}
   ]
 }
 ```
 
 The numbers are read from the rate limit counters in Redis at the moment of
 the call. `enabled` is `false` when the server has no Redis configured.
+`pools` holds the same numbers for each model's shared pool, the bucket every
+request to the model is charged to. It is left out when `tenant_id` is given.
+
 `counters` has more than one entry when the model's backends are named
 differently between clusters; `used` is then the highest of them, because
 each counter is held to the limit on its own. `hint` appears when no counter

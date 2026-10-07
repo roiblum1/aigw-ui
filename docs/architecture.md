@@ -161,7 +161,6 @@ run against a live Envoy AI Gateway:
 - that the gateway's controller sets a condition within two seconds, and that its first condition is `Accepted` or `NotAccepted`. If it is slower, the task log shows the object without a gateway verdict, or with the verdict on the previous version;
 - that the counter names computed for the Usage page match what a live rate limit service writes. They follow the gateway's and the rate limit service's source. If they do not match, the page says what it found in Redis instead;
 - that a reset frees a tenant that was already rejected. Deleting the counter was tested; the rate limit service's own over-limit cache was not;
-- reading Redis through an OpenShift Route (`rediss://`); it was tested against a plain Redis only;
 - that `/v1/models` still answers once "Enforce API keys" is on. If it needs a key, set the cluster's API key for `/v1/models`.
 
 Check them on one test cluster with the Manifests preview before a first sync

@@ -11,11 +11,17 @@ import (
 func TestCounterRedisKey(t *testing.T) {
 	now := time.Unix(1791400000, 0) // 2026-10-07 15:46:40 UTC
 	counters := Counters(testState())
-	if len(counters) != 2 {
-		t.Fatalf("got %d counters, want one per tenant quota", len(counters))
+	if len(counters) != 3 {
+		t.Fatalf("got %d counters, want the pool and one per tenant quota", len(counters))
+	}
+	// The default bucket comes after the two rules, so it is "rule-2".
+	pool := counters[0]
+	wantPool := `ai-gateway-quota_backend_name_ai-gateway/glm5-3_model_name_override_glm-5.3_rule-2-match--1_rule-2-match--1_1791331200`
+	if got := pool.RedisKey("", now); !pool.Pool || pool.TenantSlug != "" || got != wantPool {
+		t.Errorf("pool (1d):\n got %s\nwant %s", got, wantPool)
 	}
 	// Rules are sorted by tenant, so team-a is rule 0 although it is listed second.
-	a, b := counters[0], counters[1]
+	a, b := counters[1], counters[2]
 	wantA := `ai-gateway-quota_backend_name_ai-gateway/glm5-3_model_name_override_glm-5.3_` +
 		`rule-0-x-aigw-client-id|^team-a\.[a-f0-9]+$-match-0_rule-0-x-aigw-client-id|^team-a\.[a-f0-9]+$-match-0_1791331200`
 	if got := a.RedisKey("", now); got != wantA {
@@ -38,7 +44,12 @@ func TestCountersSkipInvalidQuotas(t *testing.T) {
 		Quotas:   []TenantQuota{{TenantSlug: "aaa", Limit: 10, Window: ""}, {TenantSlug: "bbb", Limit: 10, Window: "1h"}},
 		Existing: []Target{{Namespace: "models", Backend: "glm-a", Model: "glm"}, {Backend: "glm-b", Model: "glm"}},
 	}}}
-	counters := Counters(s)
+	var counters []Counter
+	for _, c := range Counters(s) {
+		if !c.Pool {
+			counters = append(counters, c)
+		}
+	}
 	if len(counters) != 2 {
 		t.Fatalf("got %d counters, want bbb on each of two backends", len(counters))
 	}

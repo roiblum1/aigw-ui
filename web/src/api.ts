@@ -146,6 +146,16 @@ export interface UsageQuota {
   counters: { backend: string; clusters: string[]; used: number }[];
 }
 
+/** A model's default bucket: every request to the model is charged to it. */
+export interface UsagePool {
+  model_id: string;
+  model_name: string;
+  limit: number;
+  window: Window;
+  used: number;
+  resets_at: string;
+}
+
 export interface UsageReport {
   /** False when the server has no Redis to read from. */
   enabled: boolean;
@@ -153,6 +163,7 @@ export interface UsageReport {
   can_reset: boolean;
   at: string;
   quotas: UsageQuota[];
+  pools: UsagePool[];
   hint?: string;
 }
 

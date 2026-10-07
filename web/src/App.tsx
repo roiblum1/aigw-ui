@@ -20,6 +20,7 @@ import Models from "./Models";
 import Tenants from "./Tenants";
 import Usage from "./Usage";
 import Activity from "./Activity";
+import Dashboard from "./Dashboard";
 import { ErrorBanner, PageHeader, StatusBadge, UNAUTHORIZED_EVENT, formatTime, useLoad } from "./components";
 
 const pages = [
@@ -227,6 +228,7 @@ function Overview() {
           <Stat label="Quotas" value={o.quotas} icon={Gauge} />
         </div>
       )}
+      <Dashboard />
       {data && data.clusters.length > 0 && (
         <section className="card">
           <h2>Cluster sync</h2>

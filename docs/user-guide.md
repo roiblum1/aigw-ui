@@ -73,9 +73,11 @@ A discovered endpoint can also carry a warning:
 Enter the name clients send in the `model` field, then tick each cluster and
 give the host and port of the model server.
 
-**Pool for tenants without a quota.** Once any tenant has a quota on a model,
-tenants without one share this pool. Keep it at 1 token to make a quota
-mandatory.
+**Shared pool.** Once any tenant has a quota on a model, every request also
+draws from this pool, and tenants without a quota use only the pool. Keep it
+at 1 token to hold everyone strictly to their quota. See
+[Letting tenants use what others leave unused](#letting-tenants-use-what-others-leave-unused)
+for the other way to use it.
 
 **Cost expression.** By default every token costs the same. An expression
 such as `input_tokens + output_tokens * 4u` makes output tokens cost four
@@ -104,6 +106,47 @@ Clients send the key as `Authorization: Bearer sk-...`.
 | Delete a tenant | Removes the tenant, its keys and its quotas |
 
 A quota is one budget for the tenant on that model across all sites.
+
+## Letting tenants use what others leave unused
+
+The gateway has no setting that moves unused tokens from one tenant to
+another. The **shared pool** of a model gives the same result.
+
+Every request is charged to two buckets: the tenant's own quota and the
+model's shared pool. It is let through while either of them has tokens left.
+So:
+
+| Shared pool | Effect |
+|---|---|
+| 1 token (the default) | Strict. A tenant stops at its own quota |
+| What the model can serve in the window | Tenants can go past their quota while the model as a whole is under that capacity. Once the pool is used up, only tenants with quota left are served |
+
+With the pool set to capacity, a tenant's quota becomes its guaranteed share
+and everything nobody is using is open to whoever asks first.
+
+Things to know:
+
+- The pool and the quotas are counted separately and each in its own window.
+  Use the same window for both to keep this easy to reason about.
+- A tenant without any quota on the model can use the pool too.
+- The guarantee holds only while the quotas add up to no more than the pool.
+- The **Overview** shows how full each model's pool is.
+
+## Overview charts
+
+With usage monitoring on, the Overview shows the current window live:
+
+| Chart | Shows |
+|---|---|
+| Allocated and used | The sum of all tenant quotas in the selected window, and how much of it is used |
+| Who is using it | Share of the tokens used, by tenant |
+| On which model | Share of the tokens used, by model |
+| Closest to the limit | The five quotas with the highest percentage used, in any window |
+| Shared pool per model | How full each model's shared pool is |
+| Tokens per minute | The rate across all tenants, measured while the page is open. Nothing is stored, so it starts empty each time |
+
+Quotas with different windows are never added together; pick the window with
+the buttons at the top right.
 
 ## Activity
 

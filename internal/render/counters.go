@@ -20,6 +20,9 @@ type Counter struct {
 	Limit   int64
 	Window  string
 	Shadow  bool
+	// Pool marks the counter of the model's default bucket, which every
+	// request is charged to. TenantSlug is empty for it.
+	Pool bool
 	// stem is the Redis key without the key prefix and the window start.
 	stem string
 }
@@ -40,6 +43,19 @@ func Counters(s State) []Counter {
 				continue
 			}
 			seen[backend+"\x00"+t.Model] = true
+			prefix := quotaDomain + "_backend_name_" + backend + "_model_name_override_" + t.Model + "_"
+			if len(rules) > 0 {
+				// The default bucket is named after the number of rules before it.
+				limit, window := m.DefaultLimit, m.DefaultWindow
+				if !validQuota(limit, window) {
+					limit, window = fallbackLimit, fallbackWindow
+				}
+				pool := "rule-" + strconv.Itoa(len(rules)) + "-match--1"
+				out = append(out, Counter{
+					ModelSlug: m.Slug, Backend: backend, Limit: limit, Window: window, Pool: true,
+					stem: prefix + pool + "_" + pool + "_",
+				})
+			}
 			for i, q := range rules {
 				// The gateway names the descriptor of a rule after its position,
 				// header and pattern, and sends the same string as its value.
@@ -47,7 +63,7 @@ func Counters(s State) []Counter {
 				out = append(out, Counter{
 					ModelSlug: m.Slug, TenantSlug: q.TenantSlug, Backend: backend,
 					Limit: q.Limit, Window: q.Window, Shadow: q.Shadow,
-					stem: quotaDomain + "_backend_name_" + backend + "_model_name_override_" + t.Model + "_" + rule + "_" + rule + "_",
+					stem: prefix + rule + "_" + rule + "_",
 				})
 			}
 		}
