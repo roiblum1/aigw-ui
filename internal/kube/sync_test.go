@@ -83,6 +83,7 @@ func TestSyncQuotaPoliciesAcrossNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.settle = 0
 	policy := &unstructured.Unstructured{}
 	policy.SetAPIVersion("aigateway.envoyproxy.io/v1alpha1")
 	policy.SetKind("QuotaPolicy")
@@ -97,5 +98,71 @@ func TestSyncQuotaPoliciesAcrossNamespaces(t *testing.T) {
 	}
 	if len(deleted) != 1 || !strings.Contains(deleted[0], "/namespaces/old-team/quotapolicies/glm") {
 		t.Errorf("deleted %v, want only the stale policy in old-team", deleted)
+	}
+}
+
+// Sync reports what the cluster confirmed: an object that did not exist is
+// created, one whose generation moved is updated, and one that stayed the
+// same is not listed. The gateway's verdict is read back afterwards.
+func TestSyncReportsChangesAndGatewayStatus(t *testing.T) {
+	generation := map[string]int{"old": 3, "same": 5}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		name := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		object := func(gen int, condition string) string {
+			return `{"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"QuotaPolicy","metadata":{"name":"` + name +
+				`","namespace":"ns","generation":` + string(rune('0'+gen)) + `},"status":{"conditions":[{"type":"` + condition + `","message":"why"}]}}`
+		}
+		switch {
+		case r.Method == http.MethodPatch:
+			if name != "same" {
+				generation[name]++
+			}
+			w.Write([]byte(object(generation[name], "Accepted")))
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/quotapolicies/"):
+			if generation[name] == 0 {
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}`))
+				return
+			}
+			condition := "Accepted"
+			if name == "old" {
+				condition = "NotAccepted"
+			}
+			w.Write([]byte(object(generation[name], condition)))
+		default:
+			w.Write([]byte(`{"apiVersion":"v1","kind":"List","metadata":{},"items":[]}`))
+		}
+	}))
+	defer srv.Close()
+
+	client, err := newFromConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.settle = 0
+	var desired []*unstructured.Unstructured
+	for _, name := range []string{"new", "old", "same"} {
+		p := &unstructured.Unstructured{}
+		p.SetAPIVersion("aigateway.envoyproxy.io/v1alpha1")
+		p.SetKind("QuotaPolicy")
+		p.SetName(name)
+		desired = append(desired, p)
+	}
+	res, err := client.Sync(context.Background(), "ns", desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Applied != 3 || len(res.Changes) != 2 {
+		t.Fatalf("applied %d, changes %+v; want 3 applied and 2 changes", res.Applied, res.Changes)
+	}
+	if c := res.Changes[0]; c.Name != "new" || c.Action != "created" || c.Gateway != "Accepted" {
+		t.Errorf("first change = %+v, want new created and accepted", c)
+	}
+	if c := res.Changes[1]; c.Name != "old" || c.Action != "updated" || c.Gateway != "NotAccepted" {
+		t.Errorf("second change = %+v, want old updated and not accepted", c)
+	}
+	if len(res.Rejected) != 1 || res.Rejected[0].Name != "old" || res.Rejected[0].GatewayMessage != "why" {
+		t.Errorf("rejected = %+v, want old with its message", res.Rejected)
 	}
 }

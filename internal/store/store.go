@@ -219,8 +219,17 @@ func (s *Store) DiscoveryToken(ctx context.Context, id string) (string, error) {
 	return string(plain), err
 }
 
+// DeleteCluster also closes the task results that were still waiting for the
+// cluster: nothing will ever apply them now.
 func (s *Store) DeleteCluster(ctx context.Context, id string) error {
-	return affected(s.db.Exec(ctx, `DELETE FROM clusters WHERE id = $1`, id))
+	return mapErr(pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`UPDATE task_results SET status = 'failed', message = 'The cluster was removed before this was applied.', finished_at = now()
+			 WHERE cluster_id = $1 AND status <> 'succeeded'`, id); err != nil {
+			return err
+		}
+		return affected(tx.Exec(ctx, `DELETE FROM clusters WHERE id = $1`, id))
+	}))
 }
 
 func (s *Store) Kubeconfig(ctx context.Context, id string) ([]byte, error) {
@@ -461,8 +470,11 @@ func (s *Store) CreateKey(ctx context.Context, tenantID, name string) (APIKey, s
 	return k, plain, mapErr(err)
 }
 
-func (s *Store) RevokeKey(ctx context.Context, id string) error {
-	return affected(s.db.Exec(ctx, `UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`, id))
+// RevokeKey returns the client ID of the key it revoked.
+func (s *Store) RevokeKey(ctx context.Context, id string) (string, error) {
+	var clientID string
+	err := s.db.QueryRow(ctx, `UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL RETURNING client_id`, id).Scan(&clientID)
+	return clientID, mapErr(err)
 }
 
 // ---- quotas ----
@@ -496,8 +508,13 @@ func (s *Store) UpsertQuota(ctx context.Context, tenantID, modelID string, limit
 	return mapErr(err)
 }
 
-func (s *Store) DeleteQuota(ctx context.Context, id string) error {
-	return affected(s.db.Exec(ctx, `DELETE FROM quotas WHERE id = $1`, id))
+// DeleteQuota returns "<tenant> on <model>" for the quota it removed.
+func (s *Store) DeleteQuota(ctx context.Context, id string) (string, error) {
+	var label string
+	err := s.db.QueryRow(ctx,
+		`DELETE FROM quotas q USING tenants t, models m
+		 WHERE q.id = $1 AND t.id = q.tenant_id AND m.id = q.model_id RETURNING t.slug || ' on ' || m.name`, id).Scan(&label)
+	return label, mapErr(err)
 }
 
 // ---- derived ----
@@ -515,8 +532,9 @@ func (s *Store) Overview(ctx context.Context) (Overview, error) {
 	return o, err
 }
 
-// RenderState collects everything one cluster should be running.
-func (s *Store) RenderState(ctx context.Context, clusterID string) (render.State, error) {
+// RenderState collects everything one cluster should be running. withKeys
+// false leaves out the API keys, for callers that only need the quotas.
+func (s *Store) RenderState(ctx context.Context, clusterID string, withKeys bool) (render.State, error) {
 	c, err := s.GetCluster(ctx, clusterID)
 	if err != nil {
 		return render.State{}, err
@@ -571,6 +589,9 @@ func (s *Store) RenderState(ctx context.Context, clusterID string) (render.State
 	}
 	if err := rows.Err(); err != nil {
 		return st, err
+	}
+	if !withKeys {
+		return st, nil
 	}
 
 	rows, err = s.db.Query(ctx,

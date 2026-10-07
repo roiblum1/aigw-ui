@@ -24,6 +24,8 @@ cluster.
 - **Models**: discovered automatically every minute from each gateway's `/v1/models` and its `AIGatewayRoute` objects. Models can also be added by hand.
 - **Tenants**: one tenant per team, with API keys that can be issued and revoked.
 - **Quotas**: a token budget per tenant per model, per minute, hour or day, rendered as `QuotaPolicy` on every cluster, with an optional dry-run mode and a per-model cost expression.
+- **Usage**: live tokens used per tenant and model in the current window, read from the quota counters in Redis.
+- **Activity**: a task log of every change, showing per cluster which objects were created, updated or deleted and whether the gateway accepted them.
 - **API**: everything the UI does is available over REST for a self-service portal.
 
 ## Quick start on OpenShift
@@ -89,5 +91,5 @@ clusters, the image, the Helm chart on OpenShift 4.20, and the offline bundle.
 Not tested against a real Envoy AI Gateway installation yet. See
 [docs/architecture.md](docs/architecture.md#not-verified-on-a-real-gateway).
 
-Not built yet: usage history, monthly budgets and grants, cross-site failover,
+Not built yet: usage history beyond the current window, monthly budgets and grants, cross-site failover,
 LDAP login, an audit log.

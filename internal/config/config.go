@@ -20,6 +20,15 @@ type Config struct {
 	// SyncEvery is how often every cluster is synced again even though nothing
 	// changed, to retry failures and undo manual edits. 0 turns it off.
 	SyncEvery time.Duration
+
+	// RedisURL is the Redis the gateways' quota rate limit services count in.
+	// It is only read, to show usage. Empty turns usage monitoring off.
+	RedisURL         string
+	RedisCAFile      string
+	RedisTLSInsecure bool
+	RedisKeyPrefix   string
+	// RedisAllowReset lets an admin delete a quota's counter to reset its usage.
+	RedisAllowReset bool
 }
 
 func Load() (*Config, error) {
@@ -29,6 +38,12 @@ func Load() (*Config, error) {
 		AdminToken:  os.Getenv("ADMIN_TOKEN"),
 		UIDir:       envOr("UI_DIR", "web/dist"),
 		AutoSync:    envOr("AUTO_SYNC", "true") == "true",
+
+		RedisURL:         os.Getenv("REDIS_URL"),
+		RedisCAFile:      os.Getenv("REDIS_CA_FILE"),
+		RedisTLSInsecure: os.Getenv("REDIS_TLS_INSECURE") == "true",
+		RedisKeyPrefix:   os.Getenv("REDIS_KEY_PREFIX"),
+		RedisAllowReset:  os.Getenv("REDIS_ALLOW_RESET") == "true",
 	}
 	if c.DatabaseURL == "" {
 		return nil, errors.New("DATABASE_URL is required")

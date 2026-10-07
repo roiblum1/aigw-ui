@@ -198,17 +198,9 @@ func quotaPolicies(s State, m Model) []*unstructured.Unstructured {
 }
 
 func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unstructured {
-	quotas := append([]TenantQuota(nil), m.Quotas...)
-	sort.Slice(quotas, func(i, j int) bool { return quotas[i].TenantSlug < quotas[j].TenantSlug })
-
+	quotas := tenantRules(m)
 	rules := make([]any, 0, len(quotas))
 	for _, q := range quotas {
-		// The CRD rejects a quota without a valid limit and duration, which
-		// would fail the whole sync. Such a tenant falls back to the default
-		// bucket instead.
-		if !validQuota(q.Limit, q.Window) {
-			continue
-		}
 		rule := map[string]any{
 			"clientSelectors": []any{
 				map[string]any{"headers": []any{
@@ -261,6 +253,24 @@ func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unst
 		},
 	}
 	return u
+}
+
+// tenantRules returns the tenant quotas of a model in the order they become
+// bucket rules. The position of a rule is part of its counter's name in
+// Redis, so Counters relies on the same order.
+//
+// The CRD rejects a quota without a valid limit and duration, which would
+// fail the whole sync. Such a tenant is left out and falls back to the
+// default bucket.
+func tenantRules(m Model) []TenantQuota {
+	quotas := make([]TenantQuota, 0, len(m.Quotas))
+	for _, q := range m.Quotas {
+		if validQuota(q.Limit, q.Window) {
+			quotas = append(quotas, q)
+		}
+	}
+	sort.Slice(quotas, func(i, j int) bool { return quotas[i].TenantSlug < quotas[j].TenantSlug })
+	return quotas
 }
 
 // fallbackLimit and fallbackWindow replace a default bucket that has no valid

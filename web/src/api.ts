@@ -102,6 +102,60 @@ export interface Overview {
   quotas: number;
 }
 
+export interface TaskChange {
+  kind: string;
+  namespace: string;
+  name: string;
+  action?: "created" | "updated" | "deleted";
+  /** Condition the gateway's controller set on the object, e.g. "Accepted". */
+  gateway?: string;
+  gateway_message?: string;
+}
+
+export interface TaskResult {
+  cluster_name: string;
+  /** A failed result is tried again by the next sync. */
+  status: "pending" | "succeeded" | "failed";
+  message: string;
+  changes: TaskChange[];
+  rejected: TaskChange[];
+  finished_at: string | null;
+}
+
+export interface Task {
+  id: number;
+  action: string;
+  summary: string;
+  status: "pending" | "succeeded" | "failed";
+  message: string;
+  created_at: string;
+  results: TaskResult[];
+}
+
+export interface UsageQuota {
+  tenant_id: string;
+  tenant_slug: string;
+  model_id: string;
+  model_name: string;
+  limit: number;
+  window: Window;
+  shadow: boolean;
+  /** Highest counter; each counter is held to the limit on its own. */
+  used: number;
+  resets_at: string;
+  counters: { backend: string; clusters: string[]; used: number }[];
+}
+
+export interface UsageReport {
+  /** False when the server has no Redis to read from. */
+  enabled: boolean;
+  /** Whether the server may reset a quota's usage. */
+  can_reset: boolean;
+  at: string;
+  quotas: UsageQuota[];
+  hint?: string;
+}
+
 export interface ProbeResult {
   reachable: boolean;
   error?: string;
@@ -145,6 +199,10 @@ async function request<T>(method: string, path: string, body?: unknown, token = 
 export const api = {
   checkToken: (token: string) => request<Overview>("GET", "/overview", undefined, token),
   overview: () => request<Overview>("GET", "/overview"),
+  tasks: () => request<Task[]>("GET", "/tasks"),
+  resetUsage: (tenantId: string, modelId: string) =>
+    request<{ counters: number; deleted: number }>("POST", `/tenants/${tenantId}/quotas/${modelId}/reset`),
+  usage: (tenantId?: string) => request<UsageReport>("GET", "/usage" + (tenantId ? `?tenant_id=${tenantId}` : "")),
 
   clusters: () => request<Cluster[]>("GET", "/clusters"),
   createCluster: (c: ClusterInput) => request<Cluster>("POST", "/clusters", c),

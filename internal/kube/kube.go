@@ -51,6 +51,9 @@ func gvrFor(kind string) (schema.GroupVersionResource, bool) {
 type Client struct {
 	dyn  dynamic.Interface
 	disc discovery.DiscoveryInterface
+	// settle is how long Sync waits after a change before it reads what the
+	// gateway's controller made of the objects.
+	settle time.Duration
 }
 
 func New(kubeconfig []byte) (*Client, error) {
@@ -71,12 +74,43 @@ func newFromConfig(cfg *rest.Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{dyn: dyn, disc: disc}, nil
+	return &Client{dyn: dyn, disc: disc, settle: 2 * time.Second}, nil
 }
 
 type SyncResult struct {
 	Applied int `json:"applied"`
 	Pruned  int `json:"pruned"`
+	// Changes lists the objects this sync created, updated or deleted, as the
+	// cluster's API server confirmed them. Objects that were already as
+	// desired are counted in Applied but not listed.
+	Changes []Change `json:"changes"`
+	// Rejected lists objects the gateway's controller reports as not accepted.
+	Rejected []Change `json:"rejected"`
+}
+
+// Change is one object on the cluster and what happened to it.
+type Change struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	// Action is "created", "updated" or "deleted".
+	Action string `json:"action,omitempty"`
+	// Gateway is the condition the gateway's controller set on the object,
+	// such as "Accepted", with its message. Empty when it has set none.
+	Gateway        string `json:"gateway,omitempty"`
+	GatewayMessage string `json:"gateway_message,omitempty"`
+}
+
+// version identifies the content of an object: the generation, which only
+// moves when the spec changes, or the resource version for kinds without one.
+func version(obj *unstructured.Unstructured) string {
+	if obj == nil {
+		return ""
+	}
+	if g := obj.GetGeneration(); g != 0 {
+		return fmt.Sprintf("g%d", g)
+	}
+	return obj.GetResourceVersion()
 }
 
 // Sync makes the managed objects match desired. Everything lives in namespace
@@ -104,13 +138,26 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 		if err != nil {
 			return res, err
 		}
-		_, err = c.dyn.Resource(gvr).Namespace(ns).Patch(ctx, obj.GetName(), types.ApplyPatchType, body,
+		// Looking first is what tells a create from an update, and an update
+		// from an apply that changed nothing.
+		before, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, obj.GetName(), metav1.GetOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return res, fmt.Errorf("read %s %s/%s: %w", obj.GetKind(), ns, obj.GetName(), describe(err))
+		}
+		existed := err == nil && before.GetName() == obj.GetName()
+		after, err := c.dyn.Resource(gvr).Namespace(ns).Patch(ctx, obj.GetName(), types.ApplyPatchType, body,
 			metav1.PatchOptions{FieldManager: fieldManager, Force: &force})
 		if err != nil {
 			return res, fmt.Errorf("apply %s %s/%s: %w", obj.GetKind(), ns, obj.GetName(), describe(err))
 		}
 		want[obj.GetKind()+"/"+ns+"/"+obj.GetName()] = true
 		res.Applied++
+		switch {
+		case !existed:
+			res.Changes = append(res.Changes, Change{Kind: obj.GetKind(), Namespace: ns, Name: obj.GetName(), Action: "created"})
+		case version(before) != version(after):
+			res.Changes = append(res.Changes, Change{Kind: obj.GetKind(), Namespace: ns, Name: obj.GetName(), Action: "updated"})
+		}
 	}
 
 	selector := render.ManagedLabel + "=" + render.ManagedValue
@@ -139,9 +186,59 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 				return res, fmt.Errorf("delete %s %s/%s: %w", m.Kind, item.GetNamespace(), item.GetName(), describe(err))
 			}
 			res.Pruned++
+			res.Changes = append(res.Changes, Change{Kind: m.Kind, Namespace: item.GetNamespace(), Name: item.GetName(), Action: "deleted"})
 		}
 	}
+	c.readGatewayStatus(ctx, namespace, desired, &res)
 	return res, nil
+}
+
+// readGatewayStatus asks the cluster what the gateway's controller made of
+// the AI gateway objects. Applying an object only proves the API server stored
+// it; the controller can still refuse it. This is informational: a failure to
+// read a status never fails the sync.
+func (c *Client) readGatewayStatus(ctx context.Context, namespace string, desired []*unstructured.Unstructured, res *SyncResult) {
+	if len(res.Changes) > 0 && c.settle > 0 {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(c.settle):
+		}
+	}
+	changed := map[string]int{}
+	for i, ch := range res.Changes {
+		changed[ch.Kind+"/"+ch.Namespace+"/"+ch.Name] = i
+	}
+	for _, obj := range desired {
+		if obj.GroupVersionKind().Group != "aigateway.envoyproxy.io" {
+			continue
+		}
+		gvr, ok := gvrFor(obj.GetKind())
+		if !ok {
+			continue
+		}
+		ns := obj.GetNamespace()
+		if ns == "" {
+			ns = namespace
+		}
+		live, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, obj.GetName(), metav1.GetOptions{})
+		if err != nil {
+			continue
+		}
+		conditions, _, _ := unstructured.NestedSlice(live.Object, "status", "conditions")
+		if len(conditions) == 0 {
+			continue
+		}
+		cond, _ := conditions[0].(map[string]any)
+		kind, _ := cond["type"].(string)
+		message, _ := cond["message"].(string)
+		if i, ok := changed[obj.GetKind()+"/"+ns+"/"+obj.GetName()]; ok {
+			res.Changes[i].Gateway, res.Changes[i].GatewayMessage = kind, message
+		}
+		if kind == "NotAccepted" {
+			res.Rejected = append(res.Rejected, Change{Kind: obj.GetKind(), Namespace: ns, Name: obj.GetName(), Gateway: kind, GatewayMessage: message})
+		}
+	}
 }
 
 // managedQuotaPolicies returns this tool's QuotaPolicies in every namespace, so

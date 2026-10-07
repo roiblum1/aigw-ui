@@ -110,6 +110,43 @@ Counters add up across sites when all of these hold:
 For models added by hand the tool guarantees the names. For discovered models
 the names are yours.
 
+## Task log
+
+Each change is stored as a task with one pending result per cluster. When a
+cluster is synced, the sync first notes which tasks are open for it, applies
+the desired state, and then writes the outcome on those tasks.
+
+For every object the sync reads it, applies it, and compares: an object that
+was not there is "created", one whose generation moved is "updated", one that
+is the same is not listed. After a change it waits two seconds and reads the
+status of the AI gateway objects, to record whether the gateway's controller
+accepted them. That reading is informational: it never fails a sync.
+
+## Live usage
+
+The server reads token usage from the same Redis the gateways' quota rate
+limit services count in. It computes the name of each counter and fetches
+them with one `MGET`. With `redis.allowReset` on it can also delete a
+counter, which is how a reset works; otherwise it only reads.
+
+A counter's name is built by the gateway from the `QuotaPolicy`:
+
+```
+ai-gateway-quota_backend_name_<namespace>/<AIServiceBackend>_model_name_override_<model>_<rule>_<rule>_<window start>
+<rule> = rule-<position>-x-aigw-client-id|<tenant pattern>-match-0
+```
+
+Two things follow from that name:
+
+- **One budget across sites needs identical names.** Clusters share a counter
+  only when the backend has the same namespace and name on each. Otherwise
+  every cluster counts on its own and the tenant gets the limit once per
+  cluster. The Usage page shows a warning when it sees this.
+- **A rule's position is part of the name.** Rules are ordered by tenant
+  slug. Adding or removing a tenant quota on a model moves the tenants after
+  it to a new position, and their counters start again from zero for the
+  current window.
+
 ## Not verified on a real gateway
 
 The rendered objects follow the published API, but these points have not been
@@ -121,6 +158,10 @@ run against a live Envoy AI Gateway:
 - that a quota takes effect on a backend whose route sets no `modelNameOverride`. The gateway documents that a quota "only applies when its `modelName` matches the `modelNameOverride`" and says nothing about routes without one. The UI marks these backends "quota unverified";
 - how a dry-run quota (`shadowMode`) behaves next to the default bucket. The gateway documents that a shadowed rule never rejects; whether the tenant is then still held to the pool for tenants without a quota is not stated;
 - that the gateway accepts every cost expression the API lets through. The API only checks the names and characters used;
+- that the gateway's controller sets a condition within two seconds, and that its first condition is `Accepted` or `NotAccepted`. If it is slower, the task log shows the object without a gateway verdict, or with the verdict on the previous version;
+- that the counter names computed for the Usage page match what a live rate limit service writes. They follow the gateway's and the rate limit service's source. If they do not match, the page says what it found in Redis instead;
+- that a reset frees a tenant that was already rejected. Deleting the counter was tested; the rate limit service's own over-limit cache was not;
+- reading Redis through an OpenShift Route (`rediss://`); it was tested against a plain Redis only;
 - that `/v1/models` still answers once "Enforce API keys" is on. If it needs a key, set the cluster's API key for `/v1/models`.
 
 Check them on one test cluster with the Manifests preview before a first sync

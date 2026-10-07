@@ -569,3 +569,113 @@
     }
   }
 }
+
+@layer components {
+  .meter-cell {
+    min-width: 180px;
+  }
+  .meter {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--muted);
+    overflow: hidden;
+  }
+  .meter > span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--success);
+    transition: width 0.4s ease;
+  }
+  .meter.high > span {
+    background: var(--warning);
+  }
+  .meter.full > span {
+    background: var(--danger);
+  }
+  .page-header .actions input[type="search"] {
+    width: 220px;
+  }
+  .live {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .live > i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--success);
+    animation: live-pulse 2s ease-in-out infinite;
+  }
+  @keyframes live-pulse {
+    50% {
+      opacity: 0.35;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .live > i {
+      animation: none;
+    }
+    .meter > span {
+      transition: none;
+    }
+  }
+}
+
+@layer components {
+  .task-list {
+    display: grid;
+    gap: 8px;
+  }
+  .task {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--card);
+    box-shadow: var(--shadow);
+    padding: 0 16px;
+  }
+  .task > summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 12px 0;
+    cursor: pointer;
+    list-style: none;
+  }
+  .task > summary::-webkit-details-marker {
+    display: none;
+  }
+  .task > summary > .detail {
+    margin-left: auto;
+  }
+  .task[open] > summary {
+    border-bottom: 1px solid var(--border);
+  }
+  .task > p {
+    margin: 10px 0;
+  }
+  .task-result {
+    padding: 10px 0;
+  }
+  .task-result + .task-result {
+    border-top: 1px solid var(--border);
+  }
+  .task-objects {
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 4px;
+    font-size: 13px;
+  }
+  .gateway {
+    color: var(--success);
+    font-size: 12.5px;
+  }
+  .gateway.bad {
+    color: var(--danger);
+  }
+}

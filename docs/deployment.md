@@ -92,6 +92,12 @@ Back up the encryption key straight away. See
 | `replicaCount` | `1` | Keep at 1; each replica polls and syncs every cluster |
 | `config.discoveryInterval` | `60s` | How often clusters are polled for models. `0` turns it off |
 | `config.autoSync` | `true` | Apply changes about a second after each edit |
+| `redis.url` | empty | Redis to read live usage from: `redis://[:password@]host:6379` or `rediss://[:password@]<route host>:443`. Empty turns usage monitoring off |
+| `redis.existingSecret` | empty | Secret with the key `url`, instead of `redis.url` |
+| `redis.caSecret`, `redis.caConfigMap` | empty | Secret or ConfigMap with the key `ca.crt`: the CA of the Redis certificate |
+| `redis.tlsInsecure` | `false` | Skip verification of the Redis certificate. For tests only |
+| `redis.allowReset` | `false` | Allow resetting a tenant's usage. The server then deletes counters in Redis, so its Redis user needs `DEL` |
+| `redis.keyPrefix` | empty | The rate limit service's `CACHE_KEY_PREFIX`, if set |
 | `config.syncInterval` | `5m` | How often every cluster is synced again without a change. `0` turns it off. Needs `autoSync` |
 | `auth.existingSecret` | empty | Your own Secret with `admin-token` and `encryption-key` |
 | `postgresql.enabled` | `true` | `false` to use your own Postgres |

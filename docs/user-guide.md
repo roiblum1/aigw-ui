@@ -105,6 +105,49 @@ Clients send the key as `Authorization: Bearer sk-...`.
 
 A quota is one budget for the tenant on that model across all sites.
 
+## Activity
+
+The **Activity** page is the task log. Every change you make, here or through
+the API, adds a line: adding a tenant, creating a key, setting a quota,
+switching a quota to dry run, resetting usage, and so on.
+
+Open a line to see each cluster and what the sync did there:
+
+| You see | Meaning |
+|---|---|
+| In progress | The cluster has not synced since the change |
+| Succeeded, with a list of objects | The cluster's API server confirmed each object as created, updated or deleted |
+| Succeeded, "Nothing had to change" | The cluster already had everything, for example a new tenant without a key or quota |
+| gateway: Accepted | The gateway's controller accepted the object |
+| Applied, not accepted | The object exists, but the gateway refuses it. The reason is shown |
+| Failed | The cluster could not be synced. It is tried again every few minutes, and the line turns to Succeeded when it works |
+
+The log keeps the last 500 tasks.
+
+## Usage
+
+The **Usage** page shows, for every tenant quota, how many tokens were used in
+the current window and when the window resets. It refreshes every 5 seconds.
+The same bar appears next to each quota on a tenant's page.
+
+| Bar | Meaning |
+|---|---|
+| Green | Below 80% of the limit |
+| Amber | 80% or more |
+| Red | The limit is reached. Requests are rejected, unless the quota is a dry run |
+
+The numbers come straight from the counters the gateways keep in Redis, so
+they are what the gateways enforce. They cover the current window only: a
+day starts at 00:00 UTC and an hour on the hour. There is no history.
+
+**Reset usage** sets a tenant's usage on one model back to zero for the rest
+of the current window, on every site. The limit does not change. The button
+appears only when `redis.allowReset` is on. A tenant that had already reached
+the limit can stay blocked for a while after a reset if the rate limit
+service caches over-limit keys locally (`LOCAL_CACHE_SIZE_IN_BYTES`).
+
+The page needs `redis.url` to be set, see [deployment](deployment.md).
+
 ## Typical first setup
 
 1. Add each LLM cluster and press **Test**.

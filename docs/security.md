@@ -10,6 +10,7 @@
 | Encryption key | Kubernetes Secret `<release>-auth` on the hub | Kubernetes RBAC, etcd encryption if enabled |
 | Admin token | Kubernetes Secret `<release>-auth` on the hub | same |
 | Postgres password | Kubernetes Secret `<release>-postgresql` | same |
+| Redis URL with its password | Kubernetes Secret `<release>-redis`, or the one named in `redis.existingSecret` | same. The server only reads from Redis, unless `redis.allowReset` is on: then it can also delete quota counters |
 | Tenant API keys on the LLM clusters | Kubernetes Secret `aigw-ui-api-keys` in the gateway namespace | Kubernetes RBAC on that cluster |
 
 Kubeconfigs are not stored as Kubernetes Secrets. They are encrypted rows in

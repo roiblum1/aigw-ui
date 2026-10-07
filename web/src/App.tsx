@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
+  Activity as ActivityIcon,
   Boxes,
+  ListChecks,
   Gauge,
   KeyRound,
   LayoutDashboard,
@@ -16,6 +18,8 @@ import { api, getToken, setToken } from "./api";
 import Clusters from "./Clusters";
 import Models from "./Models";
 import Tenants from "./Tenants";
+import Usage from "./Usage";
+import Activity from "./Activity";
 import { ErrorBanner, PageHeader, StatusBadge, UNAUTHORIZED_EVENT, formatTime, useLoad } from "./components";
 
 const pages = [
@@ -23,6 +27,8 @@ const pages = [
   { name: "Clusters", icon: Server },
   { name: "Models", icon: Boxes },
   { name: "Tenants", icon: Users },
+  { name: "Usage", icon: ActivityIcon },
+  { name: "Activity", icon: ListChecks },
 ] as const;
 type Page = (typeof pages)[number]["name"];
 
@@ -129,6 +135,8 @@ export default function App() {
         {page === "Clusters" && <Clusters />}
         {page === "Models" && <Models />}
         {page === "Tenants" && <Tenants />}
+        {page === "Usage" && <Usage />}
+        {page === "Activity" && <Activity />}
       </main>
     </div>
   );

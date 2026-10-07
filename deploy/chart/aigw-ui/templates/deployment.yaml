@@ -16,6 +16,11 @@ spec:
     metadata:
       labels: {{- include "aigw-ui.selector" . | nindent 8 }}
         app.kubernetes.io/component: server
+      {{- if .Values.redis.url }}
+      annotations:
+        # Restart the pod when the Redis address changes.
+        checksum/redis: {{ .Values.redis.url | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ $name }}
       automountServiceAccountToken: false
@@ -47,6 +52,21 @@ spec:
             {{- end }}
             - name: DISCOVERY_INTERVAL
               value: {{ .Values.config.discoveryInterval | quote }}
+            {{- if or .Values.redis.url .Values.redis.existingSecret }}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.redis.existingSecret | default (printf "%s-redis" $name) }}, key: url }
+            - name: REDIS_TLS_INSECURE
+              value: {{ .Values.redis.tlsInsecure | quote }}
+            - name: REDIS_ALLOW_RESET
+              value: {{ .Values.redis.allowReset | quote }}
+            - name: REDIS_KEY_PREFIX
+              value: {{ .Values.redis.keyPrefix | quote }}
+            {{- if or .Values.redis.caSecret .Values.redis.caConfigMap }}
+            - name: REDIS_CA_FILE
+              value: /etc/aigw-ui/redis-ca/ca.crt
+            {{- end }}
+            {{- end }}
             - name: SYNC_INTERVAL
               value: {{ .Values.config.syncInterval | quote }}
             - name: AUTO_SYNC
@@ -61,6 +81,19 @@ spec:
           resources: {{- toYaml .Values.resources | nindent 12 }}
           securityContext: {{- include "aigw-ui.containerSecurity" . | nindent 12 }}
             readOnlyRootFilesystem: true
+          {{- if or .Values.redis.caSecret .Values.redis.caConfigMap }}
+          volumeMounts:
+            - name: redis-ca
+              mountPath: /etc/aigw-ui/redis-ca
+              readOnly: true
+      volumes:
+        - name: redis-ca
+          {{- if .Values.redis.caSecret }}
+          secret: { secretName: {{ .Values.redis.caSecret }} }
+          {{- else }}
+          configMap: { name: {{ .Values.redis.caConfigMap }} }
+          {{- end }}
+          {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}

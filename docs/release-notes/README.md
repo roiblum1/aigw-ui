@@ -5,10 +5,14 @@ image tag (`docker.io/roi12345/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.4.0](v0.4.0.md) | 2026-10-08 | Live token usage per tenant with reset; task log of every change |
 | [0.3.0](v0.3.0.md) | 2026-10-08 | Partial updates no longer lose data; cost expressions, dry-run quotas, periodic sync |
 | [0.2.1](v0.2.1.md) | 2026-10-07 | Stops the gateway controller's "Failed to add finalizer" error |
 | [0.2.0](v0.2.0.md) | 2026-10-07 | Model discovery through the gateway's `/v1/models`; quotas per backend namespace |
 | [0.1.1](v0.1.1.md) | 2026-10-07 | First release |
+
+The newest release notes end with a table of everything that has not been
+verified against a real gateway yet, with a way to check each item.
 
 To upgrade to any version:
 

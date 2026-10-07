@@ -53,6 +53,29 @@ externalDatabase:
   # Secret with the key "url" holding postgres://user:password@host:5432/dbname
   existingSecret: ""
 
+# The Redis that the gateways' quota rate limit services count tokens in. It
+# is only read, to show live usage per tenant. Leave url and existingSecret
+# empty to turn usage monitoring off.
+redis:
+  # redis://[:password@]host:6379 for a Service in the cluster, or
+  # rediss://[:password@]<route host>:443 for Redis behind an OpenShift Route.
+  # A Route only carries TLS, so Redis itself must serve TLS and the Route
+  # must use passthrough termination.
+  url: ""
+  # Name of a Secret with the key "url", instead of url above.
+  existingSecret: ""
+  # Name of a Secret or ConfigMap with the key "ca.crt": the CA that signed
+  # the Redis certificate. Not needed when a public CA signed it.
+  caSecret: ""
+  caConfigMap: ""
+  # Skip verification of the Redis certificate. For tests only.
+  tlsInsecure: false
+  # The rate limit service's CACHE_KEY_PREFIX, if you set one.
+  keyPrefix: ""
+  # Allow an admin to reset a tenant's usage on a model. This deletes the
+  # counter in Redis, so the Redis user needs DEL. Off, Redis is only read.
+  allowReset: false
+
 route:
   enabled: true
   # Empty lets OpenShift pick <name>-<namespace>.<apps domain>.

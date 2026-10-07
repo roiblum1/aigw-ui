@@ -15,6 +15,7 @@ import (
 	"aigw-ui/internal/secretbox"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/syncer"
+	"aigw-ui/internal/usage"
 )
 
 func main() {
@@ -45,9 +46,23 @@ func run() error {
 	sy := syncer.New(st, cfg.AutoSync, cfg.DiscoverEvery, cfg.SyncEvery)
 	go sy.Run(ctx)
 
+	// Usage monitoring is optional and must not keep the server from starting:
+	// Redis being down only makes the usage page report an error.
+	var reader *usage.Reader
+	if cfg.RedisURL != "" {
+		reader, err = usage.New(usage.Options{URL: cfg.RedisURL, CAFile: cfg.RedisCAFile, TLSInsecure: cfg.RedisTLSInsecure, KeyPrefix: cfg.RedisKeyPrefix, AllowReset: cfg.RedisAllowReset})
+		if err != nil {
+			return err
+		}
+		defer reader.Close()
+		if err := reader.Ping(ctx); err != nil {
+			slog.Warn("redis is not reachable; usage will be unavailable until it is", "err", err)
+		}
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(st, sy, cfg.AdminToken, cfg.UIDir).Handler(),
+		Handler:           api.New(st, sy, reader, cfg.AdminToken, cfg.UIDir).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -57,7 +72,7 @@ func run() error {
 		srv.Shutdown(shutdown)
 	}()
 
-	slog.Info("listening", "addr", cfg.ListenAddr, "auto_sync", cfg.AutoSync, "discovery_interval", cfg.DiscoverEvery.String(), "sync_interval", cfg.SyncEvery.String())
+	slog.Info("listening", "addr", cfg.ListenAddr, "auto_sync", cfg.AutoSync, "discovery_interval", cfg.DiscoverEvery.String(), "sync_interval", cfg.SyncEvery.String(), "usage_monitoring", reader != nil)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

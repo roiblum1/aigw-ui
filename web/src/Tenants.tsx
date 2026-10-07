@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, Copy, Plus, Users } from "lucide-react";
 import { api, type Tenant, type Window } from "./api";
 import {
@@ -15,6 +15,7 @@ import {
   useLoad,
   windowLabel,
 } from "./components";
+import { UsageMeter, confirmReset } from "./Usage";
 
 export default function Tenants() {
   const { data: tenants, error, reload } = useLoad(api.tenants);
@@ -116,6 +117,15 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
     detail: await api.tenant(props.id),
     models: await api.models(),
   }));
+  // Usage is loaded on its own so that Redis being down never hides the tenant.
+  const usage = useLoad(() => api.usage(props.id));
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!document.hidden) usage.reload();
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [usage.reload]);
+  const usageOf = (modelId: string) => usage.data?.quotas.find((u) => u.model_id === modelId);
   const action = useAction();
   const [newKey, setNewKey] = useState<string | null>(null);
   const [keyName, setKeyName] = useState("");
@@ -276,6 +286,7 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
               <tr>
                 <th>Model</th>
                 <th>Limit</th>
+                {usage.data?.enabled && <th>Used now</th>}
                 <th />
               </tr>
             </thead>
@@ -285,13 +296,27 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
                   <td className="strong">{q.model_name}</td>
                   <td>
                     {formatTokens(q.token_limit)} per {windowLabel[q.window]}
+                    {q.shadow && " "}
                     {q.shadow && (
                       <span className="tag warn" title="Counted, but requests are not rejected by this quota.">
                         dry run
                       </span>
                     )}
                   </td>
+                  {usage.data?.enabled && <td>{usageOf(q.model_id) ? <UsageMeter q={usageOf(q.model_id)!} /> : "—"}</td>}
                   <td className="row-actions">
+                    {usage.data?.can_reset && usageOf(q.model_id) && (
+                      <button
+                        disabled={action.busy || usageOf(q.model_id)!.used === 0}
+                        onClick={() => {
+                          const u = usageOf(q.model_id)!;
+                          if (confirmReset(u))
+                            action.run(async () => void (await api.resetUsage(tenant.id, q.model_id), await usage.reload()));
+                        }}
+                      >
+                        Reset usage
+                      </button>
+                    )}
                     <button
                       disabled={action.busy}
                       onClick={() => act(() => api.setQuota(tenant.id, q.model_id, q.token_limit, q.window, !q.shadow))}

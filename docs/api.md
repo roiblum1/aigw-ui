@@ -29,6 +29,96 @@ succeeded.
 | GET | `/overview` | Counts of clusters, models, tenants, active keys, quotas |
 | GET | `/healthz` (no `/api/v1`, no token) | `ok` |
 
+## Task log
+
+| Method | Path | Result |
+|---|---|---|
+| GET | `/tasks` | The newest 50 tasks, newest first. `?limit=` up to 500 |
+
+Every call that changes something adds a task. A portal can poll this to see
+whether its request reached the clusters.
+
+```json
+{
+  "id": 42,
+  "action": "quota.set",
+  "summary": "Set quota of team-a on GLM5.3 to 2000000 tokens per day",
+  "status": "succeeded",
+  "message": "",
+  "created_at": "2026-10-08T09:30:00Z",
+  "results": [
+    {
+      "cluster_name": "site1-a",
+      "status": "succeeded",
+      "message": "1 object changed, 5 already in place.",
+      "changes": [
+        {"kind": "QuotaPolicy", "namespace": "ai-gateway", "name": "glm5-3",
+         "action": "updated", "gateway": "Accepted", "gateway_message": "..."}
+      ],
+      "rejected": [],
+      "finished_at": "2026-10-08T09:30:04Z"
+    }
+  ]
+}
+```
+
+- `status` is `pending` until every cluster has synced, `failed` when a
+  cluster could not be synced, otherwise `succeeded`. A failed cluster is
+  tried again by the next sync, and the task turns `succeeded` when it works.
+- `changes` lists the objects that sync created, updated or deleted, after
+  the cluster's API server confirmed them. `gateway` is the condition the
+  gateway's controller set on the object a moment later.
+- `rejected` lists objects the gateway reports as `NotAccepted`. The object
+  exists, but the gateway is not using it.
+- Changes made close together are applied by one sync, so their tasks show
+  the same list of objects.
+
+`action` is one of `cluster.add`, `cluster.update`, `model.add`,
+`model.update`, `model.delete`, `tenant.add`, `tenant.update`,
+`tenant.delete`, `key.add`, `key.revoke`, `quota.set`, `quota.delete`,
+`usage.reset`, `sync` and `discovery`.
+
+## Usage
+
+| Method | Path | Result |
+|---|---|---|
+| GET | `/usage` | Tokens used in the current window, for every tenant quota |
+| GET | `/usage?tenant_id=<id>` | The same for one tenant |
+| POST | `/tenants/{id}/quotas/{model_id}/reset` | `{"counters": 1, "deleted": 1}`. The tenant's usage on that model is back to zero |
+
+```json
+{
+  "enabled": true,
+  "can_reset": false,
+  "at": "2026-10-08T09:31:56Z",
+  "quotas": [
+    {
+      "tenant_id": "<id>", "tenant_slug": "team-b",
+      "model_id": "<id>", "model_name": "GLM5.3",
+      "limit": 50000, "window": "1h", "shadow": false,
+      "used": 46800,
+      "resets_at": "2026-10-08T10:00:00Z",
+      "counters": [
+        {"backend": "ai-gateway/glm5-3", "clusters": ["site1-a", "site2-a"], "used": 46800}
+      ]
+    }
+  ]
+}
+```
+
+The numbers are read from the rate limit counters in Redis at the moment of
+the call. `enabled` is `false` when the server has no Redis configured.
+`counters` has more than one entry when the model's backends are named
+differently between clusters; `used` is then the highest of them, because
+each counter is held to the limit on its own. `hint` appears when no counter
+was found and says what Redis holds instead. If Redis cannot be reached the
+call returns 502.
+
+A reset deletes the counter of the current window, on every cluster that
+shares it. The limit and the window do not change, and the window still ends
+at `resets_at`. It returns 403 unless `redis.allowReset` is on (`can_reset` in
+`GET /usage`), and 404 when the tenant has no applied quota on that model.
+
 ## Clusters
 
 | Method | Path | Body | Result |

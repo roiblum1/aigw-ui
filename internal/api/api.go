@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"sigs.k8s.io/yaml"
@@ -20,6 +22,7 @@ import (
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/syncer"
+	"aigw-ui/internal/usage"
 )
 
 type Server struct {
@@ -27,15 +30,20 @@ type Server struct {
 	sy         *syncer.Syncer
 	adminToken string
 	uiDir      string
+	// usageReader is nil when no Redis is configured.
+	usageReader *usage.Reader
 }
 
-func New(st *store.Store, sy *syncer.Syncer, adminToken, uiDir string) *Server {
-	return &Server{st: st, sy: sy, adminToken: adminToken, uiDir: uiDir}
+func New(st *store.Store, sy *syncer.Syncer, usageReader *usage.Reader, adminToken, uiDir string) *Server {
+	return &Server{st: st, sy: sy, usageReader: usageReader, adminToken: adminToken, uiDir: uiDir}
 }
 
 func (s *Server) Handler() http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/overview", s.overview)
+	api.HandleFunc("GET /api/v1/tasks", s.listTasks)
+	api.HandleFunc("GET /api/v1/usage", s.usage)
+	api.HandleFunc("POST /api/v1/tenants/{id}/quotas/{model_id}/reset", s.resetUsage)
 
 	api.HandleFunc("GET /api/v1/clusters", s.listClusters)
 	api.HandleFunc("POST /api/v1/clusters", s.createCluster)
@@ -149,6 +157,33 @@ var (
 
 func validWindow(w string) bool { return w == "1m" || w == "1h" || w == "1d" }
 
+// log adds an entry to the task log for something that is already finished
+// and needs no sync.
+func (s *Server) log(r *http.Request, action, summary string, ok bool, message string) {
+	if err := s.st.CreateFinishedTask(context.WithoutCancel(r.Context()), action, summary, ok, message); err != nil {
+		slog.Error("record task", "err", err)
+	}
+}
+
+// listTasks returns the newest tasks first. ?limit= defaults to 50, at most 500.
+func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 500 {
+			fail(w, invalid("limit must be between 1 and 500"))
+			return
+		}
+		limit = n
+	}
+	tasks, err := s.st.ListTasks(r.Context(), limit)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tasks)
+}
+
 // ---- overview ----
 
 func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +293,7 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 			c = fresh
 		}
 	}
-	s.sy.Changed(r.Context())
+	s.sy.Changed(r.Context(), "cluster.add", "Added cluster "+c.Name)
 	writeJSON(w, http.StatusCreated, c)
 }
 
@@ -283,7 +318,7 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context())
+	s.sy.Changed(r.Context(), "cluster.update", "Changed cluster "+c.Name)
 	writeJSON(w, http.StatusOK, c)
 }
 
@@ -311,6 +346,9 @@ func (s *Server) probeCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) syncCluster(w http.ResponseWriter, r *http.Request) {
+	if c, err := s.st.GetCluster(r.Context(), r.PathValue("id")); err == nil {
+		s.sy.Record(r.Context(), "sync", "Manual sync of "+c.Name, c.ID)
+	}
 	res, err := s.sy.SyncCluster(r.Context(), r.PathValue("id"))
 	if errors.Is(err, store.ErrNotFound) {
 		fail(w, err)
@@ -324,6 +362,7 @@ func (s *Server) syncCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) syncAll(w http.ResponseWriter, r *http.Request) {
+	s.sy.Record(r.Context(), "sync", "Manual sync of all clusters", "")
 	s.sy.SyncAll(r.Context())
 	s.listClusters(w, r)
 }
@@ -348,7 +387,7 @@ func (s *Server) discoverAll(w http.ResponseWriter, r *http.Request) {
 
 // clusterManifests shows what a sync would apply, with key values masked.
 func (s *Server) clusterManifests(w http.ResponseWriter, r *http.Request) {
-	state, err := s.st.RenderState(r.Context(), r.PathValue("id"))
+	state, err := s.st.RenderState(r.Context(), r.PathValue("id"), true)
 	if err != nil {
 		fail(w, err)
 		return
@@ -505,7 +544,7 @@ func (s *Server) createModel(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context())
+	s.sy.Changed(r.Context(), "model.add", "Added model "+in.Name)
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 }
 
@@ -531,16 +570,22 @@ func (s *Server) updateModel(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context())
+	s.sy.Changed(r.Context(), "model.update", "Changed model "+in.Name)
 	writeJSON(w, http.StatusOK, map[string]string{"id": id})
 }
 
 func (s *Server) deleteModel(w http.ResponseWriter, r *http.Request) {
-	if err := s.st.DeleteModel(r.Context(), r.PathValue("id")); err != nil {
+	// The name is read first: after the delete it is gone.
+	m, err := s.st.GetModel(r.Context(), r.PathValue("id"))
+	if err != nil {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context())
+	if err := s.st.DeleteModel(r.Context(), m.ID); err != nil {
+		fail(w, err)
+		return
+	}
+	s.sy.Changed(r.Context(), "model.delete", "Deleted model "+m.Name+" and its quotas")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -573,6 +618,8 @@ func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	s.log(r, "tenant.add", "Added tenant "+t.Slug, true,
+		"Saved. Nothing is applied to the clusters until the tenant has a key or a quota.")
 	writeJSON(w, http.StatusCreated, t)
 }
 
@@ -610,16 +657,25 @@ func (s *Server) updateTenant(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context())
+	state := "Enabled"
+	if !t.Enabled {
+		state = "Disabled"
+	}
+	s.sy.Changed(r.Context(), "tenant.update", state+" tenant "+t.Slug)
 	writeJSON(w, http.StatusOK, t)
 }
 
 func (s *Server) deleteTenant(w http.ResponseWriter, r *http.Request) {
-	if err := s.st.DeleteTenant(r.Context(), r.PathValue("id")); err != nil {
+	t, err := s.st.GetTenant(r.Context(), r.PathValue("id"))
+	if err != nil {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context())
+	if err := s.st.DeleteTenant(r.Context(), t.ID); err != nil {
+		fail(w, err)
+		return
+	}
+	s.sy.Changed(r.Context(), "tenant.delete", "Deleted tenant "+t.Slug+" with its keys and quotas")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -637,16 +693,17 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context())
+	s.sy.Changed(r.Context(), "key.add", "Created API key "+k.ClientID)
 	writeJSON(w, http.StatusCreated, map[string]any{"key": k, "secret": plain})
 }
 
 func (s *Server) revokeKey(w http.ResponseWriter, r *http.Request) {
-	if err := s.st.RevokeKey(r.Context(), r.PathValue("id")); err != nil {
+	clientID, err := s.st.RevokeKey(r.Context(), r.PathValue("id"))
+	if err != nil {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context())
+	s.sy.Changed(r.Context(), "key.revoke", "Revoked API key "+clientID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -688,20 +745,33 @@ func (s *Server) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context())
 	quotas, err := s.st.ListQuotas(r.Context(), id)
 	if err != nil {
 		fail(w, err)
 		return
 	}
+	summary := "Set a quota"
+	if t, err := s.st.GetTenant(r.Context(), id); err == nil {
+		for _, q := range quotas {
+			if q.ModelID == b.ModelID {
+				unit := map[string]string{"1m": "minute", "1h": "hour", "1d": "day"}[q.Window]
+				summary = fmt.Sprintf("Set quota of %s on %s to %d tokens per %s", t.Slug, q.ModelName, q.TokenLimit, unit)
+				if q.Shadow {
+					summary += " (dry run)"
+				}
+			}
+		}
+	}
+	s.sy.Changed(r.Context(), "quota.set", summary)
 	writeJSON(w, http.StatusOK, quotas)
 }
 
 func (s *Server) deleteQuota(w http.ResponseWriter, r *http.Request) {
-	if err := s.st.DeleteQuota(r.Context(), r.PathValue("id")); err != nil {
+	label, err := s.st.DeleteQuota(r.Context(), r.PathValue("id"))
+	if err != nil {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context())
+	s.sy.Changed(r.Context(), "quota.delete", "Removed quota of "+label)
 	w.WriteHeader(http.StatusNoContent)
 }

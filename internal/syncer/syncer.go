@@ -29,9 +29,11 @@ func New(st *store.Store, auto bool, discoverEvery, syncEvery time.Duration) *Sy
 	return &Syncer{st: st, auto: auto, every: discoverEvery, resync: syncEvery, trigger: make(chan struct{}, 1)}
 }
 
-// Changed records that desired state moved. Clusters are marked pending and,
-// when auto sync is on, a background sync is queued.
-func (s *Syncer) Changed(ctx context.Context) {
+// Changed records that desired state moved, with a line for the task log
+// saying what changed. Clusters are marked pending and, when auto sync is on,
+// a background sync is queued.
+func (s *Syncer) Changed(ctx context.Context, action, summary string) {
+	s.Record(ctx, action, summary, "")
 	if err := s.st.MarkPending(ctx); err != nil {
 		slog.Error("mark clusters pending", "err", err)
 	}
@@ -41,6 +43,16 @@ func (s *Syncer) Changed(ctx context.Context) {
 	select {
 	case s.trigger <- struct{}{}:
 	default: // a sync is already queued
+	}
+}
+
+// Record adds a task to the log without queueing a sync, for a caller that
+// runs the sync itself. clusterID limits it to one cluster when not empty.
+func (s *Syncer) Record(ctx context.Context, action, summary, clusterID string) {
+	// What the task describes is already saved, so it is recorded even if the
+	// request that made it has gone away.
+	if err := s.st.CreateTask(context.WithoutCancel(ctx), action, summary, clusterID); err != nil {
+		slog.Error("record task", "err", err)
 	}
 }
 
@@ -102,25 +114,50 @@ func (s *Syncer) SyncAll(ctx context.Context) {
 
 // SyncCluster applies the desired state to one cluster and stores the outcome.
 func (s *Syncer) SyncCluster(ctx context.Context, id string) (kube.SyncResult, error) {
+	// State is read under the lock so the last sync to run applies the newest state.
+	lock, _ := s.locks.LoadOrStore(id, &sync.Mutex{})
+	lock.(*sync.Mutex).Lock()
+	defer lock.(*sync.Mutex).Unlock()
+
+	// The open tasks are read before the state, so the state that is applied
+	// is sure to contain their changes.
+	tasks, terr := s.st.OpenTasks(ctx, id)
+	if terr != nil {
+		slog.Error("read open tasks", "err", terr)
+	}
 	res, err := s.syncCluster(ctx, id)
 	status, msg := "synced", fmt.Sprintf("%d applied, %d removed", res.Applied, res.Pruned)
 	if err != nil {
 		status, msg = "error", err.Error()
 	}
 	// The result is worth recording even if the request that asked for it is gone.
-	if serr := s.st.SetSyncResult(context.WithoutCancel(ctx), id, status, msg); serr != nil {
+	done := context.WithoutCancel(ctx)
+	if serr := s.st.SetSyncResult(done, id, status, msg); serr != nil {
 		slog.Error("store sync result", "err", serr)
+	}
+	if serr := s.st.FinishTasks(done, id, tasks, err == nil, taskMessage(res, err), res.Changes, res.Rejected); serr != nil {
+		slog.Error("store task results", "err", serr)
 	}
 	return res, err
 }
 
-func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, error) {
-	// State is read under the lock so the last sync to run applies the newest state.
-	lock, _ := s.locks.LoadOrStore(id, &sync.Mutex{})
-	lock.(*sync.Mutex).Lock()
-	defer lock.(*sync.Mutex).Unlock()
+// taskMessage says in one line what a sync did, for the task log.
+func taskMessage(res kube.SyncResult, err error) string {
+	switch {
+	case err != nil:
+		return err.Error() + " (will be tried again)"
+	case len(res.Changes) == 0:
+		return fmt.Sprintf("Nothing had to change: all %d objects were already in place.", res.Applied)
+	}
+	noun := "objects"
+	if len(res.Changes) == 1 {
+		noun = "object"
+	}
+	return fmt.Sprintf("%d %s changed, %d already in place.", len(res.Changes), noun, res.Applied+res.Pruned-len(res.Changes))
+}
 
-	state, err := s.st.RenderState(ctx, id)
+func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, error) {
+	state, err := s.st.RenderState(ctx, id, true)
 	if err != nil {
 		return kube.SyncResult{}, err
 	}
@@ -217,7 +254,7 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 		return 0, err
 	}
 	if changed {
-		s.Changed(ctx)
+		s.Changed(ctx, "discovery", "Models changed on cluster "+c.Name)
 	}
 	return len(models), nil
 }
