@@ -1,0 +1,69 @@
+# In a disconnected environment set global.imageRegistry to your mirror, e.g.
+# registry.example.internal:5000. It is prepended to both images below.
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+
+image:
+  repository: docker.io/roi12345/aigw-ui
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Keep this at 1. More replicas work but each one polls and syncs every cluster.
+replicaCount: 1
+
+config:
+  # How often clusters are polled for models. "0" turns polling off.
+  discoveryInterval: 60s
+  # Apply changes to the clusters about a second after each edit.
+  autoSync: true
+
+# The admin token and the encryption key.
+auth:
+  # Name of a Secret you created with the keys "admin-token" and
+  # "encryption-key" (32 bytes, base64: openssl rand -base64 32).
+  # Leave empty and the chart generates both once and keeps them on upgrade.
+  #
+  # The encryption key protects the kubeconfigs and tenant API keys stored in
+  # Postgres. If it is lost they cannot be read again. Back it up.
+  existingSecret: ""
+
+postgresql:
+  # true runs a single Postgres inside the release. false uses externalDatabase.
+  enabled: true
+  image:
+    repository: quay.io/sclorg/postgresql-16-c9s
+    tag: latest
+    pullPolicy: IfNotPresent
+  database: aigw
+  username: aigw
+  storage:
+    size: 5Gi
+    # Empty uses the cluster's default storage class.
+    storageClassName: ""
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+externalDatabase:
+  # Secret with the key "url" holding postgres://user:password@host:5432/dbname
+  existingSecret: ""
+
+route:
+  enabled: true
+  # Empty lets OpenShift pick <name>-<namespace>.<apps domain>.
+  host: ""
+  # edge: the router terminates TLS with its own certificate.
+  termination: edge
+
+# Only pods of this release may reach Postgres.
+networkPolicy:
+  enabled: true
+
+resources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { memory: 512Mi }
+
+nodeSelector: {}
+tolerations: []

@@ -1,0 +1,20 @@
+{{- if .Values.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "aigw-ui.name" . }}
+  labels: {{- include "aigw-ui.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.route.host }}
+  host: {{ . }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "aigw-ui.name" . }}
+  port:
+    targetPort: http
+  tls:
+    termination: {{ .Values.route.termination }}
+    # Plain HTTP is redirected: the admin token and kubeconfigs must never travel unencrypted.
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}

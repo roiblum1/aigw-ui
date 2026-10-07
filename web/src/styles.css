@@ -1,0 +1,566 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Design tokens. Fonts are the system stack on purpose: the hub may have no
+   internet access, so nothing is loaded from a CDN. */
+:root {
+  --background: #f5f6f9;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --muted: #f1f3f7;
+  --muted-foreground: #5b6679;
+  --border: #e2e6ed;
+  --input: #cfd5df;
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-foreground: #ffffff;
+  --primary-soft: #eef0fe;
+  --ring: #6366f1;
+  --success: #15693b;
+  --success-soft: #dff5e8;
+  --warning: #8a5a00;
+  --warning-soft: #fdf0d3;
+  --danger: #b42318;
+  --danger-soft: #fde8e6;
+  --sidebar: #10142a;
+  --sidebar-foreground: #a4acc4;
+  --shadow: 0 1px 2px rgb(15 23 42 / 0.05), 0 1px 3px rgb(15 23 42 / 0.04);
+  color-scheme: light;
+}
+
+.dark {
+  --background: #0b0e15;
+  --foreground: #e7eaf1;
+  --card: #131824;
+  --muted: #1a2030;
+  --muted-foreground: #97a2b8;
+  --border: #242c3c;
+  --input: #303a4d;
+  --primary: #818cf8;
+  --primary-hover: #a5b0fc;
+  --primary-foreground: #0b0e15;
+  --primary-soft: #1e2345;
+  --ring: #818cf8;
+  --success: #7ddba3;
+  --success-soft: #123322;
+  --warning: #f2c466;
+  --warning-soft: #3a2c0d;
+  --danger: #ff9b92;
+  --danger-soft: #401714;
+  --sidebar: #080a11;
+  --sidebar-foreground: #8c95ad;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-danger: var(--danger);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@layer base {
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1 {
+    font-size: 22px;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    line-height: 1.25;
+  }
+  h2 {
+    font-size: 15px;
+    font-weight: 600;
+  }
+  h3 {
+    font-size: 12px;
+    font-weight: 600;
+    margin: 22px 0 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted-foreground);
+  }
+  a {
+    color: var(--primary);
+  }
+  :is(a, button, input, select, textarea):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+}
+
+@layer components {
+  /* ---- buttons ---- */
+  button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 34px;
+    padding: 0 13px;
+    border: 1px solid var(--input);
+    border-radius: 8px;
+    background: var(--card);
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    box-shadow: var(--shadow);
+    transition:
+      background-color 0.12s,
+      border-color 0.12s,
+      color 0.12s;
+  }
+  button:hover:not(:disabled) {
+    background: var(--muted);
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  button.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--primary-foreground);
+  }
+  button.primary:hover:not(:disabled) {
+    background: var(--primary-hover);
+    border-color: var(--primary-hover);
+  }
+  button.danger {
+    color: var(--danger);
+  }
+  button.danger:hover:not(:disabled) {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+  }
+  button.ghost {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+  button.back {
+    height: 28px;
+    padding: 0 8px 0 4px;
+    margin: 0 0 10px -4px;
+    color: var(--muted-foreground);
+  }
+  button svg {
+    width: 15px;
+    height: 15px;
+    flex: none;
+  }
+
+  /* ---- form controls ---- */
+  input:not([type="checkbox"]),
+  select,
+  textarea {
+    width: 100%;
+    min-height: 36px;
+    padding: 7px 11px;
+    border: 1px solid var(--input);
+    border-radius: 8px;
+    background: var(--card);
+    transition:
+      border-color 0.12s,
+      box-shadow 0.12s;
+  }
+  :is(input, select, textarea)::placeholder {
+    color: var(--muted-foreground);
+    opacity: 0.75;
+  }
+  :is(input:not([type="checkbox"]), select, textarea):focus {
+    outline: none;
+    border-color: var(--ring);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 22%, transparent);
+  }
+  :is(input, select, textarea):disabled {
+    background: var(--muted);
+    color: var(--muted-foreground);
+  }
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+    flex: none;
+  }
+  textarea {
+    resize: vertical;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 14px;
+  }
+  .field > span {
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 14px;
+  }
+  .check {
+    display: flex;
+    gap: 9px;
+    align-items: flex-start;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .check input {
+    margin-top: 3px;
+  }
+  .check small {
+    display: block;
+    font-weight: 400;
+  }
+  .inline-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .inline-form > :is(input, select) {
+    flex: 1 1 170px;
+    width: auto;
+  }
+  .inline-form > button {
+    height: 36px;
+  }
+
+  /* ---- text helpers ---- */
+  .mono {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+  }
+  .strong {
+    font-weight: 600;
+  }
+  .detail,
+  .hint,
+  .field small,
+  .check small {
+    color: var(--muted-foreground);
+    font-size: 12.5px;
+  }
+  .hint {
+    margin: 2px 0 14px;
+  }
+  .muted {
+    opacity: 0.55;
+  }
+
+  /* ---- page chrome ---- */
+  .page-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+  .page-header p {
+    margin-top: 4px;
+    color: var(--muted-foreground);
+  }
+  .actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .table-wrap,
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow-x: auto;
+  }
+  .card {
+    padding: 20px 22px;
+    margin-bottom: 16px;
+  }
+  .card > h2 {
+    margin-bottom: 12px;
+  }
+
+  /* ---- tables ---- */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th,
+  td {
+    text-align: left;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    padding-block: 9px;
+    font-size: 11.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted-foreground);
+    white-space: nowrap;
+  }
+  .table-wrap th {
+    background: var(--muted);
+  }
+  .table-wrap tbody tr {
+    transition: background-color 0.1s;
+  }
+  .table-wrap tbody tr:hover {
+    background: color-mix(in srgb, var(--muted) 55%, transparent);
+  }
+  tbody tr:last-child td {
+    border-bottom: none;
+  }
+  table.plain :is(th, td):first-child {
+    padding-left: 0;
+  }
+  table.plain :is(th, td):last-child {
+    padding-right: 0;
+  }
+  .row-actions {
+    text-align: right;
+    white-space: nowrap;
+  }
+  .row-actions button {
+    height: 28px;
+    padding: 0 9px;
+    margin-left: 6px;
+    font-size: 12.5px;
+    box-shadow: none;
+  }
+  td.strong,
+  td .strong,
+  td.mono {
+    white-space: nowrap;
+  }
+  td .detail {
+    max-width: 420px;
+    overflow-wrap: anywhere;
+  }
+  /* Long sync errors: three lines here, the full text in the tooltip. */
+  td .detail.clamp {
+    min-width: 240px;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+  }
+
+  /* ---- status ---- */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .badge::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .badge.synced {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+  .badge.pending {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+  .badge.error {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+
+  .tag {
+    padding: 0 7px;
+    border-radius: 6px;
+    background: var(--primary-soft);
+    color: var(--primary);
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .tag.manual {
+    background: var(--muted);
+    color: var(--muted-foreground);
+  }
+  .endpoint-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    padding: 2px 0;
+  }
+
+  .banner {
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    overflow-wrap: anywhere;
+  }
+  .banner.error {
+    background: var(--danger-soft);
+    border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+    color: var(--danger);
+  }
+  .banner.warn {
+    background: var(--warning-soft);
+    border-color: color-mix(in srgb, var(--warning) 30%, transparent);
+    color: var(--warning);
+  }
+
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 48px 24px;
+    border: 1px dashed var(--input);
+    border-radius: 12px;
+    text-align: center;
+    color: var(--muted-foreground);
+  }
+  .empty svg {
+    width: 28px;
+    height: 28px;
+    opacity: 0.7;
+  }
+
+  .steps {
+    list-style: decimal;
+    padding-left: 20px;
+    line-height: 1.9;
+  }
+
+  /* ---- dialogs ---- */
+  .modal {
+    margin: auto;
+    width: min(520px, calc(100vw - 32px));
+    max-height: calc(100vh - 48px);
+    padding: 24px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--card);
+    color: var(--foreground);
+    box-shadow: 0 24px 60px rgb(0 0 0 / 0.28);
+    animation: modal-in 0.16s ease-out;
+  }
+  .modal.wide {
+    width: min(840px, calc(100vw - 32px));
+  }
+  .modal::backdrop {
+    background: rgb(8 10 17 / 0.55);
+    backdrop-filter: blur(2px);
+  }
+  .modal:focus {
+    outline: none;
+  }
+  .modal header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+  }
+  .modal header h2 {
+    font-size: 17px;
+  }
+  .modal header button {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    color: var(--muted-foreground);
+  }
+  .modal footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 22px;
+  }
+  @keyframes modal-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.985);
+    }
+  }
+
+  .endpoint {
+    padding: 11px 13px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .endpoint:has(input:checked) {
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+    background: color-mix(in srgb, var(--primary-soft) 45%, transparent);
+  }
+  .endpoint-fields {
+    display: grid;
+    grid-template-columns: 2fr 96px 1.4fr;
+    gap: 0 12px;
+    margin-top: 12px;
+  }
+  .endpoint-fields .field {
+    margin-bottom: 2px;
+  }
+
+  .code {
+    max-height: 60vh;
+    padding: 14px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    white-space: pre;
+  }
+
+  @media (max-width: 640px) {
+    .grid-2,
+    .endpoint-fields {
+      grid-template-columns: 1fr;
+    }
+  }
+}

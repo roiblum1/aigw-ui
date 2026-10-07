@@ -1,0 +1,13 @@
+AI Gateway Control is installed.
+
+{{- if .Values.route.enabled }}
+URL:
+  oc get route {{ include "aigw-ui.name" . }} -n {{ .Release.Namespace }} -o jsonpath='https://{.spec.host}{"\n"}'
+{{- end }}
+
+Admin token:
+  oc get secret {{ include "aigw-ui.authSecret" . }} -n {{ .Release.Namespace }} -o jsonpath='{.data.admin-token}' | base64 -d; echo
+
+Back up the encryption key now. Without it the stored kubeconfigs and API keys
+cannot be read:
+  oc get secret {{ include "aigw-ui.authSecret" . }} -n {{ .Release.Namespace }} -o jsonpath='{.data.encryption-key}'; echo

@@ -1,0 +1,87 @@
+{{- if and (not .Values.postgresql.enabled) (not .Values.externalDatabase.existingSecret) }}
+{{- fail "set externalDatabase.existingSecret when postgresql.enabled is false" }}
+{{- end }}
+{{- $name := include "aigw-ui.name" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels: {{- include "aigw-ui.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- include "aigw-ui.selector" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels: {{- include "aigw-ui.selector" . | nindent 8 }}
+        app.kubernetes.io/component: server
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      {{- include "aigw-ui.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: server
+          image: {{ include "aigw-ui.image" (list .Values.global.imageRegistry .Values.image .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ include "aigw-ui.authSecret" . }}, key: admin-token }
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ include "aigw-ui.authSecret" . }}, key: encryption-key }
+            {{- if .Values.postgresql.enabled }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-postgresql, key: password }
+            - name: DATABASE_URL
+              value: "postgres://{{ .Values.postgresql.username }}:$(PGPASSWORD)@{{ $name }}-postgresql:5432/{{ .Values.postgresql.database }}?sslmode=disable"
+            {{- else }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.externalDatabase.existingSecret }}, key: url }
+            {{- end }}
+            - name: DISCOVERY_INTERVAL
+              value: {{ .Values.config.discoveryInterval | quote }}
+            - name: AUTO_SYNC
+              value: {{ .Values.config.autoSync | quote }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            failureThreshold: 3
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext: {{- include "aigw-ui.containerSecurity" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels: {{- include "aigw-ui.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels: {{- include "aigw-ui.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "aigw-ui.selector" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
