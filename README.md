@@ -64,6 +64,7 @@ Open http://localhost:8080 and sign in with `ADMIN_TOKEN`. For UI work, run
 | [docs/security.md](docs/security.md) | Where kubeconfigs and keys are kept, and who can read them |
 | [docs/api.md](docs/api.md) | REST API reference with examples |
 | [docs/operations.md](docs/operations.md) | Backup, restore, troubleshooting |
+| [docs/release-notes/](docs/release-notes/README.md) | What changed in each version |
 
 ## Repository layout
 
