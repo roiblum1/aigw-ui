@@ -58,6 +58,10 @@ server renders the desired objects for each cluster from Postgres and applies
 them with server-side apply (field manager `aigw-ui`). It then deletes objects
 it created earlier that are no longer wanted.
 
+Every `SYNC_INTERVAL` (default 5 minutes) every cluster is synced again even
+if nothing changed. This retries a cluster whose last sync failed and puts
+back an object that someone edited or deleted by hand.
+
 ## What is applied to a cluster
 
 | In the UI | Objects on the cluster |
@@ -115,6 +119,8 @@ run against a live Envoy AI Gateway:
 - that a `RegularExpression` client selector puts all matching keys in one bucket;
 - that counters are shared when two clusters use the same Redis;
 - that a quota takes effect on a backend whose route sets no `modelNameOverride`. The gateway documents that a quota "only applies when its `modelName` matches the `modelNameOverride`" and says nothing about routes without one. The UI marks these backends "quota unverified";
+- how a dry-run quota (`shadowMode`) behaves next to the default bucket. The gateway documents that a shadowed rule never rejects; whether the tenant is then still held to the pool for tenants without a quota is not stated;
+- that the gateway accepts every cost expression the API lets through. The API only checks the names and characters used;
 - that `/v1/models` still answers once "Enforce API keys" is on. If it needs a key, set the cluster's API key for `/v1/models`.
 
 Check them on one test cluster with the Manifests preview before a first sync

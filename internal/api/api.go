@@ -162,45 +162,68 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 
 // ---- clusters ----
 
+// clusterBody is the body of a cluster create or update. On an update every
+// field that is left out keeps its stored value, so a caller that only knows
+// some of the fields cannot wipe the others.
 type clusterBody struct {
-	Name        string `json:"name"`
-	Site        string `json:"site"`
-	Namespace   string `json:"namespace"`
-	GatewayName string `json:"gateway_name"`
-	AuthEnabled bool   `json:"auth_enabled"`
-	Kubeconfig  string `json:"kubeconfig"`
-	// GatewayURL is optional. DiscoveryToken is write-only; empty keeps the stored one.
-	GatewayURL     string `json:"gateway_url"`
-	DiscoveryToken string `json:"discovery_token"`
+	Name        string  `json:"name"`
+	Site        *string `json:"site"`
+	Namespace   string  `json:"namespace"`
+	GatewayName string  `json:"gateway_name"`
+	AuthEnabled *bool   `json:"auth_enabled"`
+	Kubeconfig  string  `json:"kubeconfig"`
+	// GatewayURL is optional; an empty string removes it. DiscoveryToken is
+	// write-only; empty keeps the stored one.
+	GatewayURL     *string `json:"gateway_url"`
+	DiscoveryToken string  `json:"discovery_token"`
 }
 
-func (b *clusterBody) validate(needKubeconfig bool) error {
-	b.GatewayURL = strings.TrimSpace(b.GatewayURL)
-	b.DiscoveryToken = strings.TrimSpace(b.DiscoveryToken)
-	if b.GatewayURL != "" {
-		normalized, err := gateway.NormalizeURL(b.GatewayURL)
-		if err != nil {
-			return invalid("gateway_url %v", err)
+// cluster validates the body and returns the cluster to store. current is the
+// stored cluster on an update and nil on a create.
+func (b *clusterBody) cluster(current *store.Cluster) (store.Cluster, error) {
+	var c store.Cluster
+	if current != nil {
+		c = *current
+	}
+	if b.Name != "" {
+		c.Name = b.Name
+	}
+	if b.Namespace != "" {
+		c.Namespace = b.Namespace
+	}
+	if b.GatewayName != "" {
+		c.GatewayName = b.GatewayName
+	}
+	if b.Site != nil {
+		c.Site = *b.Site
+	}
+	if b.AuthEnabled != nil {
+		c.AuthEnabled = *b.AuthEnabled
+	}
+	if b.GatewayURL != nil {
+		c.GatewayURL = strings.TrimSpace(*b.GatewayURL)
+		if c.GatewayURL != "" {
+			normalized, err := gateway.NormalizeURL(c.GatewayURL)
+			if err != nil {
+				return c, invalid("gateway_url %v", err)
+			}
+			c.GatewayURL = normalized
 		}
-		b.GatewayURL = normalized
-	} else if b.DiscoveryToken != "" {
-		return invalid("discovery_token needs a gateway_url")
 	}
+	b.DiscoveryToken = strings.TrimSpace(b.DiscoveryToken)
 	switch {
-	case !dnsLabel.MatchString(b.Name):
-		return invalid("name must be lowercase letters, digits and dashes")
-	case !dnsLabel.MatchString(b.Namespace):
-		return invalid("namespace is not a valid Kubernetes namespace name")
-	case !dnsLabel.MatchString(b.GatewayName):
-		return invalid("gateway_name is not a valid Kubernetes object name")
-	case needKubeconfig && strings.TrimSpace(b.Kubeconfig) == "":
-		return invalid("kubeconfig is required")
+	case b.DiscoveryToken != "" && c.GatewayURL == "":
+		return c, invalid("discovery_token needs a gateway_url")
+	case !dnsLabel.MatchString(c.Name):
+		return c, invalid("name must be lowercase letters, digits and dashes")
+	case !dnsLabel.MatchString(c.Namespace):
+		return c, invalid("namespace is not a valid Kubernetes namespace name")
+	case !dnsLabel.MatchString(c.GatewayName):
+		return c, invalid("gateway_name is not a valid Kubernetes object name")
+	case current == nil && strings.TrimSpace(b.Kubeconfig) == "":
+		return c, invalid("kubeconfig is required")
 	}
-	return nil
-}
-
-func (b clusterBody) cluster(id string) store.Cluster {
-	return store.Cluster{ID: id, Name: b.Name, Site: b.Site, Namespace: b.Namespace, GatewayName: b.GatewayName, AuthEnabled: b.AuthEnabled, GatewayURL: b.GatewayURL}
+	return c, nil
 }
 
 func (s *Server) listClusters(w http.ResponseWriter, r *http.Request) {
@@ -218,11 +241,12 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if err := b.validate(true); err != nil {
+	in, err := b.cluster(nil)
+	if err != nil {
 		fail(w, err)
 		return
 	}
-	c, err := s.st.CreateCluster(r.Context(), b.cluster(""), []byte(b.Kubeconfig), b.DiscoveryToken)
+	c, err := s.st.CreateCluster(r.Context(), in, []byte(b.Kubeconfig), b.DiscoveryToken)
 	if err != nil {
 		fail(w, err)
 		return
@@ -244,11 +268,17 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if err := b.validate(false); err != nil {
+	current, err := s.st.GetCluster(r.Context(), r.PathValue("id"))
+	if err != nil {
 		fail(w, err)
 		return
 	}
-	c, err := s.st.UpdateCluster(r.Context(), b.cluster(r.PathValue("id")), []byte(strings.TrimSpace(b.Kubeconfig)), b.DiscoveryToken)
+	in, err := b.cluster(&current)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	c, err := s.st.UpdateCluster(r.Context(), in, []byte(strings.TrimSpace(b.Kubeconfig)), b.DiscoveryToken)
 	if err != nil {
 		fail(w, err)
 		return
@@ -340,29 +370,46 @@ func (s *Server) clusterManifests(w http.ResponseWriter, r *http.Request) {
 
 // ---- models ----
 
+// modelBody is the body of a model create or update. On an update every field
+// that is left out keeps its stored value; "endpoints": [] removes the manual
+// endpoints, leaving the field out keeps them.
 type modelBody struct {
-	Name          string           `json:"name"`
-	DefaultLimit  int64            `json:"default_limit"`
-	DefaultWindow string           `json:"default_window"`
-	Endpoints     []store.Endpoint `json:"endpoints"`
+	Name           string           `json:"name"`
+	DefaultLimit   *int64           `json:"default_limit"`
+	DefaultWindow  *string          `json:"default_window"`
+	CostExpression *string          `json:"cost_expression"`
+	Endpoints      []store.Endpoint `json:"endpoints"`
 }
 
-func (b *modelBody) input(name string) (store.ModelInput, error) {
-	if b.DefaultLimit == 0 {
-		b.DefaultLimit = 1
+// input validates the body. current is the stored model on an update and nil
+// on a create.
+func (b *modelBody) input(name string, current *store.Model) (store.ModelInput, error) {
+	in := store.ModelInput{Name: name, DefaultLimit: 1, DefaultWindow: "1d"}
+	if current != nil {
+		in.DefaultLimit, in.DefaultWindow, in.CostExpression = current.DefaultLimit, current.DefaultWindow, current.CostExpression
+		in.KeepEndpoints = b.Endpoints == nil
 	}
-	if b.DefaultWindow == "" {
-		b.DefaultWindow = "1d"
+	if b.DefaultLimit != nil {
+		in.DefaultLimit = *b.DefaultLimit
+	}
+	if b.DefaultWindow != nil {
+		in.DefaultWindow = *b.DefaultWindow
+	}
+	if b.CostExpression != nil {
+		in.CostExpression = strings.TrimSpace(*b.CostExpression)
 	}
 	switch {
 	case !modelName.MatchString(name):
 		return store.ModelInput{}, invalid("name must start with a letter or digit and use only letters, digits and . _ : / -")
 	case render.Slug(name) == "":
 		return store.ModelInput{}, invalid("name must contain a letter or digit")
-	case b.DefaultLimit < 1:
+	case in.DefaultLimit < 1:
 		return store.ModelInput{}, invalid("default_limit must be at least 1")
-	case !validWindow(b.DefaultWindow):
+	case !validWindow(in.DefaultWindow):
 		return store.ModelInput{}, invalid("default_window must be 1m, 1h or 1d")
+	}
+	if err := validCostExpression(in.CostExpression); err != nil {
+		return store.ModelInput{}, err
 	}
 	// Discovered endpoints come from the clusters and cannot be set here.
 	manual := b.Endpoints[:0:0]
@@ -389,7 +436,48 @@ func (b *modelBody) input(name string) (store.ModelInput, error) {
 		}
 		seen[e.ClusterID] = true
 	}
-	return store.ModelInput{Name: name, DefaultLimit: b.DefaultLimit, DefaultWindow: b.DefaultWindow, Endpoints: b.Endpoints}, nil
+	in.Endpoints = b.Endpoints
+	return in, nil
+}
+
+var (
+	costToken = regexp.MustCompile(`^(?:[a-z_]+|[0-9]+(?:\.[0-9]+)?u?|[-+*/()]|\s+)`)
+	costWord  = regexp.MustCompile(`^[a-z_]+$`)
+	costNames = map[string]bool{
+		"input_tokens": true, "output_tokens": true, "total_tokens": true, "cached_input_tokens": true,
+		"cache_creation_input_tokens": true, "reasoning_tokens": true, "uint": true, "double": true,
+	}
+)
+
+// validCostExpression accepts arithmetic over the token counts the gateway
+// exposes. It is a guard against typos, not a CEL parser: the gateway has the
+// final say when the policy is applied.
+func validCostExpression(expr string) error {
+	if len(expr) > 200 {
+		return invalid("cost_expression must be at most 200 characters")
+	}
+	depth := 0
+	for rest := expr; rest != ""; {
+		tok := costToken.FindString(rest)
+		switch {
+		case tok == "":
+			return invalid("cost_expression has an unsupported character at %q", rest)
+		case costWord.MatchString(tok) && !costNames[tok]:
+			return invalid("cost_expression uses %q; the known names are input_tokens, output_tokens, total_tokens, cached_input_tokens, cache_creation_input_tokens, reasoning_tokens, uint and double", tok)
+		case tok == "(":
+			depth++
+		case tok == ")":
+			depth--
+		}
+		if depth < 0 {
+			return invalid("cost_expression has an unmatched )")
+		}
+		rest = rest[len(tok):]
+	}
+	if depth != 0 {
+		return invalid("cost_expression has an unmatched (")
+	}
+	return nil
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -407,7 +495,7 @@ func (s *Server) createModel(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	in, err := b.input(b.Name)
+	in, err := b.input(b.Name, nil)
 	if err != nil {
 		fail(w, err)
 		return
@@ -429,12 +517,12 @@ func (s *Server) updateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	name, err := s.st.ModelName(r.Context(), id)
+	current, err := s.st.GetModel(r.Context(), id)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	in, err := b.input(name)
+	in, err := b.input(current.Name, &current)
 	if err != nil {
 		fail(w, err)
 		return
@@ -567,6 +655,8 @@ func (s *Server) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		ModelID    string `json:"model_id"`
 		TokenLimit int64  `json:"token_limit"`
 		Window     string `json:"window"`
+		// Shadow left out keeps the stored setting; a new quota is enforced.
+		Shadow *bool `json:"shadow"`
 	}
 	if err := decode(r, &b); err != nil {
 		fail(w, err)
@@ -594,7 +684,7 @@ func (s *Server) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if err := s.st.UpsertQuota(r.Context(), id, b.ModelID, b.TokenLimit, b.Window); err != nil {
+	if err := s.st.UpsertQuota(r.Context(), id, b.ModelID, b.TokenLimit, b.Window, b.Shadow); err != nil {
 		fail(w, err)
 		return
 	}

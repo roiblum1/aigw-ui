@@ -183,3 +183,85 @@ func TestQuotaPolicySetsValidServiceQuota(t *testing.T) {
 	}
 	t.Fatal("no QuotaPolicy rendered")
 }
+
+// durations collects every "duration" value in an object, at any depth.
+func durations(v any, out *[]string) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, child := range x {
+			if s, ok := child.(string); ok && k == "duration" {
+				*out = append(*out, s)
+			}
+			durations(child, out)
+		}
+	case []any:
+		for _, child := range x {
+			durations(child, out)
+		}
+	}
+}
+
+// A quota without a window must never reach the cluster: the CRD rejects the
+// empty duration and the sync, or the controller's finalizer update, fails.
+func TestQuotaPolicyNeverRendersInvalidQuota(t *testing.T) {
+	s := State{Namespace: "ai-gateway", GatewayName: "llm", Models: []Model{{
+		Name: "glm", Slug: "glm", UpstreamModel: "glm",
+		Quotas: []TenantQuota{
+			{TenantSlug: "team-a", Limit: 10, Window: ""},
+			{TenantSlug: "team-b", Limit: 0, Window: "1h"},
+			{TenantSlug: "team-c", Limit: 10, Window: "30s"},
+			{TenantSlug: "team-d", Limit: 10, Window: "1h"},
+		},
+	}}}
+	var policy *unstructured.Unstructured
+	for _, o := range Objects(s) {
+		if o.GetKind() == "QuotaPolicy" {
+			policy = o
+		}
+	}
+	if policy == nil {
+		t.Fatal("no QuotaPolicy rendered")
+	}
+	var got []string
+	durations(policy.Object, &got)
+	if len(got) != 3 { // serviceQuota, defaultBucket and team-d
+		t.Errorf("got durations %v, want three", got)
+	}
+	for _, d := range got {
+		if !validQuota(1, d) {
+			t.Errorf("rendered duration %q, which the CRD rejects", d)
+		}
+	}
+	perModel, _, _ := unstructured.NestedSlice(policy.Object, "spec", "perModelQuotas")
+	limit, _, _ := unstructured.NestedInt64(perModel[0].(map[string]any), "quota", "defaultBucket", "limit")
+	if limit != fallbackLimit {
+		t.Errorf("default bucket limit = %d, want the fallback %d", limit, fallbackLimit)
+	}
+}
+
+func TestQuotaPolicyCostExpressionAndShadow(t *testing.T) {
+	s := testState()
+	s.Models[0].CostExpression = "input_tokens + output_tokens * 4u"
+	s.Models[0].Quotas[0].Shadow = true // team-b
+	quota := Objects(s)[4]
+	perModel, _, _ := unstructured.NestedSlice(quota.Object, "spec", "perModelQuotas")
+	q := perModel[0].(map[string]any)["quota"].(map[string]any)
+	if q["costExpression"] != "input_tokens + output_tokens * 4u" {
+		t.Errorf("costExpression = %v", q["costExpression"])
+	}
+	rules := q["bucketRules"].([]any)
+	if _, set := rules[0].(map[string]any)["shadowMode"]; set {
+		t.Error("team-a is enforced and must not carry shadowMode")
+	}
+	if rules[1].(map[string]any)["shadowMode"] != true {
+		t.Error("team-b should be in shadow mode")
+	}
+	quota.DeepCopy()
+
+	// Without an expression the field is left out so the gateway default applies.
+	plain := Objects(testState())[4]
+	perModel, _, _ = unstructured.NestedSlice(plain.Object, "spec", "perModelQuotas")
+	if _, set := perModel[0].(map[string]any)["quota"].(map[string]any)["costExpression"]; set {
+		t.Error("costExpression set although the model has none")
+	}
+}

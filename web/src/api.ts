@@ -45,6 +45,8 @@ export interface Model {
   slug: string;
   default_limit: number;
   default_window: Window;
+  /** CEL over the token counts; empty charges total_tokens. */
+  cost_expression: string;
   endpoints: Endpoint[];
   quota_capable: boolean;
 }
@@ -53,6 +55,7 @@ export interface ModelInput {
   name: string;
   default_limit: number;
   default_window: Window;
+  cost_expression: string;
   endpoints: Endpoint[];
 }
 
@@ -80,6 +83,8 @@ export interface Quota {
   model_name: string;
   token_limit: number;
   window: Window;
+  /** Counted but never rejects a request. */
+  shadow: boolean;
 }
 
 export interface TenantDetail {
@@ -165,7 +170,7 @@ export const api = {
   createKey: (tenantId: string, name: string) =>
     request<{ key: ApiKey; secret: string }>("POST", `/tenants/${tenantId}/keys`, { name }),
   revokeKey: (id: string) => request<void>("DELETE", `/keys/${id}`),
-  setQuota: (tenantId: string, model_id: string, token_limit: number, window: Window) =>
-    request<Quota[]>("PUT", `/tenants/${tenantId}/quotas`, { model_id, token_limit, window }),
+  setQuota: (tenantId: string, model_id: string, token_limit: number, window: Window, shadow: boolean) =>
+    request<Quota[]>("PUT", `/tenants/${tenantId}/quotas`, { model_id, token_limit, window, shadow }),
   deleteQuota: (id: string) => request<void>("DELETE", `/quotas/${id}`),
 };

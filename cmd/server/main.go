@@ -42,7 +42,7 @@ func run() error {
 	}
 	defer st.Close()
 
-	sy := syncer.New(st, cfg.AutoSync, cfg.DiscoverEvery)
+	sy := syncer.New(st, cfg.AutoSync, cfg.DiscoverEvery, cfg.SyncEvery)
 	go sy.Run(ctx)
 
 	srv := &http.Server{
@@ -57,7 +57,7 @@ func run() error {
 		srv.Shutdown(shutdown)
 	}()
 
-	slog.Info("listening", "addr", cfg.ListenAddr, "auto_sync", cfg.AutoSync, "discovery_interval", cfg.DiscoverEvery.String())
+	slog.Info("listening", "addr", cfg.ListenAddr, "auto_sync", cfg.AutoSync, "discovery_interval", cfg.DiscoverEvery.String(), "sync_interval", cfg.SyncEvery.String())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

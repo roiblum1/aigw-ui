@@ -18,6 +18,9 @@ config:
   discoveryInterval: 60s
   # Apply changes to the clusters about a second after each edit.
   autoSync: true
+  # How often every cluster is synced again without a change, to retry failed
+  # syncs and undo manual edits. "0" turns it off. Needs autoSync.
+  syncInterval: 5m
 
 # The admin token and the encryption key.
 auth:

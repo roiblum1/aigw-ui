@@ -43,6 +43,8 @@ type TenantQuota struct {
 	TenantSlug string
 	Limit      int64
 	Window     string
+	// Shadow quotas are counted but never reject a request.
+	Shadow bool
 }
 
 // Target is an AIServiceBackend and the model name requests carry when they
@@ -62,7 +64,10 @@ type Model struct {
 	UpstreamModel string
 	DefaultLimit  int64
 	DefaultWindow string
-	Quotas        []TenantQuota
+	// CostExpression is CEL over the request's token counts. Empty leaves the
+	// gateway's default, total_tokens.
+	CostExpression string
+	Quotas         []TenantQuota
 	// Existing is set for a model discovered on the cluster: its route and
 	// backends are already there and owned by someone else, so only the
 	// QuotaPolicy is rendered and it is attached to these backends.
@@ -198,14 +203,28 @@ func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unst
 
 	rules := make([]any, 0, len(quotas))
 	for _, q := range quotas {
-		rules = append(rules, map[string]any{
+		// The CRD rejects a quota without a valid limit and duration, which
+		// would fail the whole sync. Such a tenant falls back to the default
+		// bucket instead.
+		if !validQuota(q.Limit, q.Window) {
+			continue
+		}
+		rule := map[string]any{
 			"clientSelectors": []any{
 				map[string]any{"headers": []any{
 					map[string]any{"name": ClientIDHeader, "type": "RegularExpression", "value": TenantClientIDPattern(q.TenantSlug)},
 				}},
 			},
 			"quota": map[string]any{"limit": q.Limit, "duration": q.Window},
-		})
+		}
+		if q.Shadow {
+			rule["shadowMode"] = true
+		}
+		rules = append(rules, rule)
+	}
+	defaultLimit, defaultWindow := m.DefaultLimit, m.DefaultWindow
+	if !validQuota(defaultLimit, defaultWindow) {
+		defaultLimit, defaultWindow = fallbackLimit, fallbackWindow
 	}
 
 	// One target per backend and one quota entry per distinct model name.
@@ -218,17 +237,18 @@ func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unst
 		}
 		if !seenModel[t.Model] {
 			seenModel[t.Model] = true
-			perModel = append(perModel, map[string]any{
-				"modelName": t.Model,
-				"quota": map[string]any{
-					"mode": "Shared",
-					// In Shared mode every request is also charged to the default
-					// bucket and passes if any matching bucket has quota left, so
-					// this pool is what tenants without their own rule can use.
-					"defaultBucket": map[string]any{"limit": m.DefaultLimit, "duration": m.DefaultWindow},
-					"bucketRules":   rules,
-				},
-			})
+			quota := map[string]any{
+				"mode": "Shared",
+				// In Shared mode every request is also charged to the default
+				// bucket and passes if any matching bucket has quota left, so
+				// this pool is what tenants without their own rule can use.
+				"defaultBucket": map[string]any{"limit": defaultLimit, "duration": defaultWindow},
+				"bucketRules":   rules,
+			}
+			if m.CostExpression != "" {
+				quota["costExpression"] = m.CostExpression
+			}
+			perModel = append(perModel, map[string]any{"modelName": t.Model, "quota": quota})
 		}
 	}
 
@@ -241,6 +261,22 @@ func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unst
 		},
 	}
 	return u
+}
+
+// fallbackLimit and fallbackWindow replace a default bucket that has no valid
+// value. They match the defaults a new model gets: the tightest bucket.
+const (
+	fallbackLimit  int64 = 1
+	fallbackWindow       = "1d"
+)
+
+// validQuota reports whether the QuotaPolicy CRD accepts the limit and duration.
+func validQuota(limit int64, window string) bool {
+	switch window {
+	case "1s", "1m", "1h", "1d":
+		return limit > 0
+	}
+	return false
 }
 
 func keysSecret(s State) *unstructured.Unstructured {

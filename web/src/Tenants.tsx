@@ -119,10 +119,11 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   const action = useAction();
   const [newKey, setNewKey] = useState<string | null>(null);
   const [keyName, setKeyName] = useState("");
-  const [quota, setQuota] = useState<{ model_id: string; limit: string; window: Window }>({
+  const [quota, setQuota] = useState<{ model_id: string; limit: string; window: Window; shadow: boolean }>({
     model_id: "",
     limit: "",
     window: "1d",
+    shadow: false,
   });
 
   if (!data) {
@@ -150,8 +151,8 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   const saveQuota = (e: FormEvent) => {
     e.preventDefault();
     act(async () => {
-      await api.setQuota(tenant.id, quota.model_id, Number(quota.limit), quota.window);
-      setQuota({ model_id: "", limit: "", window: quota.window });
+      await api.setQuota(tenant.id, quota.model_id, Number(quota.limit), quota.window, quota.shadow);
+      setQuota({ model_id: "", limit: "", window: quota.window, shadow: false });
     });
   };
 
@@ -255,6 +256,14 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
             onChange={(e) => setQuota({ ...quota, limit: e.target.value })}
           />
           <WindowSelect value={quota.window} onChange={(w) => setQuota({ ...quota, window: w })} />
+          <label className="check" title="Usage is counted against this quota, but it never rejects a request.">
+            <input
+              type="checkbox"
+              checked={quota.shadow}
+              onChange={(e) => setQuota({ ...quota, shadow: e.target.checked })}
+            />
+            <span>Dry run</span>
+          </label>
           <button type="submit" className="primary" disabled={action.busy}>
             Set quota
           </button>
@@ -276,8 +285,19 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
                   <td className="strong">{q.model_name}</td>
                   <td>
                     {formatTokens(q.token_limit)} per {windowLabel[q.window]}
+                    {q.shadow && (
+                      <span className="tag warn" title="Counted, but requests are not rejected by this quota.">
+                        dry run
+                      </span>
+                    )}
                   </td>
                   <td className="row-actions">
+                    <button
+                      disabled={action.busy}
+                      onClick={() => act(() => api.setQuota(tenant.id, q.model_id, q.token_limit, q.window, !q.shadow))}
+                    >
+                      {q.shadow ? "Enforce" : "Dry run"}
+                    </button>
                     <button className="danger" disabled={action.busy} onClick={() => act(() => api.deleteQuota(q.id))}>
                       Remove
                     </button>

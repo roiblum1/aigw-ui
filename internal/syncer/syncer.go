@@ -20,12 +20,13 @@ type Syncer struct {
 	st      *store.Store
 	auto    bool
 	every   time.Duration // discovery interval, 0 disables polling
+	resync  time.Duration // full sync interval, 0 disables it
 	locks   sync.Map      // cluster ID -> *sync.Mutex, one sync per cluster at a time
 	trigger chan struct{}
 }
 
-func New(st *store.Store, auto bool, discoverEvery time.Duration) *Syncer {
-	return &Syncer{st: st, auto: auto, every: discoverEvery, trigger: make(chan struct{}, 1)}
+func New(st *store.Store, auto bool, discoverEvery, syncEvery time.Duration) *Syncer {
+	return &Syncer{st: st, auto: auto, every: discoverEvery, resync: syncEvery, trigger: make(chan struct{}, 1)}
 }
 
 // Changed records that desired state moved. Clusters are marked pending and,
@@ -53,12 +54,23 @@ func (s *Syncer) Run(ctx context.Context) {
 		tick = ticker.C
 		s.DiscoverAll(ctx)
 	}
+	// The periodic sync retries clusters that failed and puts back objects
+	// someone changed or deleted by hand. With auto sync off the operator
+	// decides when clusters change, so it stays off too.
+	var resync <-chan time.Time
+	if s.auto && s.resync > 0 {
+		ticker := time.NewTicker(s.resync)
+		defer ticker.Stop()
+		resync = ticker.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick:
 			s.DiscoverAll(ctx)
+		case <-resync:
+			s.SyncAll(ctx)
 		case <-s.trigger:
 			// Let a burst of edits settle into one sync.
 			select {

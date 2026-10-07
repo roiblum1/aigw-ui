@@ -77,6 +77,11 @@ give the host and port of the model server.
 tenants without one share this pool. Keep it at 1 token to make a quota
 mandatory.
 
+**Cost expression.** By default every token costs the same. An expression
+such as `input_tokens + output_tokens * 4u` makes output tokens cost four
+times as much against every quota on the model. Number literals need the `u`
+suffix. Changing it does not reset what tenants have already used.
+
 Deleting a model removes its quotas from every cluster. A discovered model
 comes back on the next poll, without its quotas.
 
@@ -87,6 +92,8 @@ A tenant is a team.
 1. **Add tenant**. The ID cannot be changed later.
 2. **Create key**. The key is shown once. Copy it then.
 3. **Set quota**. Pick a model, a number of tokens and a window (minute, hour or day).
+   Tick **Dry run** to count usage against the quota without rejecting
+   requests, and press **Enforce** on the quota when you are ready.
 
 Clients send the key as `Authorization: Bearer sk-...`.
 

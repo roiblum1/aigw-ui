@@ -59,13 +59,16 @@ type DiscoveredModel struct {
 }
 
 type Model struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	Slug          string     `json:"slug"`
-	DefaultLimit  int64      `json:"default_limit"`
-	DefaultWindow string     `json:"default_window"`
-	CreatedAt     time.Time  `json:"created_at"`
-	Endpoints     []Endpoint `json:"endpoints"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Slug          string `json:"slug"`
+	DefaultLimit  int64  `json:"default_limit"`
+	DefaultWindow string `json:"default_window"`
+	// CostExpression is the CEL expression that turns a request's token counts
+	// into the amount charged to quotas. Empty charges total_tokens.
+	CostExpression string     `json:"cost_expression"`
+	CreatedAt      time.Time  `json:"created_at"`
+	Endpoints      []Endpoint `json:"endpoints"`
 	// QuotaCapable is false when no cluster has anything a quota can attach to.
 	QuotaCapable bool `json:"quota_capable"`
 }
@@ -97,6 +100,8 @@ type Quota struct {
 	ModelName  string `json:"model_name"`
 	TokenLimit int64  `json:"token_limit"`
 	Window     string `json:"window"`
+	// Shadow quotas are counted but never reject a request.
+	Shadow bool `json:"shadow"`
 }
 
 type Overview struct {

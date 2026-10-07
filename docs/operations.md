@@ -52,6 +52,7 @@ same message is shown in the cluster's row in the UI.
 | Discovery says `read routes for the backends: ... forbidden` | The kubeconfig cannot list routes in all namespaces | Use a kubeconfig that can, or clear the Gateway URL |
 | A model shows "no quota possible" | It is served only from something other than an `AIServiceBackend` | Expected; a `QuotaPolicy` cannot target it |
 | A cluster stays Pending | `config.autoSync` is off, or the last sync is still running | Press **Sync** |
+| A cluster shows Error after an outage | The last sync failed | Nothing: it is retried every `config.syncInterval` (5 minutes) |
 | Server logs `waiting for postgres` at start | The database is still starting | Normal on a fresh install; it waits up to two minutes |
 | Server exits with `ENCRYPTION_KEY must be 32 bytes` | The Secret value is not 32 random bytes in base64 | Recreate it with `openssl rand -base64 32` |
 | Every request with a valid key gets 401 at the gateway | The key Secret has not reached that cluster | Check the cluster's sync status |

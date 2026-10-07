@@ -92,6 +92,7 @@ Back up the encryption key straight away. See
 | `replicaCount` | `1` | Keep at 1; each replica polls and syncs every cluster |
 | `config.discoveryInterval` | `60s` | How often clusters are polled for models. `0` turns it off |
 | `config.autoSync` | `true` | Apply changes about a second after each edit |
+| `config.syncInterval` | `5m` | How often every cluster is synced again without a change. `0` turns it off. Needs `autoSync` |
 | `auth.existingSecret` | empty | Your own Secret with `admin-token` and `encryption-key` |
 | `postgresql.enabled` | `true` | `false` to use your own Postgres |
 | `postgresql.image.repository` / `.tag` | sclorg Postgres 16 | Postgres image |

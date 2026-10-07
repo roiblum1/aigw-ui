@@ -113,6 +113,11 @@ export default function Models() {
                   </td>
                   <td>
                     {formatTokens(m.default_limit)} per {windowLabel[m.default_window]}
+                    {m.cost_expression && (
+                      <span className="tag" title={m.cost_expression}>
+                        weighted
+                      </span>
+                    )}
                   </td>
                   <td className="row-actions">
                     <button onClick={() => setEditing(m)}>Edit</button>
@@ -183,6 +188,7 @@ function ModelForm(props: {
   const [name, setName] = useState(model?.name ?? "");
   const [limit, setLimit] = useState(String(model?.default_limit ?? 1));
   const [window, setWindow] = useState<Window>(model?.default_window ?? "1d");
+  const [cost, setCost] = useState(model?.cost_expression ?? "");
   const [rows, setRows] = useState<Record<string, EndpointRow>>(() =>
     Object.fromEntries(
       clusters.map((c) => {
@@ -202,6 +208,7 @@ function ModelForm(props: {
       name,
       default_limit: Number(limit),
       default_window: window,
+      cost_expression: cost.trim(),
       endpoints: clusters
         .filter((c) => rows[c.id].enabled)
         .map((c) => ({
@@ -302,6 +309,19 @@ function ModelForm(props: {
           <WindowSelect value={window} onChange={setWindow} />
         </Field>
       </div>
+
+      <h3>What a request costs</h3>
+      <Field
+        label="Cost expression"
+        hint="Optional. Leave empty to charge every token the same. Counts are whole numbers and literals need a u, e.g. input_tokens + output_tokens * 4u."
+      >
+        <input
+          value={cost}
+          spellCheck={false}
+          placeholder="total_tokens"
+          onChange={(e) => setCost(e.target.value)}
+        />
+      </Field>
     </FormModal>
   );
 }

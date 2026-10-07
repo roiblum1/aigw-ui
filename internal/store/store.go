@@ -246,20 +246,23 @@ func (s *Store) MarkPending(ctx context.Context) error {
 // ---- models ----
 
 type ModelInput struct {
-	Name          string
-	DefaultLimit  int64
-	DefaultWindow string
-	Endpoints     []Endpoint
+	Name           string
+	DefaultLimit   int64
+	DefaultWindow  string
+	CostExpression string
+	Endpoints      []Endpoint
+	// KeepEndpoints leaves the manual endpoints as they are on an update.
+	KeepEndpoints bool
 }
 
 func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, created_at FROM models ORDER BY name`)
+	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at FROM models ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	models, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Model, error) {
 		m := Model{Endpoints: []Endpoint{}}
-		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CreatedAt)
+		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt)
 		return m, err
 	})
 	if err != nil {
@@ -294,8 +297,8 @@ func (s *Store) CreateModel(ctx context.Context, in ModelInput) (string, error) 
 	var id string
 	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx,
-			`INSERT INTO models (name, slug, default_limit, default_window) VALUES ($1, $2, $3, $4) RETURNING id`,
-			in.Name, render.Slug(in.Name), in.DefaultLimit, in.DefaultWindow).Scan(&id)
+			`INSERT INTO models (name, slug, default_limit, default_window, cost_expression) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+			in.Name, render.Slug(in.Name), in.DefaultLimit, in.DefaultWindow, in.CostExpression).Scan(&id)
 		if err != nil {
 			return err
 		}
@@ -308,13 +311,16 @@ func (s *Store) CreateModel(ctx context.Context, in ModelInput) (string, error) 
 // and is part of the rate limit counter key.
 func (s *Store) UpdateModel(ctx context.Context, id string, in ModelInput) error {
 	return mapErr(pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE models SET default_limit = $2, default_window = $3 WHERE id = $1`,
-			id, in.DefaultLimit, in.DefaultWindow)
+		tag, err := tx.Exec(ctx, `UPDATE models SET default_limit = $2, default_window = $3, cost_expression = $4 WHERE id = $1`,
+			id, in.DefaultLimit, in.DefaultWindow, in.CostExpression)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
 			return ErrNotFound
+		}
+		if in.KeepEndpoints {
+			return nil
 		}
 		return replaceEndpoints(ctx, tx, id, in)
 	}))
@@ -342,10 +348,12 @@ func replaceEndpoints(ctx context.Context, tx pgx.Tx, modelID string, in ModelIn
 	return nil
 }
 
-func (s *Store) ModelName(ctx context.Context, id string) (string, error) {
-	var name string
-	err := s.db.QueryRow(ctx, `SELECT name FROM models WHERE id = $1`, id).Scan(&name)
-	return name, mapErr(err)
+// GetModel returns a model's own settings, without its endpoints.
+func (s *Store) GetModel(ctx context.Context, id string) (Model, error) {
+	var m Model
+	err := s.db.QueryRow(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at FROM models WHERE id = $1`, id).
+		Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt)
+	return m, mapErr(err)
 }
 
 func (s *Store) DeleteModel(ctx context.Context, id string) error {
@@ -461,14 +469,14 @@ func (s *Store) RevokeKey(ctx context.Context, id string) error {
 
 func (s *Store) ListQuotas(ctx context.Context, tenantID string) ([]Quota, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT q.id, q.tenant_id, q.model_id, m.name, q.token_limit, q.window_size
+		`SELECT q.id, q.tenant_id, q.model_id, m.name, q.token_limit, q.window_size, q.shadow
 		 FROM quotas q JOIN models m ON m.id = q.model_id WHERE q.tenant_id = $1 ORDER BY m.name`, tenantID)
 	if err != nil {
 		return nil, mapErr(err)
 	}
 	quotas, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Quota, error) {
 		var q Quota
-		err := r.Scan(&q.ID, &q.TenantID, &q.ModelID, &q.ModelName, &q.TokenLimit, &q.Window)
+		err := r.Scan(&q.ID, &q.TenantID, &q.ModelID, &q.ModelName, &q.TokenLimit, &q.Window, &q.Shadow)
 		return q, err
 	})
 	if quotas == nil {
@@ -477,11 +485,14 @@ func (s *Store) ListQuotas(ctx context.Context, tenantID string) ([]Quota, error
 	return quotas, mapErr(err)
 }
 
-func (s *Store) UpsertQuota(ctx context.Context, tenantID, modelID string, limit int64, window string) error {
+// UpsertQuota keeps the stored shadow setting when shadow is nil. A new quota
+// is enforced unless shadow says otherwise.
+func (s *Store) UpsertQuota(ctx context.Context, tenantID, modelID string, limit int64, window string, shadow *bool) error {
 	_, err := s.db.Exec(ctx,
-		`INSERT INTO quotas (tenant_id, model_id, token_limit, window_size) VALUES ($1, $2, $3, $4)
-		 ON CONFLICT (tenant_id, model_id) DO UPDATE SET token_limit = EXCLUDED.token_limit, window_size = EXCLUDED.window_size`,
-		tenantID, modelID, limit, window)
+		`INSERT INTO quotas (tenant_id, model_id, token_limit, window_size, shadow) VALUES ($1, $2, $3, $4, COALESCE($5::boolean, false))
+		 ON CONFLICT (tenant_id, model_id) DO UPDATE SET token_limit = EXCLUDED.token_limit, window_size = EXCLUDED.window_size,
+		     shadow = COALESCE($5::boolean, quotas.shadow)`,
+		tenantID, modelID, limit, window, shadow)
 	return mapErr(err)
 }
 
@@ -513,7 +524,7 @@ func (s *Store) RenderState(ctx context.Context, clusterID string) (render.State
 	st := render.State{Namespace: c.Namespace, GatewayName: c.GatewayName, AuthEnabled: c.AuthEnabled}
 
 	rows, err := s.db.Query(ctx,
-		`SELECT m.id, m.name, m.slug, e.host, e.port, e.upstream_model, m.default_limit, m.default_window, e.source, e.backends
+		`SELECT m.id, m.name, m.slug, e.host, e.port, e.upstream_model, m.default_limit, m.default_window, m.cost_expression, e.source, e.backends
 		 FROM model_endpoints e JOIN models m ON m.id = e.model_id WHERE e.cluster_id = $1`, clusterID)
 	if err != nil {
 		return st, err
@@ -524,7 +535,7 @@ func (s *Store) RenderState(ctx context.Context, clusterID string) (render.State
 		var m render.Model
 		var source string
 		var backends []BackendRef
-		if err := rows.Scan(&id, &m.Name, &m.Slug, &m.Host, &m.Port, &m.UpstreamModel, &m.DefaultLimit, &m.DefaultWindow, &source, &backends); err != nil {
+		if err := rows.Scan(&id, &m.Name, &m.Slug, &m.Host, &m.Port, &m.UpstreamModel, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &source, &backends); err != nil {
 			rows.Close()
 			return st, err
 		}
@@ -542,7 +553,7 @@ func (s *Store) RenderState(ctx context.Context, clusterID string) (render.State
 	}
 
 	rows, err = s.db.Query(ctx,
-		`SELECT q.model_id, t.slug, q.token_limit, q.window_size
+		`SELECT q.model_id, t.slug, q.token_limit, q.window_size, q.shadow
 		 FROM quotas q JOIN tenants t ON t.id = q.tenant_id WHERE t.enabled`)
 	if err != nil {
 		return st, err
@@ -550,7 +561,7 @@ func (s *Store) RenderState(ctx context.Context, clusterID string) (render.State
 	for rows.Next() {
 		var modelID string
 		var q render.TenantQuota
-		if err := rows.Scan(&modelID, &q.TenantSlug, &q.Limit, &q.Window); err != nil {
+		if err := rows.Scan(&modelID, &q.TenantSlug, &q.Limit, &q.Window, &q.Shadow); err != nil {
 			rows.Close()
 			return st, err
 		}
