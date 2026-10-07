@@ -88,6 +88,13 @@ default bucket is therefore a shared pool for tenants that have no quota of
 their own. It defaults to 1 token per day, which in practice makes a quota
 mandatory once a model has any quota.
 
+**The `serviceQuota` field.** Every `QuotaPolicy` is written with a
+`serviceQuota` of 4,294,967,295 tokens per second. The gateway does not
+enforce this field. It is set because the gateway's controller otherwise
+writes the object back with an empty `serviceQuota`, which its own CRD
+rejects, and logs "Failed to add finalizer" on every reconcile. The value is
+high enough to mean "no limit" if the field is enforced later.
+
 ## One budget across sites
 
 Counters add up across sites when all of these hold:

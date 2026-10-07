@@ -25,6 +25,16 @@ const (
 
 	aigwAPI = "aigateway.envoyproxy.io/v1alpha1"
 	egAPI   = "gateway.envoyproxy.io/v1alpha1"
+	// serviceQuotaLimit and serviceQuotaWindow fill spec.serviceQuota on every
+	// QuotaPolicy. The field is optional and not enforced by the gateway, but
+	// its controller writes the object back with an empty serviceQuota when
+	// none is set, and the CRD rejects the empty duration, so every reconcile
+	// fails to add its finalizer. A valid value makes that write succeed. The
+	// limit is the largest the rate limit service can count per second, so it
+	// stays "no limit" if the gateway ever starts enforcing the field.
+	serviceQuotaLimit  int64 = 4294967295
+	serviceQuotaWindow       = "1s"
+
 	// ModelHeader is set by the AI gateway from the "model" field of the request body.
 	ModelHeader = "x-ai-eg-model"
 )
@@ -223,7 +233,13 @@ func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unst
 	}
 
 	u := object(aigwAPI, "QuotaPolicy", namespace, m.Slug)
-	u.Object["spec"] = map[string]any{"targetRefs": targetRefs, "perModelQuotas": perModel}
+	u.Object["spec"] = map[string]any{
+		"targetRefs":     targetRefs,
+		"perModelQuotas": perModel,
+		"serviceQuota": map[string]any{
+			"quota": map[string]any{"limit": serviceQuotaLimit, "duration": serviceQuotaWindow},
+		},
+	}
 	return u
 }
 

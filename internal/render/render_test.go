@@ -165,3 +165,21 @@ func TestQuotaPolicyPerBackendNamespace(t *testing.T) {
 		}
 	}
 }
+
+// The gateway's controller writes a QuotaPolicy back with whatever
+// serviceQuota it holds, and the CRD only accepts these four windows. Without
+// a valid value here its finalizer update is rejected on every reconcile.
+func TestQuotaPolicySetsValidServiceQuota(t *testing.T) {
+	for _, o := range Objects(testState()) {
+		if o.GetKind() != "QuotaPolicy" {
+			continue
+		}
+		duration, _, _ := unstructured.NestedString(o.Object, "spec", "serviceQuota", "quota", "duration")
+		limit, _, _ := unstructured.NestedInt64(o.Object, "spec", "serviceQuota", "quota", "limit")
+		if !map[string]bool{"1s": true, "1m": true, "1h": true, "1d": true}[duration] || limit <= 0 {
+			t.Errorf("serviceQuota = %d per %q, want a positive limit and a window the CRD accepts", limit, duration)
+		}
+		return
+	}
+	t.Fatal("no QuotaPolicy rendered")
+}
