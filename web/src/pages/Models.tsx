@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Boxes, Plus, Radar } from "lucide-react";
-import { api, type Cluster, type Endpoint, type Model, type Window } from "./api";
+import { api, type Cluster, type Endpoint, type Model, type Window } from "../api";
 import {
   Empty,
   ErrorBanner,
@@ -12,7 +12,7 @@ import {
   useAction,
   useLoad,
   windowLabel,
-} from "./components";
+} from "../components";
 
 export default function Models() {
   const { data, error, reload } = useLoad(async () => ({

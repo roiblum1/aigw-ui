@@ -71,17 +71,29 @@ Open http://localhost:8080 and sign in with `ADMIN_TOKEN`. For UI work, run
 ## Repository layout
 
 ```
-cmd/server/          entry point
-internal/api/        HTTP API and static UI serving
-internal/store/      Postgres access and migrations
-internal/render/     turns desired state into Kubernetes objects
-internal/kube/       applies, prunes and discovers on one cluster
-internal/syncer/     background sync and discovery loops
-web/                 React UI (Vite, Tailwind CSS)
-deploy/chart/        Helm chart for OpenShift
-deploy/offline/      scripts that build and load the offline bundle
-Containerfile        image build
+cmd/server/            entry point: reads the config and wires the packages together
+internal/config/       settings from environment variables
+internal/api/          HTTP API, one file per resource, and static UI serving
+internal/store/        Postgres access, one file per resource, and migrations
+internal/render/       turns desired state into Kubernetes objects and counter names (pure)
+internal/kube/         one cluster: sync (apply, prune), gateway status, discovery
+internal/gateway/      reads /v1/models from a gateway
+internal/syncer/       background sync and discovery loops, and task results
+internal/usage/        reads the quota counters in Redis and builds the usage report
+internal/secretbox/    AES-256-GCM encryption of stored secrets
+web/src/pages/         one file per page of the UI
+web/src/               shared UI pieces: API client, components, charts
+web/src/styles/        styles per feature
+deploy/chart/          Helm chart for OpenShift
+deploy/offline/        scripts that build and load the offline bundle
+docs/release-notes/    what changed in each version
+Containerfile          image build
 ```
+
+How the packages depend on each other: `api` calls `store`, `syncer` and
+`usage`. `syncer` calls `store`, `render`, `kube` and `gateway`. `usage` calls
+`store` and `render`. `render` depends on nothing, which keeps it easy to
+test.
 
 ## Status
 

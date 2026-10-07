@@ -1,27 +1,25 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity as ActivityIcon,
   Boxes,
   ListChecks,
-  Gauge,
-  KeyRound,
   LayoutDashboard,
   LogOut,
   Moon,
   Server,
   Sun,
   Users,
-  Waypoints,
-  type LucideIcon,
 } from "lucide-react";
-import { api, getToken, setToken } from "./api";
-import Clusters from "./Clusters";
-import Models from "./Models";
-import Tenants from "./Tenants";
-import Usage from "./Usage";
-import Activity from "./Activity";
-import Dashboard from "./Dashboard";
-import { ErrorBanner, PageHeader, StatusBadge, UNAUTHORIZED_EVENT, formatTime, useLoad } from "./components";
+import { getToken, setToken } from "./api";
+import Clusters from "./pages/Clusters";
+import Models from "./pages/Models";
+import Tenants from "./pages/Tenants";
+import Usage from "./pages/Usage";
+import Activity from "./pages/Activity";
+import BrandMark from "./BrandMark";
+import Login from "./pages/Login";
+import Overview from "./pages/Overview";
+import { UNAUTHORIZED_EVENT } from "./components";
 
 const pages = [
   { name: "Overview", icon: LayoutDashboard },
@@ -53,17 +51,6 @@ function useDarkMode() {
     setDark(next);
   };
   return { dark, toggle };
-}
-
-function BrandMark({ className = "" }: { className?: string }) {
-  return (
-    <span
-      className={`grid size-8 flex-none place-items-center rounded-lg bg-primary text-primary-foreground ${className}`}
-      aria-hidden
-    >
-      <Waypoints className="size-[18px]" />
-    </span>
-  );
 }
 
 const navItem =
@@ -140,140 +127,5 @@ export default function App() {
         {page === "Activity" && <Activity />}
       </main>
     </div>
-  );
-}
-
-function Login({ onLogin }: { onLogin: () => void }) {
-  const [token, setValue] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      await api.checkToken(token);
-      setToken(token);
-      onLogin();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="grid min-h-screen place-items-center bg-sidebar p-4">
-      <form
-        onSubmit={submit}
-        className="w-full max-w-[380px] rounded-2xl border border-border bg-card p-7 shadow-2xl shadow-black/30"
-      >
-        <div className="mb-6 flex items-center gap-3">
-          <BrandMark className="size-10" />
-          <div>
-            <h1 className="text-lg">AI Gateway Control</h1>
-            <p className="text-[13px] text-muted-foreground">Sign in to manage your clusters</p>
-          </div>
-        </div>
-        <ErrorBanner message={error} />
-        <label className="field">
-          <span>Admin token</span>
-          <input type="password" required autoFocus value={token} onChange={(e) => setValue(e.target.value)} />
-        </label>
-        <button type="submit" className="primary mt-1 w-full" disabled={busy}>
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
-      </form>
-    </div>
-  );
-}
-
-function Stat(props: { label: string; value: number; icon: LucideIcon; note?: string; alert?: boolean }) {
-  const Icon = props.icon;
-  return (
-    <div className="flex items-center gap-3.5 rounded-xl border border-border bg-card p-4 shadow-(--shadow)">
-      <span className="grid size-10 flex-none place-items-center rounded-lg bg-primary-soft text-primary">
-        <Icon className="size-5" />
-      </span>
-      <div className="min-w-0">
-        <div className="text-2xl font-semibold leading-tight tabular-nums">{props.value}</div>
-        <div className="text-[13px] text-muted-foreground">{props.label}</div>
-        {props.note && (
-          <div className={`text-xs font-medium ${props.alert ? "text-danger" : "text-success"}`}>{props.note}</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function Overview() {
-  const { data, error } = useLoad(async () => ({ overview: await api.overview(), clusters: await api.clusters() }));
-  const o = data?.overview;
-  return (
-    <>
-      <PageHeader title="Overview" subtitle="State of the gateway configuration across all sites." />
-      <ErrorBanner message={error} />
-      {o && (
-        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
-          <Stat
-            label="Clusters"
-            value={o.clusters}
-            icon={Server}
-            alert={o.clusters_error > 0}
-            note={o.clusters_error > 0 ? `${o.clusters_error} failing` : undefined}
-          />
-          <Stat label="Models" value={o.models} icon={Boxes} />
-          <Stat label="Tenants" value={o.tenants} icon={Users} />
-          <Stat label="Active keys" value={o.active_keys} icon={KeyRound} />
-          <Stat label="Quotas" value={o.quotas} icon={Gauge} />
-        </div>
-      )}
-      <Dashboard />
-      {data && data.clusters.length > 0 && (
-        <section className="card">
-          <h2>Cluster sync</h2>
-          <table className="plain">
-            <thead>
-              <tr>
-                <th>Cluster</th>
-                <th>Site</th>
-                <th>Status</th>
-                <th>Detail</th>
-                <th>Last sync</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.clusters.map((c) => (
-                <tr key={c.id}>
-                  <td className="strong">{c.name}</td>
-                  <td>{c.site || "—"}</td>
-                  <td>
-                    <StatusBadge status={c.sync_status} />
-                  </td>
-                  <td className="detail">{c.sync_message}</td>
-                  <td className="whitespace-nowrap">{formatTime(c.synced_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
-      {data && data.clusters.length === 0 && (
-        <section className="card">
-          <h2>Get started</h2>
-          <ol className="steps">
-            <li>
-              Add your LLM clusters under <a href="#clusters">Clusters</a>.
-            </li>
-            <li>
-              Register the models they serve under <a href="#models">Models</a>.
-            </li>
-            <li>
-              Create a tenant, issue a key and set its quotas under <a href="#tenants">Tenants</a>.
-            </li>
-          </ol>
-        </section>
-      )}
-    </>
   );
 }

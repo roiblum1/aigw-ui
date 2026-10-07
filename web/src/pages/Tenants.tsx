@@ -1,6 +1,6 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { ArrowLeft, Copy, Plus, Users } from "lucide-react";
-import { api, type Tenant, type Window } from "./api";
+import { api, type Tenant, type Window } from "../api";
 import {
   Empty,
   ErrorBanner,
@@ -13,9 +13,10 @@ import {
   formatTokens,
   useAction,
   useLoad,
+  usePolling,
   windowLabel,
-} from "./components";
-import { UsageMeter, confirmReset } from "./Usage";
+} from "../components";
+import { REFRESH_MS, UsageMeter, confirmReset } from "./Usage";
 
 export default function Tenants() {
   const { data: tenants, error, reload } = useLoad(api.tenants);
@@ -119,12 +120,7 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   }));
   // Usage is loaded on its own so that Redis being down never hides the tenant.
   const usage = useLoad(() => api.usage(props.id));
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (!document.hidden) usage.reload();
-    }, 5000);
-    return () => clearInterval(timer);
-  }, [usage.reload]);
+  usePolling(usage.reload, REFRESH_MS);
   const usageOf = (modelId: string) => usage.data?.quotas.find((u) => u.model_id === modelId);
   const action = useAction();
   const [newKey, setNewKey] = useState<string | null>(null);

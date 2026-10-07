@@ -1,0 +1,53 @@
+@layer components {
+  .meter-cell {
+    min-width: 180px;
+  }
+  .meter {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--muted);
+    overflow: hidden;
+  }
+  .meter > span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--success);
+    transition: width 0.4s ease;
+  }
+  .meter.high > span {
+    background: var(--warning);
+  }
+  .meter.full > span {
+    background: var(--danger);
+  }
+  .page-header .actions input[type="search"] {
+    width: 220px;
+  }
+  .live {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .live > i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--success);
+    animation: live-pulse 2s ease-in-out infinite;
+  }
+  @keyframes live-pulse {
+    50% {
+      opacity: 0.35;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .live > i {
+      animation: none;
+    }
+    .meter > span {
+      transition: none;
+    }
+  }
+}

@@ -157,7 +157,7 @@ func taskMessage(res kube.SyncResult, err error) string {
 }
 
 func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, error) {
-	state, err := s.st.RenderState(ctx, id, true)
+	state, err := s.st.RenderState(ctx, id)
 	if err != nil {
 		return kube.SyncResult{}, err
 	}

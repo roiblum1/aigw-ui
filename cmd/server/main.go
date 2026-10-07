@@ -48,9 +48,9 @@ func run() error {
 
 	// Usage monitoring is optional and must not keep the server from starting:
 	// Redis being down only makes the usage page report an error.
-	var reader *usage.Reader
+	var usageService *usage.Service
 	if cfg.RedisURL != "" {
-		reader, err = usage.New(usage.Options{URL: cfg.RedisURL, CAFile: cfg.RedisCAFile, TLSInsecure: cfg.RedisTLSInsecure, KeyPrefix: cfg.RedisKeyPrefix, AllowReset: cfg.RedisAllowReset})
+		reader, err := usage.New(usage.Options{URL: cfg.RedisURL, CAFile: cfg.RedisCAFile, TLSInsecure: cfg.RedisTLSInsecure, KeyPrefix: cfg.RedisKeyPrefix, AllowReset: cfg.RedisAllowReset})
 		if err != nil {
 			return err
 		}
@@ -58,11 +58,12 @@ func run() error {
 		if err := reader.Ping(ctx); err != nil {
 			slog.Warn("redis is not reachable; usage will be unavailable until it is", "err", err)
 		}
+		usageService = usage.NewService(st, reader)
 	}
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(st, sy, reader, cfg.AdminToken, cfg.UIDir).Handler(),
+		Handler:           api.New(st, sy, usageService, cfg.AdminToken, cfg.UIDir).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -72,7 +73,7 @@ func run() error {
 		srv.Shutdown(shutdown)
 	}()
 
-	slog.Info("listening", "addr", cfg.ListenAddr, "auto_sync", cfg.AutoSync, "discovery_interval", cfg.DiscoverEvery.String(), "sync_interval", cfg.SyncEvery.String(), "usage_monitoring", reader != nil)
+	slog.Info("listening", "addr", cfg.ListenAddr, "auto_sync", cfg.AutoSync, "discovery_interval", cfg.DiscoverEvery.String(), "sync_interval", cfg.SyncEvery.String(), "usage_monitoring", usageService != nil)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

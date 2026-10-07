@@ -1,7 +1,6 @@
-import { useEffect } from "react";
 import { ListChecks } from "lucide-react";
-import { api, type Task, type TaskChange, type TaskResult } from "./api";
-import { Empty, ErrorBanner, PageHeader, formatTime, useLoad } from "./components";
+import { api, type Task, type TaskChange, type TaskResult } from "../api";
+import { Empty, ErrorBanner, PageHeader, formatTime, useLoad, usePolling } from "../components";
 
 const REFRESH_MS = 3000;
 
@@ -65,12 +64,7 @@ function Result({ r }: { r: TaskResult }) {
 
 export default function Activity() {
   const { data: tasks, error, reload } = useLoad(() => api.tasks());
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (!document.hidden) reload();
-    }, REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [reload]);
+  usePolling(reload, REFRESH_MS);
 
   return (
     <>

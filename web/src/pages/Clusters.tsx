@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Plus, RefreshCw, Server } from "lucide-react";
-import { api, type Cluster, type ClusterInput, type ProbeResult } from "./api";
+import { api, type Cluster, type ClusterInput, type ProbeResult } from "../api";
 import {
   Empty,
   ErrorBanner,
@@ -12,7 +12,7 @@ import {
   formatTime,
   useAction,
   useLoad,
-} from "./components";
+} from "../components";
 
 const emptyCluster: ClusterInput = {
   name: "",

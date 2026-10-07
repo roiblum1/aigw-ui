@@ -32,6 +32,16 @@ export function useLoad<T>(load: () => Promise<T>) {
   return { data, error, reload };
 }
 
+/** Calls reload on a timer, but only while the tab is visible. */
+export function usePolling(reload: () => Promise<void>, intervalMs: number) {
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!document.hidden) reload();
+    }, intervalMs);
+    return () => clearInterval(timer);
+  }, [reload, intervalMs]);
+}
+
 /** Runs one action at a time and keeps its error for display. */
 export function useAction() {
   const [busy, setBusy] = useState(false);

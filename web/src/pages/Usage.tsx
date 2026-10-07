@@ -1,19 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Activity } from "lucide-react";
-import { api, type UsageQuota } from "./api";
-import { Empty, ErrorBanner, PageHeader, useAction, useLoad, windowLabel } from "./components";
+import { api, type UsageQuota } from "../api";
+import { Empty, ErrorBanner, PageHeader, useAction, useLoad, usePolling, windowLabel } from "../components";
 
-const REFRESH_MS = 5000;
-
-/** Reloads on a timer while the tab is visible. */
-function useLive(reload: () => Promise<void>) {
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (!document.hidden) reload();
-    }, REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [reload]);
-}
+export const REFRESH_MS = 5000;
 
 function resetsIn(iso: string, now: number): string {
   const s = Math.max(0, Math.round((new Date(iso).getTime() - now) / 1000));
@@ -69,7 +59,7 @@ function Counters({ q }: { q: UsageQuota }) {
 
 export default function Usage() {
   const { data, error, reload } = useLoad(() => api.usage());
-  useLive(reload);
+  usePolling(reload, REFRESH_MS);
   const action = useAction();
   const [filter, setFilter] = useState("");
   const reset = (q: UsageQuota) => {

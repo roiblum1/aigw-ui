@@ -1,0 +1,141 @@
+@layer components {
+  .dash-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px 16px;
+  }
+  .seg {
+    display: inline-flex;
+    padding: 3px;
+    border-radius: 10px;
+    background: var(--muted);
+  }
+  .seg > button {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 4px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--muted-foreground);
+  }
+  .seg > button.on {
+    background: var(--card);
+    color: var(--foreground);
+    box-shadow: var(--shadow);
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 12px 0 16px;
+  }
+  .chip {
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--muted);
+    color: var(--muted-foreground);
+    font-size: 12.5px;
+  }
+  .chip > b {
+    color: var(--foreground);
+  }
+  .chip.warn {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+  .chip.danger {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+  .chip.warn > b,
+  .chip.danger > b {
+    color: inherit;
+  }
+  .dash-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+    gap: 12px;
+  }
+  .panel {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    min-width: 0;
+  }
+  .panel > h3 {
+    margin: 0 0 10px;
+    font-size: 13.5px;
+  }
+  .panel-chart {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .donut {
+    width: 112px;
+    flex: none;
+  }
+  .donut-value {
+    font-size: 7px;
+    font-weight: 700;
+    fill: var(--foreground);
+  }
+  .donut-sub {
+    font-size: 3.2px;
+    fill: var(--muted-foreground);
+  }
+  .legend {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 5px;
+    font-size: 13px;
+  }
+  .legend > li,
+  .hbar-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .legend i {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    flex: none;
+  }
+  .legend-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .legend-value {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+  .hbar {
+    margin-top: 10px;
+    font-size: 13px;
+  }
+  .hbar-head {
+    margin-bottom: 4px;
+  }
+  .rate {
+    display: block;
+    width: 100%;
+    height: 70px;
+    margin: 6px 0;
+  }
+  .rate-now {
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+}
