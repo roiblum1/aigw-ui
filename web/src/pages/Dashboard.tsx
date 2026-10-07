@@ -36,8 +36,26 @@ export default function Dashboard() {
   const [picked, setPicked] = useState<Window | null>(null);
   const win = picked && present.includes(picked) ? picked : present[0];
 
-  // Without Redis there is nothing to draw; the Usage page explains how to turn it on.
-  if (!data?.enabled || data.quotas.length === 0 || !win) return null;
+  if (!data) return null;
+  // Say why there are no charts instead of leaving the page looking unfinished.
+  if (!data.enabled || data.quotas.length === 0 || !win) {
+    return (
+      <section className="card">
+        <h2>Token usage right now</h2>
+        {data.enabled ? (
+          <p className="hint">
+            No tenant has a quota yet, so there is nothing to chart. Add a cluster and a model, then set a quota on a
+            tenant under <a href="#tenants">Tenants</a>. The charts appear here as soon as one exists.
+          </p>
+        ) : (
+          <p className="hint">
+            Usage monitoring is off. Set <code>redis.url</code> in the chart (or <code>REDIS_URL</code>) to the Redis
+            that the gateways count quotas in, and live charts appear here.
+          </p>
+        )}
+      </section>
+    );
+  }
 
   const inWindow = data.quotas.filter((q) => q.window === win);
   // A dry-run quota can go past its limit, which would make "free" negative.

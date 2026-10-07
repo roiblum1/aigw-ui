@@ -87,6 +87,7 @@ web/src/styles/        styles per feature
 deploy/chart/          Helm chart for OpenShift
 deploy/offline/        scripts that build and load the offline bundle
 docs/release-notes/    what changed in each version
+hack/                  seed-demo.py: demo data for showing the UI without a gateway
 Containerfile          image build
 ```
 

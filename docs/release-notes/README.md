@@ -5,6 +5,7 @@ image tag (`docker.io/roi12345/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.5.6](v0.5.6.md) | 2026-10-08 | Overview explains itself when empty; demo data script |
 | [0.5.5](v0.5.5.md) | 2026-10-08 | Live overview charts, shared pool usage, and a restructured codebase |
 | [0.4.0](v0.4.0.md) | 2026-10-08 | Live token usage per tenant with reset; task log of every change |
 | [0.3.0](v0.3.0.md) | 2026-10-08 | Partial updates no longer lose data; cost expressions, dry-run quotas, periodic sync |
