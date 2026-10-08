@@ -25,7 +25,8 @@ cluster.
 - **Tenants**: one tenant per team, with API keys that can be issued and revoked.
 - **Quotas**: a token budget per tenant per model, per minute, hour or day, rendered as `QuotaPolicy` on every cluster, with an optional dry-run mode and a per-model cost expression.
 - **Usage**: live tokens used per tenant and model in the current window, read from the quota counters in Redis.
-- **Activity**: a task log of every change, showing per cluster which objects were created, updated or deleted and whether the gateway accepted them.
+- **Activity**: a task log of every change, showing per cluster which objects were created, updated or deleted and whether the gateway accepted them, and an audit log of who asked for what.
+- **Self-test**: checks on a real gateway, with a temporary tenant, that a key works, usage is counted, a quota refuses and a reset frees.
 - **API**: everything the UI does is available over REST for a self-service portal.
 
 ## Quick start on OpenShift
@@ -80,6 +81,7 @@ internal/kube/         one cluster: sync (apply, prune), gateway status, discove
 internal/gateway/      reads /v1/models from a gateway
 internal/syncer/       background sync and discovery loops, and task results
 internal/usage/        reads the quota counters in Redis and builds the usage report
+internal/selftest/     checks keys, counters and quotas with real requests through a gateway
 internal/secretbox/    AES-256-GCM encryption of stored secrets
 web/src/pages/         one file per page of the UI
 web/src/               shared UI pieces: API client, components, charts
@@ -91,8 +93,9 @@ hack/                  seed-demo.py: demo data for showing the UI without a gate
 Containerfile          image build
 ```
 
-How the packages depend on each other: `api` calls `store`, `syncer` and
-`usage`. `syncer` calls `store`, `render`, `kube` and `gateway`. `usage` calls
+How the packages depend on each other: `api` calls `store`, `syncer`,
+`usage` and `selftest`. `selftest` calls `store`, `syncer`, `usage` and
+`gateway`. `syncer` calls `store`, `render`, `kube` and `gateway`. `usage` calls
 `store` and `render`. `render` depends on nothing, which keeps it easy to
 test.
 
@@ -101,8 +104,10 @@ test.
 Built and tested: the UI and API, Postgres storage, model discovery, sync to
 clusters, the image, the Helm chart on OpenShift 4.20, and the offline bundle.
 
-Not tested against a real Envoy AI Gateway installation yet. See
+Not tested against a real Envoy AI Gateway installation yet. The Self-test
+button on a cluster checks most of the open points on your own gateway. See
 [docs/architecture.md](docs/architecture.md#not-verified-on-a-real-gateway).
 
 Not built yet: usage history beyond the current window, monthly budgets and grants, cross-site failover,
-LDAP login, an audit log.
+LDAP login. The audit log records a name the caller gives, not a verified
+identity.

@@ -41,8 +41,12 @@ const (
 
 type TenantQuota struct {
 	TenantSlug string
-	Limit      int64
-	Window     string
+	// Slot is the fixed position of the tenant's rule in the model's
+	// QuotaPolicy. It is unique per model and never changes, because the
+	// position is part of the name of the rule's counter in Redis.
+	Slot   int
+	Limit  int64
+	Window string
 	// Shadow quotas are counted but never reject a request.
 	Shadow bool
 }
@@ -201,6 +205,10 @@ func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unst
 	quotas := tenantRules(m)
 	rules := make([]any, 0, len(quotas))
 	for _, q := range quotas {
+		if q.TenantSlug == "" {
+			rules = append(rules, placeholderRule())
+			continue
+		}
 		rule := map[string]any{
 			"clientSelectors": []any{
 				map[string]any{"headers": []any{
@@ -255,22 +263,46 @@ func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unst
 	return u
 }
 
-// tenantRules returns the tenant quotas of a model in the order they become
-// bucket rules. The position of a rule is part of its counter's name in
-// Redis, so Counters relies on the same order.
+// tenantRules returns the bucket rules of a model in order: the rule at
+// index i belongs to the tenant quota with Slot i. The position of a rule is
+// part of its counter's name in Redis, so Counters relies on the same order.
+//
+// A position no quota holds is returned with an empty TenantSlug and is
+// rendered as a placeholder, so the rules after it keep their position and
+// with it their counters. Positions after the last quota are left out.
 //
 // The CRD rejects a quota without a valid limit and duration, which would
-// fail the whole sync. Such a tenant is left out and falls back to the
-// default bucket.
+// fail the whole sync. Such a tenant gets a placeholder too and falls back to
+// the default bucket.
 func tenantRules(m Model) []TenantQuota {
-	quotas := make([]TenantQuota, 0, len(m.Quotas))
+	var rules []TenantQuota
 	for _, q := range m.Quotas {
-		if validQuota(q.Limit, q.Window) {
-			quotas = append(quotas, q)
+		if q.Slot < 0 || !validQuota(q.Limit, q.Window) {
+			continue
 		}
+		for len(rules) <= q.Slot {
+			rules = append(rules, TenantQuota{})
+		}
+		rules[q.Slot] = q
 	}
-	sort.Slice(quotas, func(i, j int) bool { return quotas[i].TenantSlug < quotas[j].TenantSlug })
-	return quotas
+	return rules
+}
+
+// placeholderSelector is a client ID no key can have: every real one is
+// "<tenant>.<hex>".
+const placeholderSelector = "aigw-ui-unused-position"
+
+// placeholderRule fills a position that no tenant quota holds. It matches no
+// request.
+func placeholderRule() map[string]any {
+	return map[string]any{
+		"clientSelectors": []any{
+			map[string]any{"headers": []any{
+				map[string]any{"name": ClientIDHeader, "type": "Exact", "value": placeholderSelector},
+			}},
+		},
+		"quota": map[string]any{"limit": fallbackLimit, "duration": fallbackWindow},
+	}
 }
 
 // fallbackLimit and fallbackWindow replace a default bucket that has no valid

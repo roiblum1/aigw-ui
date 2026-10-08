@@ -5,6 +5,7 @@ image tag (`docker.io/roi12345/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.6.0](v0.6.0.md) | 2026-10-08 | Gateway self-test, audit log, counters that survive other tenants' quota changes |
 | [0.5.7](v0.5.7.md) | 2026-10-08 | Chart legends stay inside their panel |
 | [0.5.6](v0.5.6.md) | 2026-10-08 | Overview explains itself when empty; demo data script |
 | [0.5.5](v0.5.5.md) | 2026-10-08 | Live overview charts, shared pool usage, and a restructured codebase |
@@ -14,8 +15,9 @@ image tag (`docker.io/roi12345/aigw-ui:<version>`).
 | [0.2.0](v0.2.0.md) | 2026-10-07 | Model discovery through the gateway's `/v1/models`; quotas per backend namespace |
 | [0.1.1](v0.1.1.md) | 2026-10-07 | First release |
 
-The newest release notes end with a table of everything that has not been
-verified against a real gateway yet, with a way to check each item.
+[0.4.0](v0.4.0.md) and [0.5.5](v0.5.5.md) list everything that has not been
+verified against a real gateway yet. [0.6.0](v0.6.0.md) says which of those
+the new self-test checks for you.
 
 To upgrade to any version:
 

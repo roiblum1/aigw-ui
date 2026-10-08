@@ -108,7 +108,7 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 			c = fresh
 		}
 	}
-	s.sy.Changed(r.Context(), "cluster.add", "Added cluster "+c.Name)
+	s.changed(r, "cluster.add", "Added cluster "+c.Name)
 	writeJSON(w, http.StatusCreated, c)
 }
 
@@ -133,21 +133,39 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context(), "cluster.update", "Changed cluster "+c.Name)
+	s.changed(r, "cluster.update", "Changed cluster "+c.Name)
 	writeJSON(w, http.StatusOK, c)
 }
 
 // deleteCluster only forgets the cluster. Objects already applied to it stay
 // there, because once the kubeconfig is gone they can no longer be removed.
 func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
-	if err := s.st.DeleteCluster(r.Context(), r.PathValue("id")); err != nil {
+	c, err := s.st.GetCluster(r.Context(), r.PathValue("id"))
+	if err != nil {
 		fail(w, err)
 		return
 	}
+	if err := s.st.DeleteCluster(r.Context(), c.ID); err != nil {
+		fail(w, err)
+		return
+	}
+	s.log(r, "cluster.delete", "Removed cluster "+c.Name, true,
+		"The cluster is no longer managed. Objects already applied to it were left in place.")
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// clusterName returns the name of the cluster in the request path, or its ID
+// when there is no such cluster, for the audit log.
+func (s *Server) clusterName(r *http.Request) string {
+	c, err := s.st.GetCluster(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return r.PathValue("id")
+	}
+	return c.Name
+}
+
 func (s *Server) probeCluster(w http.ResponseWriter, r *http.Request) {
+	note(r, "cluster.test", "Tested the connection to cluster "+s.clusterName(r))
 	p, err := s.sy.Probe(r.Context(), r.PathValue("id"))
 	if errors.Is(err, store.ErrNotFound) {
 		fail(w, err)
@@ -162,7 +180,7 @@ func (s *Server) probeCluster(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) syncCluster(w http.ResponseWriter, r *http.Request) {
 	if c, err := s.st.GetCluster(r.Context(), r.PathValue("id")); err == nil {
-		s.sy.Record(r.Context(), "sync", "Manual sync of "+c.Name, c.ID)
+		s.record(r, "sync", "Manual sync of "+c.Name, c.ID)
 	}
 	res, err := s.sy.SyncCluster(r.Context(), r.PathValue("id"))
 	if errors.Is(err, store.ErrNotFound) {
@@ -177,12 +195,13 @@ func (s *Server) syncCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) syncAll(w http.ResponseWriter, r *http.Request) {
-	s.sy.Record(r.Context(), "sync", "Manual sync of all clusters", "")
+	s.record(r, "sync", "Manual sync of all clusters", "")
 	s.sy.SyncAll(r.Context())
 	s.listClusters(w, r)
 }
 
 func (s *Server) discoverCluster(w http.ResponseWriter, r *http.Request) {
+	note(r, "discovery", "Asked cluster "+s.clusterName(r)+" for its models")
 	n, err := s.sy.DiscoverCluster(r.Context(), r.PathValue("id"))
 	if errors.Is(err, store.ErrNotFound) {
 		fail(w, err)
@@ -196,6 +215,7 @@ func (s *Server) discoverCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) discoverAll(w http.ResponseWriter, r *http.Request) {
+	note(r, "discovery", "Asked all clusters for their models")
 	s.sy.DiscoverAll(r.Context())
 	s.listClusters(w, r)
 }

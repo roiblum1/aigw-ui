@@ -1,10 +1,13 @@
 package api
 
 import (
-	"aigw-ui/internal/store"
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
+
+	"aigw-ui/internal/selftest"
+	"aigw-ui/internal/store"
 )
 
 func (s *Server) listTenants(w http.ResponseWriter, r *http.Request) {
@@ -25,8 +28,13 @@ func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if !tenantSlug.MatchString(b.Slug) {
+	switch {
+	case !tenantSlug.MatchString(b.Slug):
 		fail(w, invalid("slug must be 1-40 lowercase letters, digits and dashes"))
+		return
+	case strings.HasPrefix(b.Slug, selftest.TenantPrefix):
+		// The self-test deletes leftover tenants by this prefix.
+		fail(w, invalid("a slug must not start with %q, which is kept for the self-test", selftest.TenantPrefix))
 		return
 	}
 	t, err := s.st.CreateTenant(r.Context(), b.Slug, b.DisplayName)
@@ -77,7 +85,7 @@ func (s *Server) updateTenant(w http.ResponseWriter, r *http.Request) {
 	if !t.Enabled {
 		state = "Disabled"
 	}
-	s.sy.Changed(r.Context(), "tenant.update", state+" tenant "+t.Slug)
+	s.changed(r, "tenant.update", state+" tenant "+t.Slug)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -91,7 +99,7 @@ func (s *Server) deleteTenant(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context(), "tenant.delete", "Deleted tenant "+t.Slug+" with its keys and quotas")
+	s.changed(r, "tenant.delete", "Deleted tenant "+t.Slug+" with its keys and quotas")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -109,7 +117,7 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context(), "key.add", "Created API key "+k.ClientID)
+	s.changed(r, "key.add", "Created API key "+k.ClientID)
 	writeJSON(w, http.StatusCreated, map[string]any{"key": k, "secret": plain})
 }
 
@@ -119,7 +127,7 @@ func (s *Server) revokeKey(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context(), "key.revoke", "Revoked API key "+clientID)
+	s.changed(r, "key.revoke", "Revoked API key "+clientID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -166,7 +174,7 @@ func (s *Server) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context(), "quota.set", s.quotaSummary(r.Context(), id, b.ModelID, quotas))
+	s.changed(r, "quota.set", s.quotaSummary(r.Context(), id, b.ModelID, quotas))
 	writeJSON(w, http.StatusOK, quotas)
 }
 
@@ -176,7 +184,7 @@ func (s *Server) deleteQuota(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.sy.Changed(r.Context(), "quota.delete", "Removed quota of "+label)
+	s.changed(r, "quota.delete", "Removed quota of "+label)
 	w.WriteHeader(http.StatusNoContent)
 }
 

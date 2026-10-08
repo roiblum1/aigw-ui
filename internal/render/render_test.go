@@ -2,6 +2,7 @@ package render
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -15,7 +16,7 @@ func testState() State {
 		Models: []Model{{
 			Name: "GLM5.3", Slug: "glm5-3", Host: "glm.models.svc.cluster.local", Port: 8000,
 			UpstreamModel: "glm-5.3", DefaultLimit: 1, DefaultWindow: "1d",
-			Quotas: []TenantQuota{{TenantSlug: "team-b", Limit: 500, Window: "1h"}, {TenantSlug: "team-a", Limit: 1000, Window: "1d"}},
+			Quotas: []TenantQuota{{TenantSlug: "team-b", Slot: 1, Limit: 500, Window: "1h"}, {TenantSlug: "team-a", Slot: 0, Limit: 1000, Window: "1d"}},
 		}, {
 			Name: "small", Slug: "small", Host: "10.0.0.5", Port: 80, UpstreamModel: "small", DefaultLimit: 1, DefaultWindow: "1d",
 		}},
@@ -207,10 +208,10 @@ func TestQuotaPolicyNeverRendersInvalidQuota(t *testing.T) {
 	s := State{Namespace: "ai-gateway", GatewayName: "llm", Models: []Model{{
 		Name: "glm", Slug: "glm", UpstreamModel: "glm",
 		Quotas: []TenantQuota{
-			{TenantSlug: "team-a", Limit: 10, Window: ""},
-			{TenantSlug: "team-b", Limit: 0, Window: "1h"},
-			{TenantSlug: "team-c", Limit: 10, Window: "30s"},
-			{TenantSlug: "team-d", Limit: 10, Window: "1h"},
+			{TenantSlug: "team-a", Slot: 0, Limit: 10, Window: ""},
+			{TenantSlug: "team-b", Slot: 1, Limit: 0, Window: "1h"},
+			{TenantSlug: "team-c", Slot: 2, Limit: 10, Window: "30s"},
+			{TenantSlug: "team-d", Slot: 3, Limit: 10, Window: "1h"},
 		},
 	}}}
 	var policy *unstructured.Unstructured
@@ -224,8 +225,8 @@ func TestQuotaPolicyNeverRendersInvalidQuota(t *testing.T) {
 	}
 	var got []string
 	durations(policy.Object, &got)
-	if len(got) != 3 { // serviceQuota, defaultBucket and team-d
-		t.Errorf("got durations %v, want three", got)
+	if len(got) != 6 { // serviceQuota, defaultBucket, three placeholders and team-d
+		t.Errorf("got durations %v, want six", got)
 	}
 	for _, d := range got {
 		if !validQuota(1, d) {
@@ -263,5 +264,26 @@ func TestQuotaPolicyCostExpressionAndShadow(t *testing.T) {
 	perModel, _, _ = unstructured.NestedSlice(plain.Object, "spec", "perModelQuotas")
 	if _, set := perModel[0].(map[string]any)["quota"].(map[string]any)["costExpression"]; set {
 		t.Error("costExpression set although the model has none")
+	}
+}
+
+// A position without a quota is filled with a rule that matches nothing, so
+// the rules after it stay where they are.
+func TestQuotaPolicyKeepsRulePositions(t *testing.T) {
+	s := State{Namespace: "ai-gateway", GatewayName: "llm", Models: []Model{{
+		Name: "glm", Slug: "glm", UpstreamModel: "glm",
+		Quotas: []TenantQuota{{TenantSlug: "team-c", Slot: 2, Limit: 10, Window: "1h"}, {TenantSlug: "team-a", Slot: 0, Limit: 10, Window: "1h"}},
+	}}}
+	policy := Objects(s)[3]
+	perModel, _, _ := unstructured.NestedSlice(policy.Object, "spec", "perModelQuotas")
+	rules := perModel[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
+	var selectors []string
+	for _, r := range rules {
+		header := r.(map[string]any)["clientSelectors"].([]any)[0].(map[string]any)["headers"].([]any)[0].(map[string]any)
+		selectors = append(selectors, header["type"].(string)+" "+header["value"].(string))
+	}
+	want := []string{`RegularExpression ^team-a\.[a-f0-9]+$`, "Exact " + placeholderSelector, `RegularExpression ^team-c\.[a-f0-9]+$`}
+	if strings.Join(selectors, ", ") != strings.Join(want, ", ") {
+		t.Errorf("rules = %v\nwant %v", selectors, want)
 	}
 }

@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from "react";
-import { api, setToken } from "../api";
+import { api, getName, setName, setToken } from "../api";
 import BrandMark from "../BrandMark";
 import { ErrorBanner } from "../components";
 
 export default function Login({ onLogin }: { onLogin: () => void }) {
   const [token, setValue] = useState("");
+  const [name, setNameValue] = useState(getName);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -14,6 +15,7 @@ export default function Login({ onLogin }: { onLogin: () => void }) {
     try {
       await api.checkToken(token);
       setToken(token);
+      setName(name.trim());
       onLogin();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -39,6 +41,11 @@ export default function Login({ onLogin }: { onLogin: () => void }) {
         <label className="field">
           <span>Admin token</span>
           <input type="password" required autoFocus value={token} onChange={(e) => setValue(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>Your name</span>
+          <input value={name} maxLength={100} autoComplete="name" onChange={(e) => setNameValue(e.target.value)} />
+          <small>Optional. Shown next to your changes in the audit log.</small>
         </label>
         <button type="submit" className="primary mt-1 w-full" disabled={busy}>
           {busy ? "Signing in…" : "Sign in"}

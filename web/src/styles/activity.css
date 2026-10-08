@@ -52,4 +52,63 @@
   .gateway.bad {
     color: var(--danger);
   }
+
+  /* ---- tabs ---- */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tabs button {
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 8px 12px;
+    color: var(--muted-foreground);
+    font-weight: 600;
+  }
+  .tabs button[aria-selected="true"] {
+    border-bottom-color: var(--primary);
+    color: var(--foreground);
+  }
+  .load-more {
+    display: flex;
+    justify-content: center;
+    margin-top: 14px;
+  }
+
+  /* ---- self-test ---- */
+  .selftest-start {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .selftest-start .field {
+    flex: 1 1 240px;
+    margin: 0;
+  }
+  .selftest-steps {
+    margin: 12px 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 10px;
+  }
+  .selftest-steps li {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+  }
+  .selftest-steps .badge {
+    justify-self: start;
+  }
+  .selftest-steps .detail {
+    overflow-wrap: anywhere;
+  }
 }

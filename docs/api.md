@@ -76,7 +76,43 @@ whether its request reached the clusters.
 `action` is one of `cluster.add`, `cluster.update`, `model.add`,
 `model.update`, `model.delete`, `tenant.add`, `tenant.update`,
 `tenant.delete`, `key.add`, `key.revoke`, `quota.set`, `quota.delete`,
-`usage.reset`, `sync` and `discovery`.
+`usage.reset`, `sync`, `discovery`, `cluster.delete` and `selftest`.
+
+## Audit log
+
+| Method | Path | Result |
+|---|---|---|
+| GET | `/audit` | The newest 100 entries, newest first. `?limit=` up to 500, `?before=<id>` for older ones |
+
+Every request that is not a `GET` adds an entry, whether it succeeded or not.
+Request bodies are never stored.
+
+```json
+{
+  "id": 912,
+  "at": "2026-10-08T09:30:00Z",
+  "actor": "admin token",
+  "on_behalf_of": "alice",
+  "method": "PUT",
+  "path": "/api/v1/tenants/<id>/quotas",
+  "status": 200,
+  "action": "quota.set",
+  "summary": "Set quota of team-a on GLM5.3 to 2000000 tokens per day",
+  "remote_addr": "10.128.0.7",
+  "forwarded_for": "192.168.4.20",
+  "user_agent": "portal/1.4",
+  "duration_ms": 12
+}
+```
+
+- `on_behalf_of` is the `X-On-Behalf-Of` request header. A portal should set
+  it to the user it acts for. It may be percent-encoded for names outside
+  ASCII. The server does not verify it.
+- `action` and `summary` are empty when the request was refused before it
+  changed anything; `status` then says why (400, 404, 409).
+- `remote_addr` is the peer of the connection, which is the router when the
+  server runs behind a Route. `forwarded_for` is the `X-Forwarded-For` header
+  as received.
 
 ## Usage
 
@@ -136,6 +172,8 @@ at `resets_at`. It returns 403 unless `redis.allowReset` is on (`can_reset` in
 | DELETE | `/clusters/{id}` | | 204. Applied objects stay on the cluster |
 | POST | `/clusters/{id}/probe` | | Reachability, CRDs, gateway |
 | POST | `/clusters/{id}/sync` | | Applied and removed counts |
+| POST | `/clusters/{id}/selftest` | optional `{"model_id": "<id>"}` | 202 and the run. It continues in the background |
+| GET | `/clusters/{id}/selftest` | | The last run of this cluster. 404 if none since the server started |
 | POST | `/clusters/{id}/discover` | | Number of models found |
 | GET | `/clusters/{id}/manifests` | | `{"yaml": "..."}`, key values masked |
 | POST | `/sync` | | Syncs all, returns the cluster list |
@@ -157,6 +195,27 @@ at `resets_at`. It returns 403 unless `redis.allowReset` is on (`can_reset` in
 `gateway_url` and `discovery_token` are optional. The URL must be the address
 only; a path such as `/v1/models` is rejected. The kubeconfig and the token
 are never returned. A cluster reports `has_discovery_token` instead.
+
+A self-test run looks like this. `status` is `running`, `passed` or `failed`;
+a step is `pending`, `running`, `passed`, `failed`, `warning` (no clear
+answer) or `skipped`. Poll the `GET` until `status` is no longer `running`.
+A second `POST` while one runs, on any cluster, answers 409.
+
+```json
+{
+  "cluster_id": "<id>", "cluster_name": "site1-a",
+  "model_id": "<id>", "model_name": "GLM5.3",
+  "status": "passed",
+  "started_at": "2026-10-08T09:30:00Z", "finished_at": "2026-10-08T09:30:41Z",
+  "steps": [
+    {"id": "gateway", "title": "The gateway lists the model", "status": "passed", "detail": "..."},
+    {"id": "apply", "title": "A temporary tenant, key and quota are applied", "status": "passed", "detail": "..."}
+  ]
+}
+```
+
+The step IDs are `gateway`, `apply`, `key`, `bad-key`, `counter`, `limit`,
+`reset` and `cleanup`.
 
 On update, any field that is left out keeps its stored value, so a body with
 only `{"site": "site2"}` changes the site and nothing else. An empty
@@ -219,6 +278,9 @@ an existing one keeps its setting.
 
 The `secret` of a key is returned only by the
 call that creates it.
+
+A tenant slug must not start with `selftest-`. That prefix belongs to the
+self-test, which deletes leftover tenants by it.
 
 ## Example: what a portal does when a request is approved
 

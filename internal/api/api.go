@@ -4,11 +4,13 @@ package api
 
 import (
 	"crypto/subtle"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"aigw-ui/internal/selftest"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/syncer"
 	"aigw-ui/internal/usage"
@@ -20,18 +22,20 @@ type Server struct {
 	adminToken string
 	uiDir      string
 	// usage is nil when no Redis is configured.
-	usage *usage.Service
+	usage    *usage.Service
+	selftest *selftest.Runner
 }
 
 // New builds the API. usage may be nil, which turns usage monitoring off.
-func New(st *store.Store, sy *syncer.Syncer, usage *usage.Service, adminToken, uiDir string) *Server {
-	return &Server{st: st, sy: sy, usage: usage, adminToken: adminToken, uiDir: uiDir}
+func New(st *store.Store, sy *syncer.Syncer, usage *usage.Service, selftest *selftest.Runner, adminToken, uiDir string) *Server {
+	return &Server{st: st, sy: sy, usage: usage, selftest: selftest, adminToken: adminToken, uiDir: uiDir}
 }
 
 func (s *Server) Handler() http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/overview", s.overview)
 	api.HandleFunc("GET /api/v1/tasks", s.listTasks)
+	api.HandleFunc("GET /api/v1/audit", s.listAudit)
 	api.HandleFunc("GET /api/v1/usage", s.getUsage)
 	api.HandleFunc("POST /api/v1/tenants/{id}/quotas/{model_id}/reset", s.resetUsage)
 
@@ -42,6 +46,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/v1/clusters/{id}/probe", s.probeCluster)
 	api.HandleFunc("POST /api/v1/clusters/{id}/sync", s.syncCluster)
 	api.HandleFunc("GET /api/v1/clusters/{id}/manifests", s.clusterManifests)
+	api.HandleFunc("POST /api/v1/clusters/{id}/selftest", s.startSelfTest)
+	api.HandleFunc("GET /api/v1/clusters/{id}/selftest", s.getSelfTest)
 	api.HandleFunc("POST /api/v1/sync", s.syncAll)
 	api.HandleFunc("POST /api/v1/clusters/{id}/discover", s.discoverCluster)
 	api.HandleFunc("POST /api/v1/discover", s.discoverAll)
@@ -63,7 +69,7 @@ func (s *Server) Handler() http.Handler {
 
 	root := http.NewServeMux()
 	root.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
-	root.Handle("/api/", s.auth(api))
+	root.Handle("/api/", s.auth(s.audit(api)))
 	root.HandleFunc("/", s.ui)
 	return root
 }
@@ -72,6 +78,10 @@ func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.adminToken)) != 1 {
+			if ok {
+				// A wrong token is worth a line; a missing one is every probe and scanner.
+				slog.Warn("request with a wrong token", "method", r.Method, "path", r.URL.Path, "remote_addr", r.RemoteAddr, "forwarded_for", clip(r.Header.Get("X-Forwarded-For"), 200))
+			}
 			writeError(w, http.StatusUnauthorized, "invalid or missing token")
 			return
 		}

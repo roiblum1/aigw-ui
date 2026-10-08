@@ -425,6 +425,10 @@
     background: var(--danger-soft);
     color: var(--danger);
   }
+  .badge.idle {
+    background: var(--muted);
+    color: var(--muted-foreground);
+  }
 
   .tag {
     padding: 0 7px;

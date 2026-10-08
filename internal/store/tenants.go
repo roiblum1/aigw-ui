@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const tenantSelect = `SELECT t.id, t.slug, t.display_name, t.enabled, t.created_at,
@@ -59,6 +61,13 @@ func (s *Store) UpdateTenant(ctx context.Context, id, displayName string, enable
 
 func (s *Store) DeleteTenant(ctx context.Context, id string) error {
 	return affected(s.db.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, id))
+}
+
+// DeleteTenantsWithPrefix deletes every tenant whose slug starts with prefix,
+// with its keys and quotas, and returns how many there were.
+func (s *Store) DeleteTenantsWithPrefix(ctx context.Context, prefix string) (int64, error) {
+	tag, err := s.db.Exec(ctx, `DELETE FROM tenants WHERE starts_with(slug, $1)`, prefix)
+	return tag.RowsAffected(), mapErr(err)
 }
 
 // ---- API keys ----
@@ -136,12 +145,27 @@ func (s *Store) ListQuotas(ctx context.Context, tenantID string) ([]Quota, error
 
 // UpsertQuota keeps the stored shadow setting when shadow is nil. A new quota
 // is enforced unless shadow says otherwise.
+//
+// A new quota takes the lowest position on the model that no other quota
+// holds, and keeps it for as long as it exists. See render.TenantQuota.Slot.
 func (s *Store) UpsertQuota(ctx context.Context, tenantID, modelID string, limit int64, window string, shadow *bool) error {
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO quotas (tenant_id, model_id, token_limit, window_size, shadow) VALUES ($1, $2, $3, $4, COALESCE($5::boolean, false))
-		 ON CONFLICT (tenant_id, model_id) DO UPDATE SET token_limit = EXCLUDED.token_limit, window_size = EXCLUDED.window_size,
-		     shadow = COALESCE($5::boolean, quotas.shadow)`,
-		tenantID, modelID, limit, window, shadow)
+	var err error
+	// Two new quotas on one model can pick the same position at the same
+	// time. The unique constraint refuses the second, which then picks again.
+	for range 5 {
+		_, err = s.db.Exec(ctx,
+			`INSERT INTO quotas (tenant_id, model_id, token_limit, window_size, shadow, slot)
+			 VALUES ($1, $2, $3, $4, COALESCE($5::boolean, false), (
+			     SELECT min(free) FROM generate_series(0, (SELECT count(*) FROM quotas WHERE model_id = $2)::int) free
+			     WHERE NOT EXISTS (SELECT 1 FROM quotas q WHERE q.model_id = $2 AND q.slot = free)))
+			 ON CONFLICT (tenant_id, model_id) DO UPDATE SET token_limit = EXCLUDED.token_limit, window_size = EXCLUDED.window_size,
+			     shadow = COALESCE($5::boolean, quotas.shadow)`,
+			tenantID, modelID, limit, window, shadow)
+		var pg *pgconn.PgError
+		if !errors.As(err, &pg) || pg.ConstraintName != "quotas_model_slot" {
+			break
+		}
+	}
 	return mapErr(err)
 }
 

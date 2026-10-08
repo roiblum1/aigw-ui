@@ -39,6 +39,10 @@ oc logs -n aigw-ui deploy/aigw-ui
 Failed syncs and failed discovery polls are logged with the cluster name. The
 same message is shown in the cluster's row in the UI.
 
+Every change request is logged as a line with `msg=audit`, with the same
+fields as the audit log in the UI. `request with a wrong token` marks a failed
+sign-in or API call.
+
 ## Troubleshooting
 
 | What you see | Cause | What to do |
@@ -56,6 +60,11 @@ same message is shown in the cluster's row in the UI.
 | Server logs `waiting for postgres` at start | The database is still starting | Normal on a fresh install; it waits up to two minutes |
 | Server exits with `ENCRYPTION_KEY must be 32 bytes` | The Secret value is not 32 random bytes in base64 | Recreate it with `openssl rand -base64 32` |
 | Every request with a valid key gets 401 at the gateway | The key Secret has not reached that cluster | Check the cluster's sync status |
+| Self-test: "No answer within 90 seconds", last answer 401 | The gateway does not know the new key | Check that the `SecurityPolicy` `aigw-ui-api-key-auth` is accepted and attached to the gateway |
+| Self-test: "No answer within 90 seconds", last answer 429 | The key works but the tenant's rule does not match, so the request falls to the pool | Check that the gateway forwards the client ID in `x-aigw-client-id` |
+| Self-test: "No counter appeared under the expected name" | The rate limit service writes to another Redis, or names its keys differently | The message shows a real key from Redis when there is one. Check the Redis address on both sides, then `redis.keyPrefix` |
+| Self-test: reset step fails, "still refused" | The rate limit service caches over-limit tenants (`LOCAL_CACHE_SIZE_IN_BYTES`) | Expected with that setting: a reset only helps once the window ends |
+| A tenant named `selftest-…` stays on the Tenants page | A self-test was cut short, for example by a restart | Delete it, or run a self-test: it removes leftovers first |
 | Requests are rejected with 429 for a tenant that has no quota | The model has quotas for other tenants, so this one only has the shared pool | Give the tenant a quota |
 
 ## Checking what is on a cluster

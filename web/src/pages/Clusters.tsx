@@ -1,4 +1,5 @@
 import { useState } from "react";
+import SelfTest from "./SelfTest";
 import { Plus, RefreshCw, Server } from "lucide-react";
 import { api, type Cluster, type ClusterInput, type ProbeResult } from "../api";
 import {
@@ -31,6 +32,7 @@ export default function Clusters() {
   const [editing, setEditing] = useState<Cluster | "new" | null>(null);
   const [manifests, setManifests] = useState<{ name: string; yaml: string } | null>(null);
   const [probe, setProbe] = useState<{ name: string; result: ProbeResult } | null>(null);
+  const [selfTest, setSelfTest] = useState<Cluster | null>(null);
 
   const sync = (c: Cluster) =>
     action.run(async () => {
@@ -115,6 +117,13 @@ export default function Clusters() {
                     >
                       Test
                     </button>
+                    <button
+                      disabled={!c.gateway_url}
+                      title={c.gateway_url ? "Check keys, counters and quotas with real requests" : "Needs a gateway URL"}
+                      onClick={() => setSelfTest(c)}
+                    >
+                      Self-test
+                    </button>
                     <button disabled={action.busy} onClick={() => sync(c)}>
                       Sync
                     </button>
@@ -147,6 +156,7 @@ export default function Clusters() {
           <pre className="code">{manifests.yaml || "# Nothing to apply: no models are exposed on this cluster."}</pre>
         </Modal>
       )}
+      {selfTest && <SelfTest cluster={selfTest} onClose={() => setSelfTest(null)} />}
       {probe && <ProbeModal name={probe.name} result={probe.result} onClose={() => setProbe(null)} />}
     </>
   );

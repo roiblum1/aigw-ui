@@ -57,6 +57,9 @@ func Counters(s State) []Counter {
 				})
 			}
 			for i, q := range rules {
+				if q.TenantSlug == "" {
+					continue // a placeholder, which counts nothing
+				}
 				// The gateway names the descriptor of a rule after its position,
 				// header and pattern, and sends the same string as its value.
 				rule := "rule-" + strconv.Itoa(i) + "-" + ClientIDHeader + "|" + TenantClientIDPattern(q.TenantSlug) + "-match-0"

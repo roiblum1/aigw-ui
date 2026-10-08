@@ -20,7 +20,7 @@ func TestCounterRedisKey(t *testing.T) {
 	if got := pool.RedisKey("", now); !pool.Pool || pool.TenantSlug != "" || got != wantPool {
 		t.Errorf("pool (1d):\n got %s\nwant %s", got, wantPool)
 	}
-	// Rules are sorted by tenant, so team-a is rule 0 although it is listed second.
+	// A rule is named after its slot, so team-a is rule 0 although it is listed second.
 	a, b := counters[1], counters[2]
 	wantA := `ai-gateway-quota_backend_name_ai-gateway/glm5-3_model_name_override_glm-5.3_` +
 		`rule-0-x-aigw-client-id|^team-a\.[a-f0-9]+$-match-0_rule-0-x-aigw-client-id|^team-a\.[a-f0-9]+$-match-0_1791331200`
@@ -37,11 +37,12 @@ func TestCounterRedisKey(t *testing.T) {
 	}
 }
 
-// A quota the policy leaves out has no rule, so it must not take a position.
+// A quota the policy cannot render leaves a placeholder at its position, which
+// has no counter. The quotas after it keep their position.
 func TestCountersSkipInvalidQuotas(t *testing.T) {
 	s := State{Namespace: "ai-gateway", Models: []Model{{
 		Name: "glm", Slug: "glm", UpstreamModel: "glm",
-		Quotas:   []TenantQuota{{TenantSlug: "aaa", Limit: 10, Window: ""}, {TenantSlug: "bbb", Limit: 10, Window: "1h"}},
+		Quotas:   []TenantQuota{{TenantSlug: "aaa", Slot: 0, Limit: 10, Window: ""}, {TenantSlug: "bbb", Slot: 1, Limit: 10, Window: "1h"}},
 		Existing: []Target{{Namespace: "models", Backend: "glm-a", Model: "glm"}, {Backend: "glm-b", Model: "glm"}},
 	}}}
 	var counters []Counter
@@ -57,8 +58,41 @@ func TestCountersSkipInvalidQuotas(t *testing.T) {
 		t.Errorf("backends = %s, %s", counters[0].Backend, counters[1].Backend)
 	}
 	for _, c := range counters {
-		if c.TenantSlug != "bbb" || c.stem[len(c.stem)-9:] != "-match-0_" || !contains(c.stem, "_rule-0-") {
+		if c.TenantSlug != "bbb" || c.stem[len(c.stem)-9:] != "-match-0_" || !contains(c.stem, "_rule-1-") {
 			t.Errorf("unexpected counter %+v", c)
+		}
+	}
+}
+
+// Adding or removing another tenant's quota must not rename a counter: a new
+// name is a counter that starts again from zero.
+func TestCounterNamesSurviveOtherQuotas(t *testing.T) {
+	now := time.Unix(1791400000, 0)
+	state := func(quotas ...TenantQuota) State {
+		return State{Namespace: "ai-gateway", Models: []Model{{Name: "glm", Slug: "glm", UpstreamModel: "glm", Quotas: quotas}}}
+	}
+	keyOf := func(s State, tenant string) string {
+		for _, c := range Counters(s) {
+			if c.TenantSlug == tenant {
+				return c.RedisKey("", now)
+			}
+		}
+		t.Fatalf("no counter for %s", tenant)
+		return ""
+	}
+	b := TenantQuota{TenantSlug: "team-b", Slot: 1, Limit: 10, Window: "1h"}
+	c := TenantQuota{TenantSlug: "team-c", Slot: 2, Limit: 10, Window: "1h"}
+	before := state(TenantQuota{TenantSlug: "team-a", Slot: 0, Limit: 10, Window: "1h"}, b, c)
+	// team-a is removed, and a tenant that sorts first takes its position.
+	removed := state(b, c)
+	reused := state(TenantQuota{TenantSlug: "aaa", Slot: 0, Limit: 10, Window: "1h"}, b, c)
+	for _, tenant := range []string{"team-b", "team-c"} {
+		want := keyOf(before, tenant)
+		if got := keyOf(removed, tenant); got != want {
+			t.Errorf("%s after a removal:\n got %s\nwant %s", tenant, got, want)
+		}
+		if got := keyOf(reused, tenant); got != want {
+			t.Errorf("%s after the position was reused:\n got %s\nwant %s", tenant, got, want)
 		}
 	}
 }

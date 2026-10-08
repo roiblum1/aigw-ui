@@ -55,7 +55,7 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 	}
 
 	rows, err = s.db.Query(ctx,
-		`SELECT q.model_id, t.slug, q.token_limit, q.window_size, q.shadow
+		`SELECT q.model_id, t.slug, q.slot, q.token_limit, q.window_size, q.shadow
 		 FROM quotas q JOIN tenants t ON t.id = q.tenant_id WHERE t.enabled`)
 	if err != nil {
 		return st, err
@@ -63,7 +63,7 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 	for rows.Next() {
 		var modelID string
 		var q render.TenantQuota
-		if err := rows.Scan(&modelID, &q.TenantSlug, &q.Limit, &q.Window, &q.Shadow); err != nil {
+		if err := rows.Scan(&modelID, &q.TenantSlug, &q.Slot, &q.Limit, &q.Window, &q.Shadow); err != nil {
 			rows.Close()
 			return st, err
 		}

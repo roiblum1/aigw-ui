@@ -5,6 +5,9 @@
 Open the Route URL and enter the admin token. The token is kept in the
 browser until you sign out. The sidebar has a dark mode switch.
 
+**Your name** is optional. Everyone shares the one admin token, so the name is
+what tells people apart in the audit log. Nothing checks it.
+
 ## Clusters
 
 A cluster is one LLM cluster the hub manages.
@@ -37,6 +40,7 @@ adding a cluster never breaks existing clients.
 | Button | What it does |
 |---|---|
 | Test | Checks the connection, the installed CRDs and the gateway |
+| Self-test | Checks keys, counters and quotas with real requests. See below. Needs a Gateway URL |
 | Sync | Applies the current state now |
 | Manifests | Shows the YAML a sync applies, with key values masked |
 | Edit | Changes settings. Leave the kubeconfig empty to keep the stored one |
@@ -49,6 +53,33 @@ adding a cluster never breaks existing clients.
 | Synced | The cluster matches the desired state |
 | Pending | Something changed and has not been applied yet |
 | Error | The last sync failed. The message is under the badge |
+
+**Self-test.** Applying an object only proves the cluster stored it. The
+self-test proves the gateway acts on it. It adds a temporary tenant with a key
+and a quota of 1 token per hour on one model, sends a few one-token requests
+through the gateway, and removes the tenant again. It takes about a minute.
+
+| Step | What a pass proves |
+|---|---|
+| The gateway lists the model | The Gateway URL is right and the model is served |
+| A temporary tenant, key and quota are applied | The cluster and the gateway's controller accept the objects |
+| A request with the new key is answered | A key issued here works, and the tenant's own quota rule matches its requests |
+| A request with an unknown key is refused | "Enforce API keys" is really in effect |
+| The tokens are counted where the Usage page reads them | The Usage page looks at the right counters |
+| A request over the quota is refused | The quota is enforced |
+| A usage reset lets the tenant through again | **Reset usage** works on this gateway |
+| The temporary tenant is removed | Nothing is left behind |
+
+A step is **Unclear** when it cannot give an answer. The usual case: the
+model's shared pool still has tokens, so a tenant over its quota is not
+refused. That is how the pool is meant to work; pick a model with a small pool
+to test a refusal. Steps are **Skipped** when they need something that is off:
+API key enforcement, usage monitoring, or `redis.allowReset`.
+
+While it runs, the temporary tenant `selftest-…` is visible on the Tenants
+page. Only the tested cluster is synced. If a periodic sync runs in that
+minute, other clusters get the tenant too and lose it again at their next
+sync. One self-test runs at a time. The result is also written to **Activity**.
 
 ## Models
 
@@ -166,6 +197,16 @@ Open a line to see each cluster and what the sync did there:
 | Failed | The cluster could not be synced. It is tried again every few minutes, and the line turns to Succeeded when it works |
 
 The log keeps the last 500 tasks.
+
+**Audit log.** The second tab lists every request that changed something or
+tried to, from the UI or the API: when, who, what, the result and the address
+it came from. "Refused" is a request the server turned down, for example
+because a field was invalid. Reads are not listed.
+
+Who is the name given at sign-in, or by an API caller in the
+`X-On-Behalf-Of` header. It is not verified: anyone with the admin token can
+send any name. Without a name the entry shows "admin token". The log keeps the
+last 20,000 entries, and each entry is also written to the server log.
 
 ## Usage
 

@@ -13,6 +13,7 @@ import (
 	"aigw-ui/internal/api"
 	"aigw-ui/internal/config"
 	"aigw-ui/internal/secretbox"
+	"aigw-ui/internal/selftest"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/syncer"
 	"aigw-ui/internal/usage"
@@ -63,7 +64,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(st, sy, usageService, cfg.AdminToken, cfg.UIDir).Handler(),
+		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService), cfg.AdminToken, cfg.UIDir).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

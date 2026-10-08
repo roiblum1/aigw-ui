@@ -122,6 +122,25 @@ is the same is not listed. After a change it waits two seconds and reads the
 status of the AI gateway objects, to record whether the gateway's controller
 accepted them. That reading is informational: it never fails a sync.
 
+## Audit log
+
+A wrapper around the API records every request that is not a read: method,
+path, status, the caller's address and the `X-On-Behalf-Of` name. The handler
+adds the same action and summary it writes to the task log. The task log
+answers "did it reach the clusters"; the audit log answers "who asked, and
+what did the server say". Bodies are not stored.
+
+## Self-test
+
+The self-test runs in the background in the server. It creates a tenant
+`selftest-<random>` with a key and a quota of 1 token per hour, syncs the one
+cluster, and sends chat requests with `max_tokens: 1` to the cluster's Gateway
+URL. It waits up to 90 seconds for the gateway to learn the key, looks up the
+tenant's counter through the same code as the Usage page, expects the next
+request to be refused, resets the counter, and expects an answer again. Then
+it deletes the tenant and syncs once more. Runs are kept in memory; the
+outcome is in the task log.
+
 ## Live usage
 
 The server reads token usage from the same Redis the gateways' quota rate
@@ -142,10 +161,16 @@ Two things follow from that name:
   only when the backend has the same namespace and name on each. Otherwise
   every cluster counts on its own and the tenant gets the limit once per
   cluster. The Usage page shows a warning when it sees this.
-- **A rule's position is part of the name.** Rules are ordered by tenant
-  slug. Adding or removing a tenant quota on a model moves the tenants after
-  it to a new position, and their counters start again from zero for the
-  current window.
+- **A rule's position is part of the name.** So a quota keeps the position it
+  got when it was created, for as long as it exists. When a quota is removed,
+  its position is filled with a placeholder rule that matches no request, and
+  the next new quota on that model takes it over. Adding or removing one
+  tenant's quota therefore never renames another tenant's counter.
+- **The pool is named after the number of rules.** The pool's counter starts
+  again from zero for the current window when the number of rules changes,
+  which happens when a quota is added at the end or the last one is removed.
+  The self-test does both. With the default pool of 1 token this does not
+  matter; with a large shared pool, expect the pool's usage to restart.
 
 ## Not verified on a real gateway
 
@@ -163,8 +188,15 @@ run against a live Envoy AI Gateway:
 - that a reset frees a tenant that was already rejected. Deleting the counter was tested; the rate limit service's own over-limit cache was not;
 - that `/v1/models` still answers once "Enforce API keys" is on. If it needs a key, set the cluster's API key for `/v1/models`.
 
-Check them on one test cluster with the Manifests preview before a first sync
-to production.
+The **Self-test** button on a cluster checks several of these with real
+requests: client ID forwarding and the tenant rule (a request with a new key
+is answered and counted), the counter names, the refusal over the limit, and
+the reset. Run it on one test cluster before a first sync to production.
+
+Also not verified: that the gateway accepts the placeholder rule that keeps a
+removed quota's position, a rule with an `Exact` match on a client ID no key
+has. If it does not, the task shows "Applied, not accepted" after a quota is
+removed.
 
 ## Requirements on each LLM cluster
 

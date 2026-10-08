@@ -132,6 +132,36 @@ export interface Task {
   results: TaskResult[];
 }
 
+export type StepStatus = "pending" | "running" | "passed" | "failed" | "warning" | "skipped";
+
+export interface SelfTestRun {
+  cluster_id: string;
+  cluster_name: string;
+  model_id: string;
+  model_name: string;
+  status: "running" | "passed" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  steps: { id: string; title: string; status: StepStatus; detail: string }[];
+}
+
+export interface AuditEntry {
+  id: number;
+  at: string;
+  /** How the caller was authenticated. */
+  actor: string;
+  /** The name the caller gave. Not verified. */
+  on_behalf_of: string;
+  method: string;
+  path: string;
+  status: number;
+  action: string;
+  summary: string;
+  remote_addr: string;
+  forwarded_for: string;
+  user_agent: string;
+}
+
 export interface UsageQuota {
   tenant_id: string;
   tenant_slug: string;
@@ -192,17 +222,44 @@ export function setToken(token: string) {
   }
 }
 
+const NAME_KEY = "aigw-ui-name";
+
+/** The name this browser's user gave at sign-in, recorded in the audit log. */
+export function getName(): string {
+  try {
+    return localStorage.getItem(NAME_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setName(name: string) {
+  try {
+    if (name) localStorage.setItem(NAME_KEY, name);
+    else localStorage.removeItem(NAME_KEY);
+  } catch {
+    // Without storage the audit log shows the admin token only.
+  }
+}
+
 export class Unauthorized extends Error {}
+export class NotFound extends Error {}
 
 async function request<T>(method: string, path: string, body?: unknown, token = getToken()): Promise<T> {
   const res = await fetch("/api/v1" + path, {
     method,
-    headers: { Authorization: "Bearer " + token, ...(body ? { "Content-Type": "application/json" } : {}) },
+    headers: {
+      Authorization: "Bearer " + token,
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      // Percent-encoded, because a header cannot carry every character a name can.
+      ...(getName() ? { "X-On-Behalf-Of": encodeURIComponent(getName()) } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401) throw new Unauthorized("Invalid token");
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => null);
+  if (res.status === 404) throw new NotFound(data?.error ?? "Not found");
   if (!res.ok) throw new Error(data?.error ?? `Request failed (${res.status})`);
   return data as T;
 }
@@ -211,6 +268,15 @@ export const api = {
   checkToken: (token: string) => request<Overview>("GET", "/overview", undefined, token),
   overview: () => request<Overview>("GET", "/overview"),
   tasks: () => request<Task[]>("GET", "/tasks"),
+  audit: (before?: number) => request<AuditEntry[]>("GET", "/audit" + (before ? `?before=${before}` : "")),
+  startSelfTest: (clusterId: string, model_id: string) =>
+    request<SelfTestRun>("POST", `/clusters/${clusterId}/selftest`, { model_id }),
+  /** The last self-test of a cluster, or null when none ran since the server started. */
+  selfTest: (clusterId: string) =>
+    request<SelfTestRun>("GET", `/clusters/${clusterId}/selftest`).catch((err) => {
+      if (err instanceof NotFound) return null;
+      throw err;
+    }),
   resetUsage: (tenantId: string, modelId: string) =>
     request<{ counters: number; deleted: number }>("POST", `/tenants/${tenantId}/quotas/${modelId}/reset`),
   usage: (tenantId?: string) => request<UsageReport>("GET", "/usage" + (tenantId ? `?tenant_id=${tenantId}` : "")),

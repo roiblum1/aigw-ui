@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { ListChecks } from "lucide-react";
+import Audit from "./Audit";
 import { api, type Task, type TaskChange, type TaskResult } from "../api";
 import { Empty, ErrorBanner, PageHeader, formatTime, useLoad, usePolling } from "../components";
 
@@ -62,16 +64,12 @@ function Result({ r }: { r: TaskResult }) {
   );
 }
 
-export default function Activity() {
+function Tasks() {
   const { data: tasks, error, reload } = useLoad(() => api.tasks());
   usePolling(reload, REFRESH_MS);
 
   return (
     <>
-      <PageHeader
-        title="Activity"
-        subtitle="Every change, and what each cluster did with it. An object is listed once the cluster confirmed it."
-      />
       <ErrorBanner message={error} />
       {tasks && tasks.length === 0 && <Empty icon={ListChecks}>Nothing has been changed yet.</Empty>}
       {tasks && tasks.length > 0 && (
@@ -94,6 +92,32 @@ export default function Activity() {
           })}
         </div>
       )}
+    </>
+  );
+}
+
+const tabs = ["Tasks", "Audit log"] as const;
+
+export default function Activity() {
+  const [tab, setTab] = useState<(typeof tabs)[number]>("Tasks");
+  return (
+    <>
+      <PageHeader
+        title="Activity"
+        subtitle={
+          tab === "Tasks"
+            ? "Every change, and what each cluster did with it. An object is listed once the cluster confirmed it."
+            : "Every request that changed something or tried to: who sent it, from where, and how it ended."
+        }
+      />
+      <div className="tabs" role="tablist">
+        {tabs.map((t) => (
+          <button key={t} role="tab" aria-selected={t === tab} onClick={() => setTab(t)}>
+            {t}
+          </button>
+        ))}
+      </div>
+      {tab === "Tasks" ? <Tasks /> : <Audit />}
     </>
   );
 }

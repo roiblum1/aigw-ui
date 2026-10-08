@@ -43,8 +43,20 @@ Afterwards only the first characters are shown.
 
 ## Signing in
 
-The UI and the API share one admin token. Everyone who has it has full access,
-and there is no per-user audit trail. LDAP login is not built yet.
+The UI and the API share one admin token. Everyone who has it has full
+access. LDAP login is not built yet.
+
+**Audit log.** Every request that changes something, or tries to, is recorded
+with the time, the result and the address it came from, and shown under
+Activity. Because there is one token, the log cannot prove who a person is:
+the name in it is whatever the caller sent. Treat it as a record of what
+happened and when, and as a hint about who. A request with a wrong token is
+not in the audit log; it is written to the server log.
+
+Entries never contain a request body, so no kubeconfig, key or token ends up
+in the log. The table keeps the last 20,000 entries. For a longer or
+tamper-proof record, collect the server log: every entry is also written
+there as a line that starts with `audit`.
 
 - The browser keeps the token in local storage until sign-out.
 - Rotate it by changing `admin-token` in the Secret and restarting the pod:
