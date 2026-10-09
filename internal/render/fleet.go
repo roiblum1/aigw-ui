@@ -193,6 +193,19 @@ func fleetTrafficPolicy(s State, m Model) *unstructured.Unstructured {
 	return u
 }
 
+// HeldNames returns the names of the objects a sync must not remove: the
+// entry objects and the QuotaPolicy of every held model.
+func HeldNames(s State) map[string]bool {
+	names := map[string]bool{}
+	for _, m := range s.Models {
+		if m.Held() {
+			names[FleetName(m.Slug)] = true
+			names[m.Slug] = true
+		}
+	}
+	return names
+}
+
 // FleetRevision identifies everything that must be the same on every fleet
 // cluster: the sites and weights of each model and the shared settings. Two
 // clusters with the same revision send a conversation to the same site. It
@@ -221,5 +234,6 @@ func FleetRevision(s State) string {
 		return ""
 	}
 	sum := sha256.Sum256(data)
+	// Six bytes are enough to tell two fleets apart. It is not a signature.
 	return hex.EncodeToString(sum[:6])
 }

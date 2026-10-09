@@ -82,7 +82,7 @@ func keysState(namespace string, clientIDs ...string) render.State {
 
 // syncKeys applies only the key Secret; the SecurityPolicy needs a CRD.
 func syncKeys(t *testing.T, c *Client, namespace string, clientIDs ...string) SyncResult {
-	res, err := c.Sync(context.Background(), namespace, render.Objects(keysState(namespace, clientIDs...))[:1])
+	res, err := c.Sync(context.Background(), namespace, render.Objects(keysState(namespace, clientIDs...))[:1], nil)
 	if err != nil {
 		t.Fatal(err)
 	}

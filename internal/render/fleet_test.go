@@ -172,3 +172,26 @@ func TestFleetRevision(t *testing.T) {
 		t.Errorf("no entry route, revision %q", got)
 	}
 }
+
+// A model whose entry route cannot be rendered gets no object at all, not
+// even the QuotaPolicy on the backends it had before: that policy has the
+// same name as the one on the cluster and would replace it.
+func TestHeldModelRendersNothing(t *testing.T) {
+	s := fleetState()
+	s.Models[0].Fleet, s.Models[0].HeldReason = nil, "no setting"
+	for _, o := range Objects(s) {
+		if o.GetName() == "glm-5-3" || o.GetName() == "fleet-glm-5-3" {
+			t.Errorf("rendered %s %s for a held model", o.GetKind(), o.GetName())
+		}
+	}
+	find(t, Objects(s), "Backend", "local")
+	if held := HeldNames(s); !held["glm-5-3"] || !held["fleet-glm-5-3"] || len(held) != 2 {
+		t.Errorf("held = %v", held)
+	}
+	// Usage is still read from where the route on the cluster counts.
+	for _, c := range Counters(s) {
+		if c.ModelSlug == "glm-5-3" && c.Backend != "ai-gateway/fleet-glm-5-3" {
+			t.Errorf("counter on %s", c.Backend)
+		}
+	}
+}

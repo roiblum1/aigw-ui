@@ -129,6 +129,9 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range out {
 		out[i].Warnings = recipeWarnings(out[i])
+		if out[i].Fleet && !s.st.FleetConfigured() {
+			out[i].Warnings = append(out[i].Warnings, "The server has no FLEET_DOMAIN or FLEET_PEER_SNI set, so the entry route is left as it is on the clusters and gets no weight changes.")
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

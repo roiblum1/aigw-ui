@@ -144,7 +144,9 @@ func (s *Store) SetModelFleet(ctx context.Context, id string, on bool) (string, 
 	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
 		var sites, manual int
 		err := tx.QueryRow(ctx,
-			`SELECT m.name, jsonb_array_length(m.fleet_zones),
+			`SELECT m.name,
+			        (SELECT count(*) FROM jsonb_array_elements(m.fleet_zones) z JOIN clusters c ON c.name = z->>'zone'
+			         WHERE c.fleet_enabled AND c.peer_host <> ''),
 			        (SELECT count(*) FROM model_endpoints e WHERE e.model_id = m.id AND e.source = 'manual')
 			 FROM models m WHERE m.id = $1 FOR UPDATE`, id).Scan(&name, &sites, &manual)
 		if err != nil {

@@ -132,6 +132,9 @@ func (s *Syncer) SyncCluster(ctx context.Context, id string) (kube.SyncResult, e
 	}
 	res, err := s.syncCluster(ctx, id)
 	status, msg := "synced", fmt.Sprintf("%d applied, %d removed", res.Applied, res.Pruned)
+	if len(res.Held) > 0 {
+		msg += ". " + strings.Join(res.Held, " ")
+	}
 	if err != nil {
 		status, msg = "error", err.Error()
 	}
@@ -152,13 +155,20 @@ func taskMessage(res kube.SyncResult, err error) string {
 	case err != nil:
 		return err.Error() + " (will be tried again)"
 	case len(res.Changes) == 0:
-		return fmt.Sprintf("Nothing had to change: all %d objects were already in place.", res.Applied)
+		return fmt.Sprintf("Nothing had to change: all %d objects were already in place.", res.Applied) + heldNote(res)
 	}
 	noun := "objects"
 	if len(res.Changes) == 1 {
 		noun = "object"
 	}
-	return fmt.Sprintf("%d %s changed, %d already in place.", len(res.Changes), noun, res.Applied+res.Pruned-len(res.Changes))
+	return fmt.Sprintf("%d %s changed, %d already in place.", len(res.Changes), noun, res.Applied+res.Pruned-len(res.Changes)) + heldNote(res)
+}
+
+func heldNote(res kube.SyncResult) string {
+	if len(res.Held) == 0 {
+		return ""
+	}
+	return " " + strings.Join(res.Held, " ")
 }
 
 func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, error) {
@@ -170,9 +180,14 @@ func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, e
 	if err != nil {
 		return kube.SyncResult{}, err
 	}
-	res, err := client.Sync(ctx, state.Namespace, render.Objects(state))
+	res, err := client.Sync(ctx, state.Namespace, render.Objects(state), render.HeldNames(state))
 	if err != nil {
 		return res, err
+	}
+	for _, m := range state.Models {
+		if m.Held() {
+			res.Held = append(res.Held, "The entry route of "+m.Name+" was left as it is: "+m.HeldReason+".")
+		}
 	}
 	// Only a sync that applied everything moves the cluster to the revision.
 	return res, s.st.SetFleetRevision(ctx, id, render.FleetRevision(state))

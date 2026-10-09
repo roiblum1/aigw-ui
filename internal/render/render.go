@@ -81,10 +81,18 @@ type Model struct {
 	// sites that serve it. The route replaces whatever else exposes the
 	// model, and quotas attach to it alone.
 	Fleet []FleetSite
+	// HeldReason is set for a model that has an entry route which cannot be
+	// rendered right now, with the reason. Nothing is rendered for it and
+	// what the cluster has for it is left as it is: removing the route
+	// would make the model unreachable, and with it its quotas.
+	HeldReason string
 }
 
+// Held reports whether the model's objects on the cluster are left alone.
+func (m Model) Held() bool { return m.HeldReason != "" }
+
 func (m Model) targets() []Target {
-	if len(m.Fleet) > 0 {
+	if len(m.Fleet) > 0 || m.Held() {
 		return []Target{{Backend: FleetName(m.Slug), Model: m.Name}}
 	}
 	if m.Existing != nil {
@@ -121,6 +129,9 @@ func Objects(s State) []*unstructured.Unstructured {
 		out = append(out, keysSecret(s))
 	}
 	for _, m := range models {
+		if m.Held() {
+			continue
+		}
 		switch {
 		case len(m.Fleet) > 0:
 			out = append(out, fleetObjects(s, m)...)

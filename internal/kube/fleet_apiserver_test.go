@@ -46,7 +46,7 @@ func TestRealAPIServerEntryRoute(t *testing.T) {
 	site1 := render.FleetSite{Name: "site1-a", Host: "llm.site1-a.example.com", Port: 8443, Weight: 800}
 	site2 := render.FleetSite{Name: "site2-a", Host: "llm.site2-a.example.com", Port: 8443, Weight: 1}
 
-	res, err := c.Sync(ctx, ns, render.Objects(fleetTestState(ns, site1, site2)))
+	res, err := c.Sync(ctx, ns, render.Objects(fleetTestState(ns, site1, site2)), nil)
 	if err != nil {
 		t.Fatalf("the API server refused a rendered object: %v", err)
 	}
@@ -66,13 +66,13 @@ func TestRealAPIServerEntryRoute(t *testing.T) {
 		t.Errorf("zones = %v, want both sites", zones)
 	}
 
-	res, err = c.Sync(ctx, ns, render.Objects(fleetTestState(ns, site1, site2)))
+	res, err = c.Sync(ctx, ns, render.Objects(fleetTestState(ns, site1, site2)), nil)
 	if err != nil || len(res.Changes) != 0 {
 		t.Errorf("a sync that changes nothing: %+v %v", res.Changes, err)
 	}
 
 	// site2-a is drained out: it leaves the Backend and the zones together.
-	if _, err := c.Sync(ctx, ns, render.Objects(fleetTestState(ns, site1))); err != nil {
+	if _, err := c.Sync(ctx, ns, render.Objects(fleetTestState(ns, site1)), nil); err != nil {
 		t.Fatal(err)
 	}
 	if zones := zonesOf(t, c, ns); len(zones) != 1 || zones[0].(map[string]any)["zone"] != "site1-a" {
@@ -90,7 +90,7 @@ func TestRealAPIServerEntryRoute(t *testing.T) {
 	// The switch is turned off: the entry objects go, the keys stay.
 	off := fleetTestState(ns)
 	off.Models = nil
-	res, err = c.Sync(ctx, ns, render.Objects(off))
+	res, err = c.Sync(ctx, ns, render.Objects(off), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

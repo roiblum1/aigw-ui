@@ -44,6 +44,11 @@ func run() error {
 	}
 	defer st.Close()
 	st.SetFleet(cfg.Fleet)
+	if names, err := st.FleetModels(ctx); err == nil && len(names) > 0 && !st.FleetConfigured() {
+		// Not fatal: keys and quotas must still reach the clusters. The
+		// entry routes stay on the clusters as they are until this is fixed.
+		slog.Error("FLEET_DOMAIN or FLEET_PEER_SNI is not set, but models have an entry route; their routes are left as they are and get no weight changes", "models", names)
+	}
 
 	sy := syncer.New(st, cfg.AutoSync, cfg.DiscoverEvery, cfg.SyncEvery)
 	go sy.Run(ctx)

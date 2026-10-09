@@ -90,6 +90,10 @@ func (b *clusterBody) cluster(current *store.Cluster) (store.Cluster, error) {
 		return c, invalid("peer_host must be a DNS name such as llm.site1-a.example.com")
 	case c.PeerPort < 1 || c.PeerPort > 65535:
 		return c, invalid("peer_port must be between 1 and 65535")
+	case current != nil && current.FleetEnabled && c.FleetEnabled && c.Name != current.Name:
+		// The name is the site's zone on every gateway. A new name is a new
+		// zone: the conversations of every model would be dealt out again.
+		return c, invalid("a fleet cluster cannot be renamed: its name is its zone on every gateway. Take it out of the fleet first")
 	case c.FleetEnabled && c.PeerHost == "":
 		return c, invalid("a fleet cluster needs peer_host, the name the other sites reach its gateway under")
 	case c.ClientListener != "" && !dnsLabel.MatchString(c.ClientListener):
@@ -228,8 +232,13 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.log(r, "cluster.delete", "Removed cluster "+c.Name, true,
-		"The cluster is no longer managed. Objects already applied to it were left in place.")
+	if c.FleetEnabled {
+		// The other fleet clusters still list it as a site.
+		s.changed(r, "cluster.delete", "Removed fleet cluster "+c.Name+". Objects already applied to it were left in place.")
+	} else {
+		s.log(r, "cluster.delete", "Removed cluster "+c.Name, true,
+			"The cluster is no longer managed. Objects already applied to it were left in place.")
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

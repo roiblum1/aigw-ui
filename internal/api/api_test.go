@@ -121,6 +121,9 @@ func TestFleetClusterMustEnforceKeys(t *testing.T) {
 		"leave the fleet and stop":          {fleet, `{"auth_enabled":false,"fleet_enabled":false}`, true},
 		"bad listener name":                 {enforcing, `{"client_listener":"HTTPS listener"}`, false},
 		"drop the peer host while in it":    {fleet, `{"peer_host":""}`, false},
+		"rename while in the fleet":         {fleet, `{"name":"site1-b"}`, false},
+		"rename and leave the fleet":        {fleet, `{"name":"site1-b","fleet_enabled":false}`, true},
+		"rename outside the fleet":          {enforcing, `{"name":"site1-b"}`, true},
 		"a peer host that is no DNS name":   {enforcing, `{"peer_host":"https://llm.site1-a"}`, false},
 		"a peer port out of range":          {enforcing, `{"peer_port":70000}`, false},
 	} {
