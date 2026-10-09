@@ -78,6 +78,12 @@ whether its request reached the clusters.
 `tenant.delete`, `key.add`, `key.revoke`, `quota.set`, `quota.delete`,
 `usage.reset`, `sync`, `discovery`, `cluster.delete` and `selftest`.
 
+## Documents
+
+| Method | Path | Result |
+|---|---|---|
+| GET | `/docs/platform-architecture` | The platform design as one HTML page, `text/html` |
+
 ## Audit log
 
 | Method | Path | Result |

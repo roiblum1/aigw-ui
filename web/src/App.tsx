@@ -4,6 +4,7 @@ import {
   Boxes,
   ListChecks,
   LayoutDashboard,
+  Network,
   LogOut,
   Moon,
   Server,
@@ -16,6 +17,7 @@ import Models from "./pages/Models";
 import Tenants from "./pages/Tenants";
 import Usage from "./pages/Usage";
 import Activity from "./pages/Activity";
+import Architecture from "./pages/Architecture";
 import BrandMark from "./BrandMark";
 import Login from "./pages/Login";
 import Overview from "./pages/Overview";
@@ -28,6 +30,7 @@ const pages = [
   { name: "Tenants", icon: Users },
   { name: "Usage", icon: ActivityIcon },
   { name: "Activity", icon: ListChecks },
+  { name: "Architecture", icon: Network },
 ] as const;
 type Page = (typeof pages)[number]["name"];
 
@@ -118,13 +121,19 @@ export default function App() {
           </button>
         </div>
       </nav>
-      <main className="mx-auto w-full max-w-[1240px] px-4 pb-12 pt-6 md:px-9 md:pt-8">
+      <main
+        className={`mx-auto w-full px-4 pb-12 pt-6 md:px-9 md:pt-8 ${
+          // The architecture figures are drawn 1180px wide.
+          page === "Architecture" ? "max-w-[1620px]" : "max-w-[1240px]"
+        }`}
+      >
         {page === "Overview" && <Overview />}
         {page === "Clusters" && <Clusters />}
         {page === "Models" && <Models />}
         {page === "Tenants" && <Tenants />}
         {page === "Usage" && <Usage />}
         {page === "Activity" && <Activity />}
+        {page === "Architecture" && <Architecture />}
       </main>
     </div>
   );

@@ -267,6 +267,13 @@ async function request<T>(method: string, path: string, body?: unknown, token = 
 export const api = {
   checkToken: (token: string) => request<Overview>("GET", "/overview", undefined, token),
   overview: () => request<Overview>("GET", "/overview"),
+  /** The platform design page, as a complete HTML document. */
+  platformArchitecture: async () => {
+    const res = await fetch("/api/v1/docs/platform-architecture", { headers: { Authorization: "Bearer " + getToken() } });
+    if (res.status === 401) throw new Unauthorized("Invalid token");
+    if (!res.ok) throw new Error(`Request failed (${res.status})`);
+    return res.text();
+  },
   tasks: () => request<Task[]>("GET", "/tasks"),
   audit: (before?: number) => request<AuditEntry[]>("GET", "/audit" + (before ? `?before=${before}` : "")),
   startSelfTest: (clusterId: string, model_id: string) =>

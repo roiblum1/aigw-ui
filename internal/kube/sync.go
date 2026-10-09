@@ -113,13 +113,46 @@ func (c *Client) apply(ctx context.Context, obj *unstructured.Unstructured) (str
 	if err != nil {
 		return "", fmt.Errorf("apply %s %s/%s: %w", kind, ns, name, describe(err))
 	}
+	dropped, err := c.dropUnownedSecretEntries(ctx, gvr, obj, after)
+	if err != nil {
+		return "", fmt.Errorf("remove old entries from %s %s/%s: %w", kind, ns, name, describe(err))
+	}
 	switch {
 	case !existed:
 		return "created", nil
-	case version(before) != version(after):
+	case dropped || version(before) != version(after):
 		return "updated", nil
 	}
 	return "", nil
+}
+
+// dropUnownedSecretEntries removes the entries of a Secret that the desired
+// object does not have and that the apply left in place. Server-side apply
+// only removes what it knows this tool owns, and it does not know that for
+// entries written through stringData, which is how versions before 0.6.1
+// wrote API keys. Without this, a key revoked back then would stay valid.
+func (c *Client) dropUnownedSecretEntries(ctx context.Context, gvr schema.GroupVersionResource, desired, live *unstructured.Unstructured) (bool, error) {
+	if desired.GetKind() != "Secret" || live == nil {
+		return false, nil
+	}
+	want, _, _ := unstructured.NestedMap(desired.Object, "data")
+	have, _, _ := unstructured.NestedMap(live.Object, "data")
+	remove := map[string]any{}
+	for name := range have {
+		if _, ok := want[name]; !ok {
+			remove[name] = nil // null deletes the entry in a merge patch
+		}
+	}
+	if len(remove) == 0 {
+		return false, nil
+	}
+	patch, err := json.Marshal(map[string]any{"data": remove})
+	if err != nil {
+		return false, err
+	}
+	_, err = c.dyn.Resource(gvr).Namespace(desired.GetNamespace()).Patch(ctx, desired.GetName(), types.MergePatchType, patch,
+		metav1.PatchOptions{FieldManager: fieldManager})
+	return err == nil, err
 }
 
 // prune deletes the objects this tool created earlier that are not in kept.

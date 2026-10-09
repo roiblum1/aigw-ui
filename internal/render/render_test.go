@@ -102,10 +102,10 @@ func TestTenantClientIDPattern(t *testing.T) {
 func TestRedacted(t *testing.T) {
 	objs := Objects(testState())
 	red := Redacted(objs)
-	if v, _, _ := unstructured.NestedString(red[0].Object, "stringData", "team-a.0a1b2c3d"); v != "<redacted>" {
+	if v, _, _ := unstructured.NestedString(red[0].Object, "data", "team-a.0a1b2c3d"); v != "<redacted>" {
 		t.Errorf("redacted value = %q", v)
 	}
-	if v, _, _ := unstructured.NestedString(objs[0].Object, "stringData", "team-a.0a1b2c3d"); v != "sk-secret" {
+	if v, _, _ := unstructured.NestedString(objs[0].Object, "data", "team-a.0a1b2c3d"); v != "c2stc2VjcmV0" {
 		t.Errorf("Redacted changed the original: %q", v)
 	}
 }

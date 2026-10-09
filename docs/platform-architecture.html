@@ -1,0 +1,692 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Multi-site LLM Platform v2</title>
+<base target="_blank">
+<style>
+/* Layout: wide engineering sheet. Full-width figures (they scroll sideways below ~1180px),
+   prose in a 70ch column aligned to the figure's left edge, tables up to 1100px. */
+:root {
+  --bg: #f3f4f7;
+  --surface: #ffffff;
+  --chip: #eff1f5;
+  --ink: #1b2130;
+  --muted: #586174;
+  --line: #c8cdd7;
+  --hair: #dde1e8;
+  --hub: #eceefa;
+  --hub-line: #c6caf0;
+  --cluster: #ebf2ed;
+  --cluster-line: #c3d5c9;
+  --peer: #f7f9f8;
+  --config: #5145d6;
+  --quota: #c2410c;
+  --quota-soft: rgba(194, 65, 12, 0.14);
+  --usage: #14795a;
+  --report: #1b6db3;
+  --door: #1d2433;
+  --door-ink: #f2f4f8;
+  --door-muted: #b9c0cc;
+  --code-bg: #eceef3;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101319; --surface: #1a1e26; --chip: #232833; --ink: #e6e9ef; --muted: #9aa2b1;
+    --line: #3a414e; --hair: #262c36; --hub: #1b1d30; --hub-line: #383d70; --cluster: #152019;
+    --cluster-line: #2b4535; --peer: #171c1b; --config: #9d95ff; --quota: #f08350;
+    --quota-soft: rgba(240, 131, 80, 0.2); --usage: #45c697; --report: #66b4f3;
+    --door: #e3e7ee; --door-ink: #11151d; --door-muted: #46505f; --code-bg: #171b22;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101319; --surface: #1a1e26; --chip: #232833; --ink: #e6e9ef; --muted: #9aa2b1;
+  --line: #3a414e; --hair: #262c36; --hub: #1b1d30; --hub-line: #383d70; --cluster: #152019;
+  --cluster-line: #2b4535; --peer: #171c1b; --config: #9d95ff; --quota: #f08350;
+  --quota-soft: rgba(240, 131, 80, 0.2); --usage: #45c697; --report: #66b4f3;
+  --door: #e3e7ee; --door-ink: #11151d; --door-muted: #46505f; --code-bg: #171b22;
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 16px/1.6 var(--sans);
+  padding-inline: 32px;
+  padding-block: 40px 80px;
+}
+@media (max-width: 640px) { body { padding-inline: 16px; padding-block: 28px 56px; } }
+.wrap { max-width: 1480px; margin: 0 auto; display: flex; flex-direction: column; gap: 64px; }
+header { display: flex; flex-direction: column; gap: 14px; }
+.eyebrow { font: 600 12px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin: 0; }
+h1 { font: 600 clamp(30px, 4vw, 44px)/1.1 var(--sans); letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+.lede { max-width: 70ch; color: var(--muted); font-size: 17px; margin: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.meta li { font: 400 12.5px var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; }
+h2 { font: 600 24px/1.25 var(--sans); margin: 0; text-wrap: balance; }
+h3 { font: 600 17px/1.3 var(--sans); margin: 0; }
+section { display: flex; flex-direction: column; gap: 18px; }
+.prose { max-width: 72ch; display: flex; flex-direction: column; gap: 14px; }
+.prose p { margin: 0; }
+.muted { color: var(--muted); }
+code { font: 0.88em var(--mono); background: var(--code-bg); border-radius: 4px; padding: 1px 5px; overflow-wrap: anywhere; }
+
+/* legend */
+.legend { display: flex; flex-wrap: wrap; gap: 10px 28px; align-items: center; margin: 0; padding: 0; list-style: none; }
+.legend li { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--ink); }
+.legend svg { width: 40px; height: 10px; flex: none; }
+.legend .pill { font: 700 10px var(--mono); letter-spacing: 0.06em; background: var(--ink); color: var(--bg); border-radius: 999px; padding: 2px 8px; }
+
+/* figures */
+figure { margin: 0; display: flex; flex-direction: column; gap: 14px; }
+.figwrap { overflow-x: auto; border-radius: 12px; }
+.fig { display: block; width: 100%; height: auto; }
+.fig-main { min-width: 1180px; }
+.fig-spill { max-width: 1000px; min-width: 760px; }
+figcaption { max-width: 78ch; color: var(--muted); font-size: 14.5px; }
+
+/* svg */
+.fig text { font-family: var(--sans); }
+.t-title { font: 600 16px var(--sans); fill: var(--ink); }
+.t-body { font: 400 13px var(--sans); fill: var(--muted); }
+.t-strong { fill: var(--ink); font-weight: 600; }
+.t-mono { font: 400 12px var(--mono); fill: var(--muted); }
+.t-ink { fill: var(--ink); }
+.t-site { font: 600 15px var(--mono); fill: var(--ink); }
+.t-note { font: italic 400 12.5px var(--sans); fill: var(--muted); }
+.t-chip { font: 600 13.5px var(--sans); fill: var(--ink); }
+.t-chipb { font: 400 12.5px var(--sans); fill: var(--muted); }
+.t-door { font: 600 15px var(--sans); fill: var(--door-ink); }
+.t-doorb { font: 400 13px var(--sans); fill: var(--door-muted); }
+.lbl { font: 600 11.5px var(--mono); letter-spacing: 0.08em; fill: var(--muted); }
+.lbl-hub { fill: var(--config); }
+.lbl-cluster { fill: var(--usage); }
+.lbl-serve { fill: var(--ink); }
+.al { font: 400 12.5px var(--sans); fill: var(--ink); }
+.al-b { font-weight: 600; }
+.al-config { fill: var(--config); }
+.al-quota { fill: var(--quota); }
+.al-usage { fill: var(--usage); }
+.al-report { fill: var(--report); }
+.tag { fill: var(--ink); }
+.tag-t { font: 700 10px var(--mono); letter-spacing: 0.06em; fill: var(--bg); }
+.box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; filter: drop-shadow(3px 3px 0 var(--hair)); }
+.b-config { stroke: var(--config); }
+.b-quota { stroke: var(--quota); }
+.b-usage { stroke: var(--usage); }
+.b-report { stroke: var(--report); stroke-width: 1.8; }
+.b-req { stroke: var(--ink); stroke-width: 1.6; }
+.b-peer { fill: var(--peer); }
+.panel-hub { fill: var(--hub); stroke: var(--hub-line); }
+.panel-cluster { fill: var(--cluster); stroke: var(--cluster-line); }
+.panel-stack { fill: var(--cluster); stroke: var(--cluster-line); opacity: 0.55; }
+.chip { fill: var(--chip); }
+.door { fill: var(--door); }
+.ln { fill: none; stroke-width: 1.6; }
+.ln-ink { stroke: var(--ink); }
+.ln-ink-thin { stroke: var(--ink); stroke-width: 1.3; }
+.ln-dash { stroke-dasharray: 5 4; }
+.ln-muted { stroke: var(--muted); }
+.ln-config { stroke: var(--config); stroke-dasharray: 7 5; }
+.ln-quota { stroke: var(--quota); }
+.ln-usage { stroke: var(--usage); stroke-dasharray: 6 5; }
+.ln-report { stroke: var(--report); stroke-dasharray: 1.5 4.5; stroke-linecap: round; stroke-width: 2.4; }
+.ln-divider { stroke: var(--line); stroke-dasharray: 3 4; stroke-width: 1; }
+.m-ink { fill: var(--ink); }
+.m-muted { fill: var(--muted); }
+.m-config { fill: var(--config); }
+.m-quota { fill: var(--quota); }
+.m-usage { fill: var(--usage); }
+.m-report { fill: var(--report); }
+.dot-report { fill: var(--report); }
+.bar { fill: var(--chip); stroke: var(--line); }
+.bar-spill { fill: var(--quota-soft); stroke: var(--quota); }
+.mk-chat, .mk-sess { fill: var(--ink); }
+.dim { opacity: 0.45; }
+
+/* steps */
+ol.steps { counter-reset: step; list-style: none; margin: 0; padding: 0; max-width: 80ch; display: flex; flex-direction: column; gap: 0; }
+ol.steps li { counter-increment: step; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 14px; padding-block: 12px; border-top: 1px solid var(--hair); }
+ol.steps li:last-child { border-bottom: 1px solid var(--hair); }
+ol.steps li::before { content: counter(step); font: 600 13px var(--mono); color: var(--bg); background: var(--ink); width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; margin-top: 1px; }
+ol.steps b { font-weight: 600; }
+
+/* definition rows */
+.defs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px 32px; max-width: 1100px; margin: 0; }
+.defs div { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.defs dt { font-weight: 600; }
+.defs dd { margin: 0; color: var(--muted); font-size: 15px; }
+
+/* tables */
+.tablewrap { overflow-x: auto; max-width: 1100px; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px 10px 0; border-bottom: 1px solid var(--hair); }
+thead th { font: 600 11.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); }
+tbody th { font-weight: 600; white-space: nowrap; }
+td.num, th.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.good { font-weight: 600; }
+.note { font-size: 13.5px; color: var(--muted); max-width: 90ch; margin: 0; }
+
+/* phase cards */
+.phases { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 24px; max-width: 1240px; }
+.phase { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 22px 22px 24px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.phase .kicker { font: 600 11.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+.phase ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 15px; }
+pre { margin: 0; background: var(--code-bg); border: 1px solid var(--hair); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font: 12.5px/1.6 var(--mono); color: var(--ink); }
+pre code { background: none; padding: 0; font: inherit; }
+pre .c { color: var(--muted); }
+
+ul.plain { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; max-width: 80ch; }
+ol.confirm { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; max-width: 80ch; }
+.sources { font-size: 14px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+.sources ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+a { color: var(--report); text-underline-offset: 2px; }
+a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-radius: 2px; }
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Architecture · v2 routing</p>
+  <h1>Multi-site LLM platform</h1>
+  <p class="lede">One API endpoint for every model and every site. Each conversation keeps a home site, picked in proportion to capacity. A busy site hands off as few conversations as it can, chat first. Token quotas are enforced globally from the hub. Every cluster runs Envoy AI Gateway, KServe llm-d and LMCache.</p>
+  <ul class="meta">
+    <li>hub: ocp4-prod-hub-site1</li>
+    <li>sites: site1-a · site1-b · site2-a · site3-a · site4-a</li>
+    <li>checked against Envoy Gateway 1.8.5 · KServe 0.21 · llm-d EPP 0.10 source</li>
+  </ul>
+</header>
+
+<section aria-labelledby="arch">
+  <h2 id="arch">Architecture</h2>
+  <ul class="legend">
+    <li><svg viewBox="0 0 40 10" aria-hidden="true"><line x1="0" y1="5" x2="40" y2="5" class="ln ln-ink"/></svg>Request path</li>
+    <li><svg viewBox="0 0 40 10" aria-hidden="true"><line x1="0" y1="5" x2="40" y2="5" class="ln ln-config"/></svg>① Config: hub → clusters</li>
+    <li><svg viewBox="0 0 40 10" aria-hidden="true"><line x1="0" y1="5" x2="40" y2="5" class="ln ln-quota"/></svg>② Quota: check + deduct</li>
+    <li><svg viewBox="0 0 40 10" aria-hidden="true"><line x1="0" y1="5" x2="40" y2="5" class="ln ln-usage"/></svg>③ Usage: per-request records</li>
+    <li><svg viewBox="0 0 40 10" aria-hidden="true"><line x1="2" y1="5" x2="38" y2="5" class="ln ln-report"/></svg>④ Site reports: every site → every picker</li>
+    <li><svg viewBox="0 0 40 10" aria-hidden="true"><line x1="0" y1="5" x2="40" y2="5" class="ln ln-muted"/></svg>Inside the hub</li>
+    <li><span class="pill">NEW</span><span class="pill">CHANGED</span> compared with the current design</li>
+  </ul>
+  <figure>
+    <div class="figwrap">
+<svg viewBox="0 0 1480 1284" role="img" aria-label="Multi-site LLM platform v2. Clients reach any healthy entry gateway through Avi GSLB. The entry gateway authenticates, checks quota, asks the site picker for a ranked list of sites and sends the request over mTLS to the chosen site peer listener, which is this site or another. The serving site sheds or admits, the EPP queues by priority and picks a replica, vLLM answers. Site reporters publish load every second to every picker. The hub renders config, holds quota counters and collects usage, and is not in the routing path." class="fig fig-main">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-ink"/></marker>
+<marker id="ah-config" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-config"/></marker>
+<marker id="ah-quota" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-quota"/></marker>
+<marker id="ah-usage" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-usage"/></marker>
+<marker id="ah-report" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-report"/></marker>
+<marker id="ah-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-muted"/></marker>
+</defs>
+<rect x="300" y="16" width="1160" height="318" rx="14" class="panel-hub"/>
+<text x="324" y="44" class="lbl lbl-hub">HUB · ocp4-prod-hub-site1</text>
+<text x="1416" y="44" class="t-note" text-anchor="end">not in the routing path: pickers read site reports directly</text>
+<rect x="324" y="60" width="246" height="112" rx="8" class="box "/>
+<text x="342" y="90" class="t-title">Portal &amp; admin UI</text>
+<text x="342" y="112" class="t-body">Tenants, API keys + priority</text>
+<text x="342" y="130" class="t-body">class, model catalog, quotas,</text>
+<text x="342" y="148" class="t-body">budgets, live and past usage.</text>
+<rect x="488.2" y="51" width="65.8" height="18" rx="9" class="tag"/><text x="521.1" y="64" class="tag-t" text-anchor="middle">CHANGED</text>
+<rect x="606" y="60" width="246" height="112" rx="8" class="box "/>
+<text x="624" y="90" class="t-title">API server</text>
+<text x="624" y="112" class="t-body">Control plane. Renders one</text>
+<text x="624" y="130" class="t-body">config set, incl. site weights.</text>
+<text x="624" y="148" class="t-body">Budget job blocks keys.</text>
+<rect x="770.2" y="51" width="65.8" height="18" rx="9" class="tag"/><text x="803.1" y="64" class="tag-t" text-anchor="middle">CHANGED</text>
+<rect x="888" y="60" width="528" height="112" rx="8" class="box "/>
+<text x="906" y="90" class="t-title">Postgres · source of truth</text>
+<text x="906" y="112" class="t-body">tenants · API keys (hashed) + priority class · quotas &amp; budgets</text>
+<text x="906" y="130" class="t-body">model → site catalog with ready nodes (the weights)</text>
+<text x="906" y="148" class="t-body">usage history from every site</text>
+<rect x="324" y="212" width="246" height="104" rx="8" class="box b-config"/>
+<text x="342" y="242" class="t-title">Config sync</text>
+<text x="342" y="264" class="t-body">ACM policies + ArgoCD</text>
+<text x="342" y="282" class="t-body">ApplicationSet deliver the</text>
+<text x="342" y="300" class="t-body">config to every LLM cluster.</text>
+<rect x="606" y="212" width="246" height="104" rx="8" class="box b-quota"/>
+<text x="624" y="242" class="t-title">Redis · live counters</text>
+<text x="624" y="264" class="t-body">Live counters only: token</text>
+<text x="624" y="282" class="t-body">buckets for tenant × model,</text>
+<text x="624" y="300" class="t-body">shared by all sites.</text>
+<rect x="888" y="212" width="528" height="104" rx="8" class="box b-usage"/>
+<text x="906" y="242" class="t-title">Usage collector</text>
+<text x="906" y="264" class="t-body">OTLP in from every cluster. Dedupes by request ID,</text>
+<text x="906" y="282" class="t-body">rolls up per tenant / model / site into Postgres.</text>
+<path d="M570,116 L604,116" class="ln ln-muted" marker-end="url(#ah-muted)"/>
+<path d="M852,116 L886,116" class="ln ln-muted" marker-end="url(#ah-muted)"/>
+<path d="M729,172 L729,193 L447,193 L447,210" class="ln ln-config" marker-end="url(#ah-config)"/>
+<text x="587" y="188" class="al al-config" text-anchor="middle">renders per-cluster config</text>
+<path d="M1152,212 L1152,174" class="ln ln-usage" marker-end="url(#ah-usage)"/>
+<text x="1162" y="197" class="al al-usage">rollups</text>
+<path d="M447,316 L447,478" class="ln ln-config" marker-end="url(#ah-config)"/>
+<text x="459" y="370" class="al al-config al-b">① config</text>
+<text x="459" y="386" class="al al-config">routes · weights · keys · objectives</text>
+<path d="M729,480 L729,318" class="ln ln-quota" marker-end="url(#ah-quota)"/>
+<text x="741" y="370" class="al al-quota al-b">② quota check + deduct</text>
+<text x="741" y="386" class="al al-quota">hub Redis · WAN &lt; 10 ms</text>
+<path d="M1011,480 L1011,318" class="ln ln-usage" marker-end="url(#ah-usage)"/>
+<text x="1023" y="370" class="al al-usage al-b">③ usage records</text>
+<text x="1023" y="386" class="al al-usage">OTLP · buffered on disk</text>
+<rect x="316" y="436" width="1160" height="604" rx="14" class="panel-stack"/>
+<rect x="308" y="428" width="1160" height="604" rx="14" class="panel-stack"/>
+<rect x="300" y="420" width="1160" height="604" rx="14" class="panel-cluster"/>
+<text x="1416" y="444" class="lbl lbl-cluster" text-anchor="end">LLM CLUSTER · SAME STACK AT EVERY SITE</text>
+<text x="1416" y="461" class="t-mono" text-anchor="end">e.g. site1-a · GLM-5.3 · 8 B200 nodes · weight 8</text>
+<rect x="324" y="480" width="246" height="112" rx="8" class="box b-config"/>
+<text x="342" y="510" class="t-title">Gateway config</text>
+<text x="342" y="532" class="t-mono">AIGatewayRoute + API keys</text>
+<text x="342" y="548" class="t-mono">BackendTrafficPolicy: hash,</text>
+<text x="342" y="564" class="t-mono">zone weights, retry, health</text>
+<text x="342" y="580" class="t-mono">Backend: one zone per site</text>
+<rect x="488.2" y="471" width="65.8" height="18" rx="9" class="tag"/><text x="521.1" y="484" class="tag-t" text-anchor="middle">CHANGED</text>
+<rect x="606" y="480" width="246" height="112" rx="8" class="box b-quota"/>
+<text x="624" y="510" class="t-title">Rate limit service</text>
+<text x="624" y="532" class="t-body">envoy-ratelimit; backend is</text>
+<text x="624" y="550" class="t-body">the hub Redis. Fails open if</text>
+<text x="624" y="568" class="t-body">the hub is unreachable.</text>
+<rect x="888" y="480" width="246" height="112" rx="8" class="box b-usage"/>
+<text x="906" y="510" class="t-title">OTel collector</text>
+<text x="906" y="532" class="t-body">Tenant, key, model, site,</text>
+<text x="906" y="550" class="t-body">tokens in / out / cached.</text>
+<text x="906" y="568" class="t-body">Disk queue survives outages.</text>
+<rect x="1170" y="480" width="246" height="112" rx="8" class="box b-report"/>
+<text x="1188" y="510" class="t-title">Site picker · ext-proc</text>
+<text x="1188" y="532" class="t-body">Ranks the model’s sites per</text>
+<text x="1188" y="550" class="t-body">conversation by capacity,</text>
+<text x="1188" y="568" class="t-body">skips sites spilling it.</text>
+<rect x="1363.8" y="471" width="36.2" height="18" rx="9" class="tag"/><text x="1381.9" y="484" class="tag-t" text-anchor="middle">NEW</text>
+<path d="M447,592 L447,658" class="ln ln-config" marker-end="url(#ah-config)"/>
+<text x="459" y="622" class="al al-config">configures entry</text>
+<text x="459" y="638" class="al al-config">and serving routes</text>
+<path d="M729,594 L729,658" class="ln ln-quota" marker-end="url(#ah-quota)" marker-start="url(#ah-quota)"/>
+<text x="741" y="622" class="al al-quota">check (cost 0)</text>
+<text x="741" y="638" class="al al-quota">deduct after</text>
+<path d="M1011,660 L1011,594" class="ln ln-usage" marker-end="url(#ah-usage)"/>
+<text x="1023" y="622" class="al al-usage">one record</text>
+<text x="1023" y="638" class="al al-usage">per request</text>
+<path d="M1293,594 L1293,658" class="ln ln-ink-thin" marker-end="url(#ah)" marker-start="url(#ah)"/>
+<text x="1305" y="622" class="al">ext-proc call:</text>
+<text x="1305" y="638" class="al">ranked sites</text>
+<rect x="324" y="660" width="1092" height="156" rx="8" class="box b-req"/>
+<text x="344" y="690" class="t-title">Envoy AI Gateway · entry role</text>
+<text x="609" y="690" class="t-mono">client listener · every request enters here</text>
+<rect x="1334.2" y="651" width="65.8" height="18" rx="9" class="tag"/><text x="1367.1" y="664" class="tag-t" text-anchor="middle">CHANGED</text>
+<rect x="336" y="706" width="222" height="96" rx="6" class="chip"/>
+<text x="350" y="728" class="t-chip">API key → tenant</text>
+<text x="350" y="748" class="t-chipb">Writes tenant + fairness</text>
+<text x="350" y="764" class="t-chipb">headers over client values.</text>
+<text x="350" y="780" class="t-chipb">Unknown key: 401.</text>
+<rect x="618" y="706" width="222" height="96" rx="6" class="chip"/>
+<text x="632" y="728" class="t-chip">Token quota</text>
+<text x="632" y="748" class="t-chipb">Check before, at cost 0.</text>
+<text x="632" y="764" class="t-chipb">Deduct after the answer.</text>
+<text x="632" y="780" class="t-chipb">Budget spent: 429.</text>
+<rect x="900" y="706" width="222" height="96" rx="6" class="chip"/>
+<text x="914" y="728" class="t-chip">Usage</text>
+<text x="914" y="748" class="t-chipb">One record per request,</text>
+<text x="914" y="764" class="t-chipb">written only at the entry.</text>
+<rect x="1182" y="706" width="222" height="96" rx="6" class="chip"/>
+<text x="1196" y="728" class="t-chip">Site choice</text>
+<text x="1196" y="748" class="t-chipb">Ranked list from the picker.</text>
+<text x="1196" y="764" class="t-chipb">Picker down: weighted hash.</text>
+<text x="1196" y="780" class="t-chipb">503: next site in the list.</text>
+<path d="M264,724 L322,724" class="ln ln-ink" marker-end="url(#ah)"/>
+<path d="M324,792 L282,792 L282,1074 L1293,1074" class="ln ln-ink"/>
+<path d="M447,1074 L447,1098" class="ln ln-ink" marker-end="url(#ah)"/>
+<path d="M729,1074 L729,1098" class="ln ln-ink" marker-end="url(#ah)"/>
+<path d="M1011,1074 L1011,1098" class="ln ln-ink" marker-end="url(#ah)"/>
+<path d="M1293,1074 L1293,1098" class="ln ln-ink" marker-end="url(#ah)"/>
+<path d="M447,816 L447,878" class="ln ln-ink" marker-end="url(#ah)"/>
+<text x="459" y="852" class="al">chosen site = this site</text>
+<text x="1416" y="852" class="lbl lbl-serve" text-anchor="end">SERVING ROLE · peer listener (mTLS) · reached from any site’s entry</text>
+<rect x="324" y="880" width="246" height="118" rx="8" class="box b-req"/>
+<text x="342" y="910" class="t-title">Peer listener · mTLS</text>
+<text x="342" y="932" class="t-body">Serving route → InferencePool.</text>
+<text x="342" y="950" class="t-body">Over the site’s limit: instant</text>
+<text x="342" y="968" class="t-body">503, so the entry retries</text>
+<text x="342" y="986" class="t-body">the next site in its list.</text>
+<rect x="488.2" y="871" width="65.8" height="18" rx="9" class="tag"/><text x="521.1" y="884" class="tag-t" text-anchor="middle">CHANGED</text>
+<rect x="606" y="880" width="246" height="118" rx="8" class="box "/>
+<text x="624" y="910" class="t-title">llm-d scheduler (EPP)</text>
+<text x="624" y="932" class="t-body">Flow control: priority, tenant</text>
+<text x="624" y="950" class="t-body">fairness, 5 s queue limit.</text>
+<text x="624" y="968" class="t-body">Warm replicas until too slow,</text>
+<text x="624" y="986" class="t-body">then lowest token load.</text>
+<rect x="770.2" y="871" width="65.8" height="18" rx="9" class="tag"/><text x="803.1" y="884" class="tag-t" text-anchor="middle">CHANGED</text>
+<rect x="888" y="880" width="246" height="118" rx="8" class="box "/>
+<text x="906" y="910" class="t-title">vLLM replicas · LMCache</text>
+<text x="906" y="932" class="t-body">P/D pods (LWS), usage in</text>
+<text x="906" y="950" class="t-body">every stream. KV: GPU → CPU</text>
+<text x="906" y="968" class="t-body">→ NVMe, never leaves the site.</text>
+<rect x="1170" y="880" width="246" height="118" rx="8" class="box b-report"/>
+<text x="1188" y="910" class="t-title">Site reporter</text>
+<text x="1188" y="932" class="t-body">Every 1 s: ready replicas,</text>
+<text x="1188" y="950" class="t-body">waiting, KV use, revision,</text>
+<text x="1188" y="968" class="t-body">max-model-len, spill fraction.</text>
+<rect x="1363.8" y="871" width="36.2" height="18" rx="9" class="tag"/><text x="1381.9" y="884" class="tag-t" text-anchor="middle">NEW</text>
+<path d="M570,939 L604,939" class="ln ln-ink" marker-end="url(#ah)"/>
+<path d="M852,939 L886,939" class="ln ln-ink" marker-end="url(#ah)"/>
+<path d="M1134,939 L1168,939" class="ln ln-report" marker-end="url(#ah-report)"/>
+<path d="M1416,939 L1440,939" class="ln ln-report"/>
+<circle cx="1440" cy="939" r="3.5" class="dot-report"/>
+<path d="M447,1206 L447,1238 L1440,1238 L1440,536 L1418,536" class="ln ln-report" marker-end="url(#ah-report)"/>
+<path d="M729,1206 L729,1238" class="ln ln-report"/>
+<circle cx="729" cy="1238" r="3.5" class="dot-report"/>
+<path d="M1011,1206 L1011,1238" class="ln ln-report"/>
+<circle cx="1011" cy="1238" r="3.5" class="dot-report"/>
+<path d="M1293,1206 L1293,1238" class="ln ln-report"/>
+<circle cx="1293" cy="1238" r="3.5" class="dot-report"/>
+<text x="459" y="1262" class="al al-report">④ site reports · every picker reads every site’s reporter, every 1 s, over the peer listener</text>
+<text x="324" y="1060" class="lbl lbl-cluster">OTHER SITE CLUSTERS · SAME STACK</text>
+<text x="1416" y="1060" class="al" text-anchor="end">chosen site elsewhere → its peer listener (mTLS)</text>
+<rect x="324" y="1100" width="246" height="106" rx="8" class="box b-peer"/>
+<text x="342" y="1130" class="t-site">site1-b</text>
+<text x="342" y="1152" class="t-body">MiniMax-M2.7 · its own</text>
+<text x="342" y="1170" class="t-body">ranking and weights</text>
+<rect x="606" y="1100" width="246" height="106" rx="8" class="box b-peer"/>
+<text x="624" y="1130" class="t-site">site2-a</text>
+<text x="624" y="1152" class="t-body">GLM-5.3 · 3 B200 nodes</text>
+<text x="624" y="1170" class="t-body">weight 3</text>
+<rect x="888" y="1100" width="246" height="106" rx="8" class="box b-peer"/>
+<text x="906" y="1130" class="t-site">site3-a</text>
+<text x="906" y="1152" class="t-body">GLM-5.3</text>
+<text x="906" y="1170" class="t-body">weight = its ready nodes</text>
+<rect x="1170" y="1100" width="246" height="106" rx="8" class="box b-peer"/>
+<text x="1188" y="1130" class="t-site">site4-a</text>
+<text x="1188" y="1152" class="t-body">[next model]</text>
+<rect x="24" y="480" width="240" height="112" rx="8" class="box "/>
+<text x="42" y="510" class="t-title">Clients</text>
+<text x="42" y="532" class="t-body">Apps, agents, chat UIs and</text>
+<text x="42" y="550" class="t-body">Claude Code (sends</text>
+<text x="42" y="568" class="t-body">X-Claude-Code-Session-Id).</text>
+<rect x="24" y="660" width="240" height="140" rx="8" class="door"/>
+<text x="42" y="690" class="t-door">One URL · llm.&lt;domain&gt;</text>
+<text x="42" y="712" class="t-doorb">Avi GSLB (AMKO), round robin</text>
+<text x="42" y="730" class="t-doorb">over healthy gateways. Picks</text>
+<text x="42" y="748" class="t-doorb">the entry only, never the</text>
+<text x="42" y="766" class="t-doorb">site that serves the model.</text>
+<rect x="182.2" y="651" width="65.8" height="18" rx="9" class="tag"/><text x="215.1" y="664" class="tag-t" text-anchor="middle">CHANGED</text>
+<path d="M144,592 L144,658" class="ln ln-ink" marker-end="url(#ah)"/>
+<text x="156" y="630" class="al">one URL + API key</text>
+<path d="M144,800 L144,1153 L322,1153" class="ln ln-ink" marker-end="url(#ah)"/>
+<text x="156" y="1000" class="al">or any other</text>
+<text x="156" y="1016" class="al">healthy site’s</text>
+<text x="156" y="1032" class="al">entry gateway</text>
+</svg>
+    </div>
+    <figcaption>Every cluster runs both roles. The entry role authenticates, meters and picks a site for each request that arrives through the global name. The serving role admits or sheds requests from any site’s entry and serves them. Site reports travel directly from site to site, so the hub stays out of the routing path.</figcaption>
+  </figure>
+</section>
+
+<section aria-labelledby="changed">
+  <h2 id="changed">What changed</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th scope="col"></th><th scope="col">Current design</th><th scope="col">v2</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Choosing a site</th><td>Least-request on each gateway replica’s own request counts</td><td>Weighted hash per conversation now; a site picker with spill fractions next</td></tr>
+        <tr><th scope="row">Capacity</th><td>Every site counts the same, so the 3-node site fills first</td><td>Sites weighted by ready nodes of the model (8 : 3)</td></tr>
+        <tr><th scope="row">Stickiness</th><td>None: in simulation about 4 in 10 turns landed on a different site</td><td>A conversation stays on its home site and keeps its KV cache there</td></tr>
+        <tr><th scope="row">Overload</th><td>503 and retry only</td><td>The busy site hands off the fewest conversations, chat first, each to its own second site</td></tr>
+        <tr><th scope="row">Avi GSLB</th><td>Entry, and in practice where the request ran</td><td>Entry only; every entry gateway reaches the same site choice</td></tr>
+        <tr><th scope="row">Inside a site</th><td>EPP defaults calibrated for Qwen 32B on 2×H100; no admission control</td><td>Calibrated for GLM-5.3 on B200; flow control with priorities and fairness between tenants</td></tr>
+        <tr><th scope="row">Hub</th><td>Config, quotas, usage</td><td>The same, plus site weights and priority classes; still not in the routing path</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section aria-labelledby="flow">
+  <h2 id="flow">One request, end to end</h2>
+  <ol class="steps">
+    <li><div><b>Entry.</b> The client resolves <code>llm.&lt;domain&gt;</code>. Avi GSLB returns any healthy site’s gateway. That only decides where the request enters.</div></li>
+    <li><div><b>Identity.</b> The entry gateway checks the API key and writes the tenant ID into the tenant and fairness headers, replacing anything the client sent. An unknown key gets 401.</div></li>
+    <li><div><b>Quota check.</b> The rate limit service checks the tenant’s bucket in the hub Redis at cost 0. A tenant over budget gets 429 here.</div></li>
+    <li><div><b>Conversation key.</b> The site picker takes <code>X-Claude-Code-Session-Id</code>, or else hashes the tenant, system prompt, tools and first user message. Those parts are the same on every turn, so every turn gets the same key.</div></li>
+    <li><div><b>Site choice.</b> The picker ranks the sites that serve the model by weighted rendezvous hash, drops any whose revision or <code>max-model-len</code> can’t take the request, and walks the ranking. The first site whose spill zone doesn’t cover this conversation wins; if every site covers it, the home site wins. Envoy gets the ranked list.</div></li>
+    <li><div><b>Hop.</b> Envoy sends the request over mTLS to the chosen site’s peer listener. When the home site is the entry site, the request stays in the cluster.</div></li>
+    <li><div><b>Admit or shed.</b> Over its limit, the peer listener answers 503 at once and the entry tries the next site in the conversation’s ranking. Retries happen only before the first response byte, so a stream is never duplicated.</div></li>
+    <li><div><b>Inside the site.</b> When the pool is saturated, the EPP holds the request in its queue, ordered by priority and fair between tenants, for up to 5 s, then answers 429. It then picks a replica: cache-warm replicas first unless they are too slow, then the lowest token load.</div></li>
+    <li><div><b>Answer and metering.</b> vLLM streams the answer with token usage. The entry gateway deducts the tokens in the hub Redis and sends one usage record through its OTel collector to the hub.</div></li>
+  </ol>
+</section>
+
+<section aria-labelledby="spill">
+  <h2 id="spill">How a conversation finds its site</h2>
+  <div class="prose"><p>Two hashes of the conversation key decide the site, so every entry gateway reaches the same answer without asking anyone.</p></div>
+  <figure>
+    <div class="figwrap">
+<svg viewBox="0 0 1000 404" role="img" aria-label="How one model ranks its sites for two conversations. site1-a is ranked first with spill fraction 0.30, so the chat conversation, whose position on site1-a is 0.18, moves to its second-ranked site site2-a, where nothing spills and it is served. The Claude Code session, at position 0.72 on site1-a, stays home." class="fig fig-spill">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-ink"/></marker>
+<marker id="ah-config" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-config"/></marker>
+<marker id="ah-quota" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-quota"/></marker>
+<marker id="ah-usage" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-usage"/></marker>
+<marker id="ah-report" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-report"/></marker>
+<marker id="ah-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-muted"/></marker>
+</defs>
+<text x="20" y="26" class="lbl">RANKING FOR THIS CONVERSATION</text>
+<text x="300" y="26" class="lbl">POSITION ON EACH SITE’S BAR</text>
+<text x="850" y="26" class="lbl">RESULT</text>
+<text x="430.0" y="52" class="al" text-anchor="middle">chat conversations</text>
+<text x="690.0" y="52" class="al" text-anchor="middle">Claude Code sessions</text>
+<path d="M560.0,60 L560.0,352" class="ln ln-divider"/>
+<g>
+<text x="20" y="102" class="t-title">1 · site1-a</text>
+<text x="20" y="122" class="t-mono">home · weight 8 · f = 0.30</text>
+<rect x="300" y="86" width="520" height="30" rx="4" class="bar"/>
+<rect x="300" y="86" width="156" height="30" rx="4" class="bar-spill"/>
+<text x="302" y="80" class="al al-quota">spill zone 0 – 0.30</text>
+<circle cx="394" cy="101" r="8" class="mk-chat"/>
+<text x="407" y="106" class="t-mono t-ink">0.18</text>
+<rect x="666" y="93" width="16" height="16" rx="2" class="mk-sess"/>
+<text x="687" y="106" class="t-mono t-ink">0.72</text>
+<text x="850" y="100" class="t-body t-strong">● leaves: inside the</text>
+<text x="850" y="118" class="t-body">spill zone</text>
+<text x="850" y="136" class="t-body t-strong">■ stays home</text>
+</g>
+<g>
+<text x="20" y="198" class="t-title">2 · site2-a</text>
+<text x="20" y="218" class="t-mono">weight 3 · f = 0</text>
+<rect x="300" y="182" width="520" height="30" rx="4" class="bar"/>
+<circle cx="513" cy="197" r="8" class="mk-chat"/>
+<text x="526" y="202" class="t-mono t-ink">0.41</text>
+<text x="850" y="196" class="t-body t-strong">● served here</text>
+</g>
+<g class="dim">
+<text x="20" y="294" class="t-title">3 · site3-a</text>
+<text x="20" y="314" class="t-mono">weight n · f = 0.10</text>
+<rect x="300" y="278" width="520" height="30" rx="4" class="bar"/>
+<rect x="300" y="278" width="52" height="30" rx="4" class="bar-spill"/>
+<text x="302" y="272" class="al al-quota">spill zone 0 – 0.10</text>
+<text x="850" y="292" class="t-body t-strong">not reached</text>
+</g>
+<path d="M393.6,118 L393.6,142 L513.2,142 L513.2,187" class="ln ln-ink-thin ln-dash" marker-end="url(#ah)"/>
+<text x="525.2" y="146" class="al">next site in its ranking</text>
+<text x="20" y="392" class="t-mono">● chat conversation</text>
+<text x="190" y="392" class="t-mono">■ Claude Code session</text>
+<text x="380" y="392" class="t-mono">f = spill fraction, set by each site every second</text>
+</svg>
+    </div>
+    <figcaption>site1-a is queueing, so its spill fraction is 0.30. The chat conversation’s position on site1-a falls inside the spill zone, so it moves to the next site in its own ranking. The Claude Code session sits in the right half of the bar, outside the zone, and stays home.</figcaption>
+  </figure>
+  <dl class="defs">
+    <div><dt>Home site</dt><dd>Weighted rendezvous hash over the sites that serve the model, weight = ready replicas. With 8 and 3 B200 nodes, 8 of every 11 conversations live at the bigger site. When a site gains or loses nodes, only the conversations that have to move, move.</dd></div>
+    <div><dt>Spill fraction</dt><dd>Each site’s reporter updates it every second: up 0.03 while the site queues and another site serving the model has room, down 0.01 once it stops queueing and is under about 95% busy. Most of the time it is 0.</dd></div>
+    <div><dt>Every site full</dt><dd>The conversation stays home. Moving it would add no capacity and would throw away its KV cache. The EPP’s flow control then serves by priority.</dd></div>
+    <div><dt>Stale reports</dt><dd>A report older than a few seconds means “don’t spill to this site”, never “idle”. A site that comes back ramps its weight up over a few minutes.</dd></div>
+  </dl>
+</section>
+
+<section aria-labelledby="insite">
+  <h2 id="insite">Inside each site</h2>
+  <div class="prose"><p>These come from the GKE Inference Gateway write-up on Vertex AI, mapped onto the endpoint picker that KServe 0.21 already deploys.</p></div>
+  <ul class="plain">
+    <li><b>Calibrate the picker.</b> Keep KServe’s default (prefix-affinity filter, then token-load scorer). Measure <code>peakPrefillThroughput</code> for GLM-5.3 on B200; the default is calibrated for Qwen 32B on 2×H100. Lower <code>maxTTFTPenaltyMs</code> from 18,000 to about 4,000 so a hot replica loses its stickiness sooner. That is the same move as Vertex’s weight change from 3:3:2 to 3:5:2.</li>
+    <li><b>Turn on flow control.</b> When the pool is saturated (queue depth 5 or KV cache 80% by default), requests wait in the EPP, ordered by priority and shared fairly between tenants. Cap the wait at 5 s; the EPP default is 60 s.</li>
+    <li><b>Priority classes</b> as InferenceObjectives: chat UIs 10, Claude Code 0, scheduled agent runs −10. In phase 1 every request runs at 0, because the entry strips the header. In phase 2 the picker sets it from the API key’s class.</li>
+  </ul>
+  <pre><code><span class="c"># LLMInferenceService, every model on every site</span>
+spec:
+  router:
+    scheduler:
+      config:
+        inline:
+          apiVersion: llm-d.ai/v1alpha1
+          kind: EndpointPickerConfig
+          featureGates: [flowControl]
+          flowControl:
+            defaultRequestTTL: 5s                 <span class="c"># EPP default is 60s</span>
+          plugins:
+            - type: approx-prefix-cache-producer
+            - type: inflight-load-producer
+            - type: prefix-cache-affinity-filter
+              parameters:
+                peakPrefillThroughput: &lt;measured&gt;  <span class="c"># default is Qwen 32B on 2x H100</span>
+                maxTTFTPenaltyMs: 4000            <span class="c"># default 18000</span>
+            - type: token-load-scorer
+          schedulingProfiles:
+            - name: default
+              plugins:
+                - pluginRef: prefix-cache-affinity-filter
+                - pluginRef: token-load-scorer
+---
+apiVersion: llm-d.ai/v1alpha2
+kind: InferenceObjective
+metadata: {name: interactive}                     <span class="c"># + claude-code (0), batch-agents (-10)</span>
+spec:
+  priority: 10
+  poolRef: {group: inference.networking.k8s.io, name: &lt;pool&gt;}</code></pre>
+</section>
+
+<section aria-labelledby="rollout">
+  <h2 id="rollout">Rollout in two phases</h2>
+  <div class="phases">
+    <article class="phase">
+      <p class="kicker">Phase 1 · config only</p>
+      <h3>Weighted session hash</h3>
+      <ul>
+        <li>Works on Envoy Gateway 1.8.5 today: zone weights become Maglev locality weights.</li>
+        <li>Requests without the session header are spread by weight at random.</li>
+        <li>A 503 retry goes to the conversation’s stable second site.</li>
+        <li>Limits: weights stay static until the hub re-renders them, chat without a session header isn’t sticky, and overload only moves through shed and retry.</li>
+      </ul>
+      <pre><code><span class="c"># Backend fleet-all-sites: one zone per endpoint</span>
+spec:
+  endpoints:
+    - fqdn: {hostname: llm.site1-a.&lt;domain&gt;, port: 8443}
+      zone: site1-a
+    - fqdn: {hostname: llm.site1-b.&lt;domain&gt;, port: 8443}
+      zone: site1-b
+    - fqdn: {hostname: llm.site2-a.&lt;domain&gt;, port: 8443}
+      zone: site2-a
+    - fqdn: {hostname: llm.site3-a.&lt;domain&gt;, port: 8443}
+      zone: site3-a
+    - fqdn: {hostname: llm.site4-a.&lt;domain&gt;, port: 8443}
+      zone: site4-a
+---
+<span class="c"># BackendTrafficPolicy fleet-glm-5.3</span>
+spec:
+  loadBalancer:
+    type: ConsistentHash
+    consistentHash:
+      type: Headers
+      headers:
+        - name: x-claude-code-session-id
+    zoneAware:
+      weightedZones:      <span class="c"># ready nodes, from the hub</span>
+        - {zone: site1-a, weight: 8}
+        - {zone: site2-a, weight: 3}
+        - {zone: site3-a, weight: &lt;n&gt;}
+  <span class="c"># retry, health check, breaker, rate limit: unchanged</span></code></pre>
+    </article>
+    <article class="phase">
+      <p class="kicker">Phase 2 · site picker</p>
+      <h3>Rendezvous ranking with spill</h3>
+      <ul>
+        <li>One internal Go service per cluster with two jobs: ext-proc picker for this site’s entry traffic, and reporter for this site’s state.</li>
+        <li>It writes the ranked list into Envoy’s <code>endpointOverride</code> header (IP:port of each site’s VIP) on its own route rule. The phase 1 rule stays the default, so a picker outage falls back to the weighted hash, never to an equal split.</li>
+        <li>It also sets the priority header from the key’s class.</li>
+      </ul>
+      <pre><code><span class="c">per request, at the entry site</span>
+key  = X-Claude-Code-Session-Id
+       or hash(tenant, system, tools, messages[0])
+rank = sites serving the model, by w_s / -ln(H1(key, s))
+                                  <span class="c"># w_s = ready replicas</span>
+rank = rank minus sites whose revision or
+       max-model-len can't take the request
+for s in rank:
+    pos = H2(key, s) / 2          <span class="c"># chat</span>
+        | 0.5 + H2(key, s) / 2    <span class="c"># Claude Code, agents</span>
+    if pos &gt;= f_s:
+        route to s, rest of rank as retries; stop
+else:
+    route to rank[0]              <span class="c"># all spilling: stay home</span>
+
+<span class="c">per site, every second (reporter)</span>
+f_s += 0.03  while queueing and another site has room
+f_s -= 0.01  while not queueing and under ~95% busy</code></pre>
+    </article>
+  </div>
+
+  <h3>Simulated effect</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th scope="col">8 + 3 B200 nodes</th><th scope="col" class="num">Current: least-request</th><th scope="col" class="num">Phase 1</th><th scope="col" class="num">Phase 2</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">3-node site busy, 80% load</th><td class="num">100%, always queued</td><td class="num">80%</td><td class="num good">79%</td></tr>
+        <tr><th scope="row">8-node site busy, 80% load</th><td class="num">75%</td><td class="num">79%</td><td class="num good">79%</td></tr>
+        <tr><th scope="row">p95 queue wait, 92% load</th><td class="num">4.2 s</td><td class="num">0.1 s</td><td class="num good">0.01 s</td></tr>
+        <tr><th scope="row">p95 queue wait, 2 of 8 nodes down</th><td class="num">4.2 s</td><td class="num">1.8 s</td><td class="num good">0.05 s</td></tr>
+        <tr><th scope="row">Turns that changed site</th><td class="num">44%</td><td class="num">9% (chat only)</td><td class="num good">0–1%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Toy discrete-event model: 64 slots per node, FIFO queues, 60% Claude Code sessions and 40% chat, mean of three seeds. Use it to rank the options, not to predict seconds.</p>
+</section>
+
+<section aria-labelledby="failure">
+  <h2 id="failure">Under load and failure</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th scope="col">Event</th><th scope="col">What happens</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Normal load</th><td>Every conversation stays on its home site. Sites fill in proportion to their nodes, 8 : 3.</td></tr>
+        <tr><th scope="row">One site runs hot</th><td>Its spill fraction rises. Chat conversations leave first, each to its own second-ranked site. Claude Code sessions leave last.</td></tr>
+        <tr><th scope="row">A site loses nodes</th><td>Phase 2: its weight follows ready replicas, and only the conversations that must move, move. Phase 1: weights stay until the hub re-renders them; shed and retry cover the gap.</td></tr>
+        <tr><th scope="row">Every site full</th><td>Conversations stay home. Flow control serves by priority; a request that waits 5 s gets 429.</td></tr>
+        <tr><th scope="row">A site or its gateway goes down</th><td>Health checks remove it from every model within about 15 s. Connect failures go to the next-ranked site at once.</td></tr>
+        <tr><th scope="row">The picker is down</th><td>Requests fall back to the phase 1 rule, the weighted session hash.</td></tr>
+        <tr><th scope="row">The hub is down</th><td>Budgets fail open and config stays as last delivered. Routing keeps working, because reports go site to site.</td></tr>
+        <tr><th scope="row">A site comes back</th><td>Its weight ramps up over a few minutes, so its conversations don’t all return to a cold cache at once.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section aria-labelledby="confirm">
+  <h2 id="confirm">To confirm before building</h2>
+  <ol class="confirm">
+    <li><b>Fairness header.</b> The simplest path is to have the API-key auth write the tenant ID straight into <code>x-llm-d-inference-fairness-id</code> and key token budgets on that same header. The serving site must trust it only from peer certificates.</li>
+    <li><b>Endpoint override with hostname endpoints.</b> Confirm that Envoy Gateway 1.8.5 matches the override (IP:port) against the resolved VIP addresses of the site Backend.</li>
+    <li><b>Spill constants.</b> The +0.03 / −0.01 per second steps and the 1 s report interval come from the simulation. Tune them on real traffic.</li>
+    <li><b>Chat UIs.</b> A UI that sends a stable conversation header makes chat sticky in phase 1 as well.</li>
+    <li><b>Peer listener limit.</b> It sheds by request count, while the real cost is tokens. Size it from vLLM’s reported concurrency at a realistic context length.</li>
+  </ol>
+</section>
+
+<footer class="sources">
+  <span>Sources</span>
+  <ul>
+    <li><a href="https://cloud.google.com/blog/products/containers-kubernetes/how-gke-inference-gateway-improved-latency-for-vertex-ai">How we cut Vertex AI latency by 35% with GKE Inference Gateway</a></li>
+    <li><a href="https://github.com/envoyproxy/gateway/blob/v1.8.5/api/v1alpha1/loadbalancer_types.go">Envoy Gateway v1.8.5 load balancer API</a> and <a href="https://github.com/envoyproxy/gateway/blob/v1.8.5/internal/xds/translator/cluster.go">xDS translator</a></li>
+    <li><a href="https://github.com/llm-d/llm-d-router/blob/v0.10.0/pkg/epp/framework/plugins/scheduling/filter/prefixcacheaffinity/plugin.go">llm-d router v0.10.0 prefix-cache affinity filter</a> and <a href="https://github.com/llm-d/llm-d-router/blob/v0.10.0/apix/config/v1alpha1/endpointpickerconfig_types.go">EndpointPickerConfig</a></li>
+    <li><a href="https://github.com/kserve/kserve/blob/v0.21.0/config/llmisvcconfig/config-llm-scheduler-eppconfig-default.yaml">KServe v0.21.0 default EPP config</a></li>
+    <li><a href="https://claudeissues.com/issue/40119-docs-llm-gateway-docs-missing-x-claude-code-session-id-header-guidance">Claude Code X-Claude-Code-Session-Id header</a></li>
+  </ul>
+</footer>
+
+</div>
+
+</body></html>

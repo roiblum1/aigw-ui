@@ -7,6 +7,7 @@
 package render
 
 import (
+	"encoding/base64"
 	"regexp"
 	"sort"
 
@@ -321,14 +322,20 @@ func validQuota(limit int64, window string) bool {
 	return false
 }
 
+// keysSecret holds one entry per active key: the client ID and the key.
+//
+// The keys go under data, not stringData. The API server copies stringData
+// into data, but server-side apply only records who owns the stringData
+// entries, so an entry left out of a later apply stays in data and a revoked
+// key keeps working.
 func keysSecret(s State) *unstructured.Unstructured {
 	data := map[string]any{}
 	for _, k := range s.Keys {
-		data[k.ClientID] = k.Value
+		data[k.ClientID] = base64.StdEncoding.EncodeToString([]byte(k.Value))
 	}
 	u := object("v1", "Secret", s.Namespace, KeysSecretName)
 	u.Object["type"] = "Opaque"
-	u.Object["stringData"] = data
+	u.Object["data"] = data
 	return u
 }
 
@@ -362,7 +369,7 @@ func Redacted(objs []*unstructured.Unstructured) []*unstructured.Unstructured {
 	for _, o := range objs {
 		c := o.DeepCopy()
 		if c.GetKind() == "Secret" {
-			if data, ok := c.Object["stringData"].(map[string]any); ok {
+			if data, ok := c.Object["data"].(map[string]any); ok {
 				for k := range data {
 					data[k] = "<redacted>"
 				}

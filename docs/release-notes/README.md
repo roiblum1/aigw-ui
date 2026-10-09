@@ -5,6 +5,7 @@ image tag (`docker.io/roi12345/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.6.1](v0.6.1.md) | 2026-10-09 | **Security fix:** revoked keys and keys of disabled tenants kept working. Architecture page |
 | [0.6.0](v0.6.0.md) | 2026-10-08 | Gateway self-test, audit log, counters that survive other tenants' quota changes |
 | [0.5.7](v0.5.7.md) | 2026-10-08 | Chart legends stay inside their panel |
 | [0.5.6](v0.5.6.md) | 2026-10-08 | Overview explains itself when empty; demo data script |

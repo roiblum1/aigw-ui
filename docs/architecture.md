@@ -1,5 +1,9 @@
 # Architecture
 
+This document describes how this tool works today. For the design of the
+whole platform, including routing between sites, see
+[platform-architecture.md](platform-architecture.md).
+
 ## Components
 
 | Component | Runs on | Role |
@@ -70,6 +74,12 @@ back an object that someone edited or deleted by hand.
 | Model added by hand | `Backend`, `AIServiceBackend`, `AIGatewayRoute` |
 | Tenant quota | one `QuotaPolicy` per model in each namespace that holds one of the model's `AIServiceBackend`s |
 | Tenant API keys, with "Enforce API keys" on | one `Secret` (`aigw-ui-api-keys`) and one `SecurityPolicy` on the gateway |
+
+The Secret holds one entry per active key, the client ID and the key, under
+`data`. It must not be written through `stringData`: server-side apply cannot
+remove an entry that came in that way, and the gateway trusts every entry. As
+a second guard, each sync compares the Secret on the cluster with the keys it
+should hold and removes any other entry.
 
 All objects carry the label `app.kubernetes.io/managed-by: aigw-ui`. They are
 created in the cluster's gateway namespace, except a `QuotaPolicy`, which has

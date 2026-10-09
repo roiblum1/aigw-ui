@@ -27,6 +27,7 @@ cluster.
 - **Usage**: live tokens used per tenant and model in the current window, read from the quota counters in Redis.
 - **Activity**: a task log of every change, showing per cluster which objects were created, updated or deleted and whether the gateway accepted them, and an audit log of who asked for what.
 - **Self-test**: checks on a real gateway, with a temporary tenant, that a key works, usage is counted, a quota refuses and a reset frees.
+- **Architecture**: the design of the whole multi-site platform, with its diagrams, inside the UI.
 - **API**: everything the UI does is available over REST for a self-service portal.
 
 ## Quick start on OpenShift
@@ -62,6 +63,7 @@ Open http://localhost:8080 and sign in with `ADMIN_TOKEN`. For UI work, run
 | Document | Contents |
 |---|---|
 | [docs/user-guide.md](docs/user-guide.md) | Using the UI: clusters, models, tenants, keys, quotas |
+| [docs/platform-architecture.md](docs/platform-architecture.md) | The design of the whole multi-site platform, with diagrams, and what of it is built |
 | [docs/architecture.md](docs/architecture.md) | Components, data flows, what is applied to the clusters |
 | [docs/deployment.md](docs/deployment.md) | Helm chart, settings, disconnected install, upgrade, uninstall |
 | [docs/security.md](docs/security.md) | Where kubeconfigs and keys are kept, and who can read them |
@@ -88,6 +90,7 @@ web/src/               shared UI pieces: API client, components, charts
 web/src/styles/        styles per feature
 deploy/chart/          Helm chart for OpenShift
 deploy/offline/        scripts that build and load the offline bundle
+docs/                  documentation; the platform design page is embedded in the server
 docs/release-notes/    what changed in each version
 hack/                  seed-demo.py: demo data for showing the UI without a gateway
 Containerfile          image build

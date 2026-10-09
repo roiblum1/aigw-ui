@@ -208,6 +208,14 @@ Who is the name given at sign-in, or by an API caller in the
 send any name. Without a name the entry shows "admin token". The log keeps the
 last 20,000 entries, and each entry is also written to the server log.
 
+## Architecture
+
+The **Architecture** page shows the design of the whole platform: the hub, the
+LLM clusters, how a request travels and how a conversation finds its site. It
+is a target design. The bar at the top opens a list of what this tool does
+today and what is not built. The same page is in the repository as
+`docs/platform-architecture.html`.
+
 ## Usage
 
 The **Usage** page shows, for every tenant quota, how many tokens were used in

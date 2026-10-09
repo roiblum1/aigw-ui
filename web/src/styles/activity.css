@@ -111,4 +111,22 @@
   .selftest-steps .detail {
     overflow-wrap: anywhere;
   }
+
+  /* ---- architecture ---- */
+  .arch-status {
+    margin-bottom: 14px;
+  }
+  .arch-status table {
+    margin: 6px 0 12px;
+  }
+  .arch-frame {
+    display: block;
+    width: 100%;
+    /* The page scrolls inside the frame; leave room for the header above it. */
+    height: calc(100vh - 190px);
+    min-height: 480px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--card);
+  }
 }

@@ -41,6 +41,18 @@ Keys are stored encrypted rather than hashed, because every sync has to write
 them to the clusters. The UI and API show a key only once, when it is created.
 Afterwards only the first characters are shown.
 
+**Revoking.** A revoked key, and every key of a disabled or deleted tenant,
+is removed from the Secret by the next sync of each cluster. Until a cluster
+has synced, the key still works there: check the cluster's status on the
+Clusters page, or the task in Activity. Versions before 0.6.1 did not remove
+the key at all; see the [0.6.1 release notes](release-notes/v0.6.1.md).
+
+**Without "Enforce API keys" there are no tenants.** The gateway then takes
+the client ID from whoever sends an `x-aigw-client-id` header, so a caller can
+use, or use up, any tenant's quota. With enforcement on, the gateway sets the
+header itself from the key and overwrites what the client sent. Turn it on for
+every cluster where quotas are meant to hold.
+
 ## Signing in
 
 The UI and the API share one admin token. Everyone who has it has full
