@@ -59,11 +59,12 @@ kc get --raw /readyz >/dev/null || { echo "the API server did not start:"; tail 
 
 # The gateway CRDs are the real ones, at the versions the clusters run, so the
 # API server checks what this tool renders against their schema and rules.
-eg="https://raw.githubusercontent.com/envoyproxy/gateway/${ENVOY_GATEWAY_VERSION:-v1.8.5}/charts/gateway-helm/charts/crds/crds/generated"
+eg="https://raw.githubusercontent.com/envoyproxy/gateway/${ENVOY_GATEWAY_VERSION:-v1.9.1}/charts/gateway-helm/charts/crds/crds/generated"
 aigw="https://raw.githubusercontent.com/envoyproxy/ai-gateway/${AI_GATEWAY_VERSION:-v1.1.0}/manifests/charts/ai-gateway-crds-helm/templates"
 for crd in \
   "$eg/gateway.envoyproxy.io_backends.yaml" \
   "$eg/gateway.envoyproxy.io_backendtrafficpolicies.yaml" \
+  "$eg/gateway.envoyproxy.io_envoypatchpolicies.yaml" \
   "$eg/gateway.envoyproxy.io_securitypolicies.yaml" \
   "$aigw/aigateway.envoyproxy.io_aigatewayroutes.yaml" \
   "$aigw/aigateway.envoyproxy.io_aiservicebackends.yaml" \

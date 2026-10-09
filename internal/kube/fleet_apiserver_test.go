@@ -17,7 +17,7 @@ import (
 func fleetTestState(namespace string, sites ...render.FleetSite) render.State {
 	return render.State{
 		Namespace: namespace, GatewayName: "ai-gateway", ClientListener: "https", AuthEnabled: true,
-		Fleet: render.FleetConfig{PeerSNI: "peers.llm.example.com", CAConfigMap: "llm-peer-ca", ClientSecret: "llm-peer-client", SessionHeader: "x-claude-code-session-id"},
+		Fleet: render.FleetConfig{PeerSNI: "peers.llm.example.com", CAConfigMap: "llm-peer-ca", ClientSecret: "llm-peer-client", SessionHeaders: []string{"x-claude-code-session-id", "x-openwebui-chat-id"}},
 		Keys:  []render.Key{{ClientID: "team-a.01", Value: "sk-team-a"}},
 		Models: []render.Model{{
 			Name: "glm-5.3", Slug: "glm-5-3", DefaultLimit: 1000, DefaultWindow: "1d",
@@ -57,7 +57,8 @@ func TestRealAPIServerEntryRoute(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"Backend/fleet-glm-5-3", "AIServiceBackend/fleet-glm-5-3", "AIGatewayRoute/fleet-glm-5-3",
-		"BackendTrafficPolicy/fleet-glm-5-3", "QuotaPolicy/glm-5-3", "SecurityPolicy/" + render.AuthPolicyName} {
+		"BackendTrafficPolicy/fleet-glm-5-3", "QuotaPolicy/glm-5-3", "EnvoyPatchPolicy/" + render.RetryPatchName,
+		"SecurityPolicy/" + render.AuthPolicyName} {
 		if !created[want] {
 			t.Errorf("%s was not created; changes: %+v", want, res.Changes)
 		}
@@ -100,7 +101,7 @@ func TestRealAPIServerEntryRoute(t *testing.T) {
 			deleted++
 		}
 	}
-	if deleted != 5 {
-		t.Errorf("deleted %d objects, want the four entry objects and the QuotaPolicy: %+v", deleted, res.Changes)
+	if deleted != 6 {
+		t.Errorf("deleted %d objects, want the four entry objects, the QuotaPolicy and the retry patch: %+v", deleted, res.Changes)
 	}
 }

@@ -140,6 +140,7 @@ func Objects(s State) []*unstructured.Unstructured {
 	sort.Slice(models, func(i, j int) bool { return models[i].Slug < models[j].Slug })
 
 	var out []*unstructured.Unstructured
+	var fleet []Model
 	if s.AuthEnabled {
 		out = append(out, keysSecret(s))
 	}
@@ -149,6 +150,7 @@ func Objects(s State) []*unstructured.Unstructured {
 		}
 		switch {
 		case len(m.Fleet) > 0:
+			fleet = append(fleet, m)
 			out = append(out, fleetObjects(s, m)...)
 		case m.Existing == nil:
 			out = append(out, backend(s, m), aiServiceBackend(s, m), route(s, m))
@@ -157,10 +159,23 @@ func Objects(s State) []*unstructured.Unstructured {
 			out = append(out, quotaPolicies(s, m)...)
 		}
 	}
+	if len(fleet) > 0 && !held(s) {
+		out = append(out, fleetRetryPatch(s, fleet))
+	}
 	if s.AuthEnabled {
 		out = append(out, authPolicy(s))
 	}
 	return out
+}
+
+// held reports whether any model of the state is held.
+func held(s State) bool {
+	for _, m := range s.Models {
+		if m.Held() {
+			return true
+		}
+	}
+	return false
 }
 
 func object(apiVersion, kind, namespace, name string) *unstructured.Unstructured {

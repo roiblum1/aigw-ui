@@ -10,7 +10,7 @@ import (
 func fleetState() State {
 	return State{
 		Namespace: "ai-gateway", GatewayName: "ai-gateway", ClientListener: "https", AuthEnabled: true,
-		Fleet: FleetConfig{PeerSNI: "peers.llm.example.com", CAConfigMap: "llm-peer-ca", ClientSecret: "llm-peer-client", SessionHeader: "x-claude-code-session-id"},
+		Fleet: FleetConfig{PeerSNI: "peers.llm.example.com", CAConfigMap: "llm-peer-ca", ClientSecret: "llm-peer-client", SessionHeaders: []string{"x-claude-code-session-id", "x-openwebui-chat-id"}},
 		Models: []Model{
 			{
 				Name: "glm-5.3", Slug: "glm-5-3", DefaultLimit: 1000, DefaultWindow: "1d",
@@ -186,7 +186,7 @@ func TestHeldModelRendersNothing(t *testing.T) {
 		}
 	}
 	find(t, Objects(s), "Backend", "local")
-	if held := HeldNames(s); !held["glm-5-3"] || !held["fleet-glm-5-3"] || len(held) != 2 {
+	if held := HeldNames(s); !held["glm-5-3"] || !held["fleet-glm-5-3"] || len(held) != 3 {
 		t.Errorf("held = %v", held)
 	}
 	// Usage is still read from where the route on the cluster counts.
@@ -234,12 +234,50 @@ func TestHealthPath(t *testing.T) {
 	}
 }
 
-// Without passive checks a site that passes its health check and answers
-// every request with 503 keeps part of its conversations.
-func TestFleetPolicyTakesOutAFailingSite(t *testing.T) {
+// Envoy Gateway lets the gateway pick a site five times on a retry. With a
+// hash that is too few, so the route of every entry route is patched.
+func TestFleetRetryPatch(t *testing.T) {
+	s := fleetState()
+	patch := find(t, Objects(s), "EnvoyPatchPolicy", RetryPatchName)
+	patches, _, _ := unstructured.NestedSlice(patch.Object, "spec", "jsonPatches")
+	if len(patches) != 1 {
+		t.Fatalf("patches = %v", patches)
+	}
+	got := patches[0].(map[string]any)
+	want := map[string]any{
+		"type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
+		"name": "ai-gateway/ai-gateway/https",
+		"operation": map[string]any{
+			"op":       "replace",
+			"jsonPath": "..routes[?(@.name == 'httproute/ai-gateway/fleet-glm-5-3/rule/0/match/0/*')].route.retry_policy",
+			"path":     "host_selection_retry_max_attempts",
+			"value":    int64(20),
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("patch = %v\nwant    %v", got, want)
+	}
+
+	// No entry route, no patch: a patch that finds no route is an error.
+	s.Models[0].Fleet = nil
+	for _, o := range Objects(s) {
+		if o.GetKind() == "EnvoyPatchPolicy" {
+			t.Error("rendered a patch without an entry route")
+		}
+	}
+	// With a held model the patch on the cluster is left as it is.
+	s.Models[0].HeldReason = "no setting"
+	if !HeldNames(s)[RetryPatchName] {
+		t.Error("the patch is not held with the model")
+	}
+}
+
+// A request is hashed on whichever session header it carries.
+func TestFleetSessionHeaders(t *testing.T) {
 	policy := find(t, Objects(fleetState()), "BackendTrafficPolicy", "fleet-glm-5-3")
-	passive, found, _ := unstructured.NestedMap(policy.Object, "spec", "healthCheck", "passive")
-	if !found || passive["consecutive5XxErrors"] != int64(5) || passive["alwaysEjectOneEndpoint"] != true {
-		t.Errorf("passive = %v", passive)
+	headers, _, _ := unstructured.NestedSlice(policy.Object, "spec", "loadBalancer", "consistentHash", "headers")
+	want := []any{map[string]any{"name": "x-claude-code-session-id"}, map[string]any{"name": "x-openwebui-chat-id"}}
+	if !reflect.DeepEqual(headers, want) {
+		t.Errorf("headers = %v", headers)
 	}
 }

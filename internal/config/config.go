@@ -54,10 +54,15 @@ func Load() (*Config, error) {
 		RedisAllowReset:  os.Getenv("REDIS_ALLOW_RESET") == "true",
 	}
 	c.Fleet = render.FleetConfig{
-		PeerSNI:       os.Getenv("FLEET_PEER_SNI"),
-		CAConfigMap:   envOr("FLEET_PEER_CA_CONFIGMAP", "llm-peer-ca"),
-		ClientSecret:  envOr("FLEET_PEER_CLIENT_SECRET", "llm-peer-client"),
-		SessionHeader: strings.ToLower(envOr("FLEET_SESSION_HEADER", "x-claude-code-session-id")),
+		PeerSNI:      os.Getenv("FLEET_PEER_SNI"),
+		CAConfigMap:  envOr("FLEET_PEER_CA_CONFIGMAP", "llm-peer-ca"),
+		ClientSecret: envOr("FLEET_PEER_CLIENT_SECRET", "llm-peer-client"),
+	}
+	// One name per kind of client: Claude Code and Open WebUI by default.
+	for _, name := range strings.Split(envOr("FLEET_SESSION_HEADER", "x-claude-code-session-id,x-openwebui-chat-id"), ",") {
+		if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
+			c.Fleet.SessionHeaders = append(c.Fleet.SessionHeaders, name)
+		}
 	}
 	if domain := os.Getenv("FLEET_DOMAIN"); c.Fleet.PeerSNI == "" && domain != "" {
 		c.Fleet.PeerSNI = "peers.llm." + domain

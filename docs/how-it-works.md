@@ -171,7 +171,8 @@ model and sends the conversation to one of the sites that serve it.
 **How.** The server writes four objects named `fleet-<model>` on every fleet
 cluster: a `Backend` with one endpoint per site, an `AIServiceBackend`, an
 `AIGatewayRoute` on the client listener, and a `BackendTrafficPolicy` with
-the routing rules.
+the routing rules. One `EnvoyPatchPolicy` per cluster changes one number in
+the routes the gateway generates.
 
 **Why.**
 
@@ -179,6 +180,15 @@ the routing rules.
   site, so the site's prompt cache is reused.
 - *Only the session ID is hashed, not the tenant.* Hashing the tenant would
   pin a customer to one site.
+- *Two session headers.* Claude Code sends `x-claude-code-session-id` and
+  Open WebUI sends `x-openwebui-chat-id`. A request is hashed on the ones
+  it carries.
+- *The patch.* When a site answers 503, the gateway picks another. Envoy
+  Gateway allows five picks, and with a hash five are too few: for one
+  conversation in seven, all five landed on the failing site, and the
+  client got its 503. Envoy Gateway has no setting for the number, so the
+  server patches it to 20. On a test gateway that took the errors from 31
+  of 200 requests to 0 of 400.
 - *The same sites, weights and order on every cluster.* Two gateways with
   different lists would send one conversation to two sites. The *fleet
   revision* on the Clusters page shows which cluster is behind.

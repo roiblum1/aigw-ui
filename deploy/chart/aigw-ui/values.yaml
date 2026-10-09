@@ -33,8 +33,9 @@ fleet:
   # certificates, and the certificate a gateway presents to another site.
   peerCAConfigMap: llm-peer-ca
   peerClientSecret: llm-peer-client
-  # Requests with the same value in this header go to the same site.
-  sessionHeader: x-claude-code-session-id
+  # Requests with the same value in one of these headers go to the same site.
+  # One name per kind of client, separated by commas.
+  sessionHeader: x-claude-code-session-id,x-openwebui-chat-id
 
 # The admin token and the encryption key.
 auth:

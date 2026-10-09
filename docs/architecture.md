@@ -222,10 +222,16 @@ it on every fleet cluster, in the gateway namespace, all named
 | `AIGatewayRoute` | On the client listener: requests for the model go to that backend. Request timeout 3600s in place of the gateway's 60s |
 | `BackendTrafficPolicy` | On the `HTTPRoute` the gateway generates from the route, which has the same name |
 
+One more object, `EnvoyPatchPolicy/aigw-ui-fleet-retry`, is rendered once per
+fleet cluster for all entry routes together. See "Retry" below.
+
 The policy holds the routing:
 
-- **Site choice:** a consistent hash on the session header
-  (`x-claude-code-session-id` by default), weighted by the zone weights. The
+- **Site choice:** a consistent hash on the session headers, weighted by the
+  zone weights. By default these are `x-claude-code-session-id` for Claude
+  Code and `x-openwebui-chat-id` for Open WebUI, which sends it when
+  `ENABLE_FORWARD_USER_INFO_HEADERS` is on. A request is hashed on the ones
+  it carries. The
   tenant and the key are not hashed: that would pin a customer to one site.
 - **Zones:** exactly the endpoints of the `Backend`, in the same order,
   sorted by cluster name. A zone with an endpoint and no weight would get a
@@ -236,20 +242,20 @@ The policy holds the routing:
 - **Health check:** `GET /healthz/<model>` on each site's peer listener
   every 5s, with `panicThreshold: 0`, so a site that fails is never used
   however many fail. Slashes in a model name stay in the path.
-- **Failing site:** a site that answers five requests in a row with a 5xx is
-  taken out for 30s, longer each time it happens again, and at most half the
-  sites at once. The retry alone does not do this. It picks a site again by
-  the same weights, up to five times, and then takes the failing site
-  anyway: with one site holding 800 of 1100 and answering 503 to everything,
-  one request in seven came back as 503 on a test gateway. One good answer
-  in between keeps a site in, so a site that sheds only part of its load
-  stays.
-- **The health check has to tell the truth.** Every passing check puts a
-  site that was taken out back in. On the test gateway, a site that failed
-  every request **and** its health check lost none of 150 requests to the
-  client. A site that failed every request and still passed its health
-  check lost 7 in 100, down from 15 without the step above. So
-  `/healthz/<model>` on a site must fail when the model cannot serve.
+- **Retry picks from 20 sites, not 5.** Envoy Gateway lets the gateway pick
+  a site at most five times for one try of a request, and then takes a site
+  that already failed. With a hash, every pick lands by the same weights, so
+  with one site holding 800 of 1100 all five land on it for one conversation
+  in seven. Those got the failing site's 503 however many retries were
+  allowed: 31 of 200 requests on the test gateway. Envoy Gateway has no
+  setting for the number, so the hub renders one `EnvoyPatchPolicy`,
+  `aigw-ui-fleet-retry`, per fleet cluster that sets it to 20 on the route
+  of every entry route. With it, 0 of 400 requests got the 503.
+  - It needs `extensionApis.enableEnvoyPatchPolicy: true` in the Envoy
+    Gateway configuration.
+  - A patch that is not in effect does not stop the gateway. The sync
+    reports it in the task log, and the self-test fails on it.
+  - It can go when Envoy Gateway makes the number a setting.
 - **Circuit breaker:** as good as off (100000). Each site's own limit decides.
 
 Nothing is owned twice: the hub is the only writer of these objects, and the
@@ -296,7 +302,7 @@ can send a conversation to another site than the other clusters do.
 
 **What the entry route does not do.** These are limits of this version:
 
-- A request without the session header has nothing to hash and goes to a
+- A request without a session header has nothing to hash and goes to a
   site picked at random each time, so only clients that send the header get
   cache reuse. A client that sends it also chooses its site by choosing the
   value.

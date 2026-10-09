@@ -24,6 +24,7 @@ var managed = []struct {
 	Kind string
 	GVR  schema.GroupVersionResource
 }{
+	{"EnvoyPatchPolicy", schema.GroupVersionResource{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Resource: "envoypatchpolicies"}},
 	{"BackendTrafficPolicy", schema.GroupVersionResource{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Resource: "backendtrafficpolicies"}},
 	{"SecurityPolicy", schema.GroupVersionResource{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Resource: "securitypolicies"}},
 	{"QuotaPolicy", schema.GroupVersionResource{Group: "aigateway.envoyproxy.io", Version: "v1alpha1", Resource: "quotapolicies"}},

@@ -22,9 +22,10 @@ type FleetConfig struct {
 	// are in the gateway namespace.
 	CAConfigMap  string
 	ClientSecret string
-	// SessionHeader carries the conversation key. Requests with the same
-	// value go to the same site.
-	SessionHeader string
+	// SessionHeaders carry the conversation key, one name per kind of
+	// client. Requests with the same value go to the same site. A request
+	// is hashed on the ones it has.
+	SessionHeaders []string
 }
 
 // FleetSite is one site that serves a model, as an entry gateway reaches it.
@@ -46,6 +47,16 @@ const (
 	// fleetBreakerLimit is as good as no limit: each site's own shed limit
 	// decides how much it takes.
 	fleetBreakerLimit int64 = 100000
+	// fleetHostAttempts is how many times the gateway picks a site for one
+	// try of a request before it takes a site that already failed. Envoy
+	// Gateway sets 5, and with a hash that is too few: every pick lands by
+	// the same weights, so with one site holding 800 of 1100 all five land
+	// on it for one conversation in seven, and those get that site's 503
+	// however many retries are allowed. 20 leaves none.
+	fleetHostAttempts int64 = 20
+
+	// RetryPatchName is the EnvoyPatchPolicy that sets fleetHostAttempts.
+	RetryPatchName = "aigw-ui-fleet-retry"
 )
 
 // healthPath is where a site answers for one model. The slashes of a name
@@ -160,7 +171,7 @@ func fleetTrafficPolicy(s State, m Model) *unstructured.Unstructured {
 				"type": "Headers",
 				// Only the conversation key. Hashing the tenant or the key
 				// too would pin a customer to one site.
-				"headers": []any{map[string]any{"name": s.Fleet.SessionHeader}},
+				"headers": sessionHeaders(s.Fleet),
 			},
 			"zoneAware": map[string]any{"weightedZones": zones},
 		},
@@ -193,31 +204,6 @@ func fleetTrafficPolicy(s State, m Model) *unstructured.Unstructured {
 					"expectedStatuses": []any{int64(200)},
 				},
 			},
-			// A site can pass its health check and still answer every
-			// request with an error. The retry does not reliably leave such
-			// a site: it picks again by the same weights, and after five
-			// picks it takes the failing site anyway. With one site holding
-			// 800 of 1100, one request in seven came back as 503 on a test
-			// gateway. So a site that answers five requests in a row with
-			// an error is taken out for a while, and its conversations go
-			// to the others. One good answer in between keeps it in: a site
-			// that only sheds part of its load is not taken out.
-			//
-			// This covers the seconds until the health check fails as well.
-			// It only halves the errors while the health check keeps
-			// passing, because every passing check puts the site back. The
-			// site's /healthz/<model> has to fail when the model cannot
-			// serve.
-			"passive": map[string]any{
-				"consecutive5XxErrors":     int64(5),
-				"consecutiveGatewayErrors": int64(5),
-				"interval":                 "3s",
-				"baseEjectionTime":         "30s",
-				// Never more than half the sites, and always at least one,
-				// so a model with two sites is covered too.
-				"maxEjectionPercent":     int64(50),
-				"alwaysEjectOneEndpoint": true,
-			},
 		},
 		"circuitBreaker": map[string]any{
 			"maxConnections":      fleetBreakerLimit,
@@ -231,6 +217,45 @@ func fleetTrafficPolicy(s State, m Model) *unstructured.Unstructured {
 	return u
 }
 
+func sessionHeaders(f FleetConfig) []any {
+	out := make([]any, 0, len(f.SessionHeaders))
+	for _, name := range f.SessionHeaders {
+		out = append(out, map[string]any{"name": name})
+	}
+	return out
+}
+
+// fleetRetryPatch raises the number of sites the gateway picks from on a
+// retry, for the route of every model with an entry route. Envoy Gateway has
+// no setting for it, so the generated route is patched. It needs
+// enableEnvoyPatchPolicy in the Envoy Gateway configuration; without it the
+// policy is not programmed and a sync reports it.
+func fleetRetryPatch(s State, models []Model) *unstructured.Unstructured {
+	patches := make([]any, 0, len(models))
+	for _, m := range models {
+		patches = append(patches, map[string]any{
+			"type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
+			// The route configuration of the listener the entry route is on.
+			"name": s.Namespace + "/" + s.GatewayName + "/" + s.ClientListener,
+			"operation": map[string]any{
+				"op": "replace",
+				// The route Envoy Gateway generates from the "fleet" rule,
+				// the first of the model's AIGatewayRoute.
+				"jsonPath": "..routes[?(@.name == 'httproute/" + s.Namespace + "/" + FleetName(m.Slug) + "/rule/0/match/0/*')].route.retry_policy",
+				"path":     "host_selection_retry_max_attempts",
+				"value":    fleetHostAttempts,
+			},
+		})
+	}
+	u := object(egAPI, "EnvoyPatchPolicy", s.Namespace, RetryPatchName)
+	u.Object["spec"] = map[string]any{
+		"targetRef":   map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName},
+		"type":        "JSONPatch",
+		"jsonPatches": patches,
+	}
+	return u
+}
+
 // HeldNames returns the names of the objects a sync must not remove: the
 // entry objects and the QuotaPolicy of every held model.
 func HeldNames(s State) map[string]bool {
@@ -239,6 +264,9 @@ func HeldNames(s State) map[string]bool {
 		if m.Held() {
 			names[FleetName(m.Slug)] = true
 			names[m.Slug] = true
+			// The patch is rendered from the models that are not held. It
+			// stays while any is, or a held route would lose its part of it.
+			names[RetryPatchName] = true
 		}
 	}
 	return names

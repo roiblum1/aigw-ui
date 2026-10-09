@@ -103,7 +103,7 @@ Back up the encryption key straight away. See
 | `fleet.peerSNI` | empty | That server name, when it is not `peers.llm.<domain>` |
 | `fleet.peerCAConfigMap` | `llm-peer-ca` | ConfigMap in each gateway namespace with the CA of the sites' peer certificates |
 | `fleet.peerClientSecret` | `llm-peer-client` | Secret in each gateway namespace with the certificate a gateway presents to another site |
-| `fleet.sessionHeader` | `x-claude-code-session-id` | Requests with the same value go to the same site |
+| `fleet.sessionHeader` | `x-claude-code-session-id,x-openwebui-chat-id` | Requests with the same value in one of these headers go to the same site. One name per kind of client, separated by commas |
 | `auth.existingSecret` | empty | Your own Secret with `admin-token` and `encryption-key` |
 | `postgresql.enabled` | `true` | `false` to use your own Postgres |
 | `postgresql.image.repository` / `.tag` | sclorg Postgres 16 | Postgres image |

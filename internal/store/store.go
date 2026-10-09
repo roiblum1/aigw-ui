@@ -39,8 +39,14 @@ type Store struct {
 // store is used.
 func (s *Store) SetFleet(cfg render.FleetConfig) { s.fleet = cfg }
 
-// SessionHeader is the request header that carries the conversation key.
-func (s *Store) SessionHeader() string { return s.fleet.SessionHeader }
+// SessionHeader is the first of the request headers that carry the
+// conversation key, or "" when none is set.
+func (s *Store) SessionHeader() string {
+	if len(s.fleet.SessionHeaders) == 0 {
+		return ""
+	}
+	return s.fleet.SessionHeaders[0]
+}
 
 // FleetConfigured reports whether entry routes can be rendered at all.
 func (s *Store) FleetConfigured() bool { return s.fleet.PeerSNI != "" }
