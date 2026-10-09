@@ -2,9 +2,11 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"aigw-ui/internal/render"
@@ -136,8 +138,19 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	for _, c := range clusters {
 		fleet[c.ID] = c.FleetEnabled
 	}
+	bestEffort, err := s.st.BestEffortTenants(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
 	for i := range out {
 		out[i].Warnings = append(recipeWarnings(out[i]), ownRouteWarnings(out[i], fleet)...)
+		if n := len(bestEffort[out[i].ID]) - render.MaxOverageTenants; n > 0 {
+			out[i].Warnings = append(out[i].Warnings, fmt.Sprintf("%d tenants should be served as best-effort and are not: the best-effort route lists at most %d tenants, the first by name. The others are refused once their budget is spent.", n, render.MaxOverageTenants))
+		}
+		if out[i].SpentMode == store.SpentBestEffort && s.usage == nil {
+			out[i].Warnings = append(out[i].Warnings, "The server has no Redis configured, so it cannot see that a budget is spent. A tenant past its budget is refused.")
+		}
 		if out[i].Fleet && !s.st.FleetConfigured() {
 			out[i].Warnings = append(out[i].Warnings, "The server has no FLEET_DOMAIN or FLEET_PEER_SNI set, so the entry route is left as it is on the clusters and gets no weight changes.")
 		}
@@ -171,6 +184,9 @@ func (s *Server) setModelFleet(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrFleetManual):
 		writeError(w, http.StatusConflict, name+" has endpoints entered by hand. Remove them first: the entry route replaces them.")
 		return
+	case errors.Is(err, store.ErrBestEffortOn):
+		writeError(w, http.StatusConflict, name+" serves a spent budget as best-effort, which is built on the entry route. Set it back to refuse first.")
+		return
 	case err != nil:
 		fail(w, err)
 		return
@@ -181,6 +197,68 @@ func (s *Server) setModelFleet(w http.ResponseWriter, r *http.Request) {
 		s.changed(r, "model.fleet-off", "Turned the entry route off for "+name+". Its quota counters restart once.")
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// spentBody is the body of setting what happens when a budget is spent.
+type spentBody struct {
+	// Mode is "refuse" or "best-effort".
+	Mode string `json:"mode"`
+	// Unlimited also serves the tenants without a quota of their own on
+	// the model as best-effort. It only applies in best-effort mode.
+	Unlimited bool `json:"best_effort_unlimited"`
+}
+
+// setModelSpentMode sets what a model does with a tenant whose budget is
+// spent: refuse it, or serve it as best-effort on a second entry route.
+func (s *Server) setModelSpentMode(w http.ResponseWriter, r *http.Request) {
+	var b spentBody
+	if err := decode(r, &b); err != nil {
+		fail(w, err)
+		return
+	}
+	if b.Mode != store.SpentRefuse && b.Mode != store.SpentBestEffort {
+		fail(w, invalid("mode must be refuse or best-effort"))
+		return
+	}
+	name, err := s.st.SetModelSpentMode(r.Context(), r.PathValue("id"), b.Mode, b.Unlimited)
+	switch {
+	case errors.Is(err, store.ErrNoEntryRoute):
+		writeError(w, http.StatusConflict, name+" has no entry route. Best-effort is a second entry route, so turn the entry route on first.")
+		return
+	case err != nil:
+		fail(w, err)
+		return
+	}
+	switch {
+	case b.Mode == store.SpentRefuse:
+		s.changed(r, "model.spent-refuse", "A tenant past its budget on "+name+" is refused again.")
+	case b.Unlimited:
+		s.changed(r, "model.spent-best-effort", "A tenant past its budget on "+name+" is served as best-effort, and so is a tenant without a quota on it.")
+	default:
+		s.changed(r, "model.spent-best-effort", "A tenant past its budget on "+name+" is served as best-effort.")
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// listOverage returns the periods in which a tenant was served as
+// best-effort, newest first, running ones included. ?limit= defaults to 100,
+// at most 500.
+func (s *Server) listOverage(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 500 {
+			fail(w, invalid("limit must be a number from 1 to 500"))
+			return
+		}
+		limit = n
+	}
+	out, err := s.st.ListOverage(r.Context(), limit)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // drainBody is the body of a drain or undrain.

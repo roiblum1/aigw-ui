@@ -54,6 +54,9 @@ func (s *Server) resetUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log(r, "usage.reset", summary, true, fmt.Sprintf("%d of %d counters held usage and were cleared.", res.Deleted, res.Counters))
+	if res.EndedOverage {
+		s.changed(r, "overage.end", res.TenantSlug+" is back within its budget on "+res.ModelName+" after the reset and is served as standard again.")
+	}
 	slog.Info("usage reset", "tenant", res.TenantSlug, "model", res.ModelName, "counters", res.Counters, "deleted", res.Deleted)
 	writeJSON(w, http.StatusOK, res)
 }

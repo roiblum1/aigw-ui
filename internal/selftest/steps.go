@@ -21,6 +21,7 @@ const (
 	stepBadKey  = "bad-key"
 	stepCounter = "counter"
 	stepLimit   = "limit"
+	stepOverage = "overage"
 	stepReset   = "reset"
 	stepSticky  = "sticky"
 	stepFleet   = "fleet-revision"
@@ -35,6 +36,7 @@ func plan() []Step {
 		{ID: stepBadKey, Title: "A request with an unknown key is refused", Status: Pending},
 		{ID: stepCounter, Title: "The tokens are counted where the Usage page reads them", Status: Pending},
 		{ID: stepLimit, Title: "A request over the quota is refused", Status: Pending},
+		{ID: stepOverage, Title: "A tenant past its budget is served as best-effort", Status: Pending},
 		{ID: stepReset, Title: "A usage reset lets the tenant through again", Status: Pending},
 		{ID: stepSticky, Title: "A conversation stays on one site", Status: Pending},
 		{ID: stepFleet, Title: "The cluster has the fleet's current entry routes", Status: Pending},
@@ -95,6 +97,7 @@ func (t *test) steps() {
 		{stepBadKey, t.unknownKey, false},
 		{stepCounter, t.counter, false},
 		{stepLimit, t.limit, false},
+		{stepOverage, t.overage, false},
 		{stepReset, t.reset, false},
 		{stepSticky, t.sticky, false},
 		{stepFleet, t.fleetRevision, false},
@@ -313,6 +316,9 @@ func (t *test) limit() (string, string) {
 	if t.key == "" {
 		return Skipped, "Without API keys the gateway cannot tell tenants apart, so a tenant quota cannot be tested."
 	}
+	if t.bestEffort() {
+		return Skipped, "The model serves a tenant past its budget as best-effort and does not refuse it. The next step tests that."
+	}
 	start := time.Now()
 	var last string
 	for time.Since(start) < limitWait {
@@ -364,6 +370,8 @@ func (t *test) poolLeft() (int64, bool) {
 
 func (t *test) reset() (string, string) {
 	switch {
+	case t.bestEffort():
+		return Skipped, "The model does not refuse a tenant past its budget, so there is no refusal to lift."
 	case !t.refused:
 		return Skipped, "Needs a refused request first."
 	case t.r.usage == nil:
