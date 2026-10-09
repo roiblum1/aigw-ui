@@ -22,6 +22,8 @@ const (
 	stepCounter = "counter"
 	stepLimit   = "limit"
 	stepReset   = "reset"
+	stepSticky  = "sticky"
+	stepFleet   = "fleet-revision"
 	stepCleanup = "cleanup"
 )
 
@@ -34,6 +36,8 @@ func plan() []Step {
 		{ID: stepCounter, Title: "The tokens are counted where the Usage page reads them", Status: Pending},
 		{ID: stepLimit, Title: "A request over the quota is refused", Status: Pending},
 		{ID: stepReset, Title: "A usage reset lets the tenant through again", Status: Pending},
+		{ID: stepSticky, Title: "A conversation stays on one site", Status: Pending},
+		{ID: stepFleet, Title: "The cluster has the fleet's current entry routes", Status: Pending},
 		{ID: stepCleanup, Title: "The temporary tenant is removed", Status: Pending},
 	}
 }
@@ -69,6 +73,8 @@ type test struct {
 	key    string        // its API key; empty when the cluster does not enforce keys
 	// counted and refused remember what earlier steps found out.
 	counted, refused bool
+	// firstTokens is what the first answered request used.
+	firstTokens int64
 }
 
 func (t *test) set(id, status, detail string) { t.r.set(t.run, id, status, detail) }
@@ -90,6 +96,8 @@ func (t *test) steps() {
 		{stepCounter, t.counter, false},
 		{stepLimit, t.limit, false},
 		{stepReset, t.reset, false},
+		{stepSticky, t.sticky, false},
+		{stepFleet, t.fleetRevision, false},
 	} {
 		t.set(step.id, Running, "")
 		status, detail := step.run()
@@ -112,6 +120,11 @@ func (t *test) wait() bool {
 
 func (t *test) chat(key string) (gateway.ChatResult, error) {
 	return gateway.Chat(t.ctx, t.cluster.GatewayURL, key, t.model.Name)
+}
+
+// chatWith sends a request as the temporary tenant with extra headers.
+func (t *test) chatWith(headers map[string]string) (gateway.ChatResult, error) {
+	return gateway.ChatWith(t.ctx, t.cluster.GatewayURL, t.key, t.model.Name, headers)
 }
 
 func (t *test) gateway() (string, string) {
@@ -213,6 +226,7 @@ func (t *test) firstRequest() (string, string) {
 		case err != nil:
 			last, lastStatus = err.Error(), 0
 		case res.Status == http.StatusOK:
+			t.firstTokens = res.Tokens
 			detail := fmt.Sprintf("Answered %d seconds after the sync, %d tokens used.", int(time.Since(start).Seconds()), res.Tokens)
 			if t.key == "" {
 				detail += " The cluster does not enforce API keys, so the request was sent without one."
@@ -279,7 +293,10 @@ func (t *test) counter() (string, string) {
 					where = append(where, c.Backend)
 				}
 			}
-			return Passed, fmt.Sprintf("%d tokens counted for the tenant on %s. The counter names the Usage page computes are right.", q.Used, strings.Join(where, ", "))
+			if twice, detail := chargedTwice(q.Used, t.firstTokens, t.model.CostExpression); twice {
+				return Failed, detail
+			}
+			return Passed, fmt.Sprintf("%d tokens counted for the tenant on %s, for one request that used %d. The counter names the Usage page computes are right.", q.Used, strings.Join(where, ", "), t.firstTokens)
 		}
 		if !t.wait() {
 			break

@@ -71,6 +71,13 @@ through the gateway, and removes the tenant again. It takes about a minute.
 | The tokens are counted where the Usage page reads them | The Usage page looks at the right counters |
 | A request over the quota is refused | The quota is enforced |
 | A usage reset lets the tenant through again | **Reset usage** works on this gateway |
+| A conversation stays on one site | Three requests with one session ID are served by the same site, as named in the `x-llm-served-by` response header. It also lists where ten other session IDs landed. Skipped unless the model has an entry route on this cluster. It raises the temporary quota and sends 13 small requests |
+| The cluster has the fleet's current entry routes | The cluster's fleet revision is the fleet's. Skipped outside the fleet |
+
+The counter step also fails when the counter holds twice what the first
+request used or more: with an entry route a request passes two gateways, and
+only the entry may charge it. It cannot tell for a model with a cost
+expression.
 | The temporary tenant is removed | Nothing is left behind |
 
 A step is **Unclear** when it cannot give an answer. The usual case: the
