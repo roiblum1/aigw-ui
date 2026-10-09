@@ -5,7 +5,7 @@ global:
   imagePullSecrets: []
 
 image:
-  repository: docker.io/roi12345/aigw-ui
+  repository: ghcr.io/roiblum1/aigw-ui
   # Defaults to the chart's appVersion.
   tag: ""
   pullPolicy: IfNotPresent

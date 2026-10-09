@@ -23,7 +23,7 @@ capabilities, and a read-only root filesystem for the server.
 helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --create-namespace
 ```
 
-Images used: `docker.io/roi12345/aigw-ui:<version>` and
+Images used: `ghcr.io/roiblum1/aigw-ui:<version>` and
 `quay.io/sclorg/postgresql-16-c9s:latest`.
 
 ## Disconnected install
@@ -48,7 +48,7 @@ This writes `dist/aigw-ui-offline-<version>.tar.gz` (about 180 MB) with:
 |---|---|---|
 | `PLATFORM` | `linux/amd64` | Target architecture |
 | `PG_IMAGE` | `quay.io/sclorg/postgresql-16-c9s:latest` | For example `registry.redhat.io/rhel9/postgresql-16` |
-| `APP_REPO` | `docker.io/roi12345/aigw-ui` | Name the application image is tagged with |
+| `APP_REPO` | `ghcr.io/roiblum1/aigw-ui` | Name the application image is tagged with |
 
 **2. Carry the tarball inside**, then:
 
@@ -63,7 +63,7 @@ helm upgrade --install aigw-ui ./aigw-ui-*.tgz -n aigw-ui --create-namespace \
 
 `global.imageRegistry` replaces the registry host of both images and keeps the
 rest of the path, so they are pulled from
-`<registry>/roi12345/aigw-ui` and `<registry>/sclorg/postgresql-16-c9s`.
+`<registry>/roiblum1/aigw-ui` and `<registry>/sclorg/postgresql-16-c9s`.
 `load-images.sh` pushes to the same paths.
 
 If the registry needs credentials, create a pull secret in the namespace and
@@ -87,7 +87,7 @@ Back up the encryption key straight away. See
 |---|---|---|
 | `global.imageRegistry` | empty | Mirror registry for both images |
 | `global.imagePullSecrets` | `[]` | Pull secret names |
-| `image.repository` | `docker.io/roi12345/aigw-ui` | Application image |
+| `image.repository` | `ghcr.io/roiblum1/aigw-ui` | Application image |
 | `image.tag` | chart `appVersion` | Application image tag |
 | `replicaCount` | `1` | Keep at 1; each replica polls and syncs every cluster |
 | `config.discoveryInterval` | `60s` | How often clusters are polled for models. `0` turns it off |

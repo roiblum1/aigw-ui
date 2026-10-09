@@ -41,7 +41,7 @@ oc get secret aigw-ui-auth -n aigw-ui -o jsonpath='{.data.admin-token}' | base64
 ```
 
 Open the URL and sign in with the token. The image is
-`docker.io/roi12345/aigw-ui`.
+`ghcr.io/roiblum1/aigw-ui`.
 
 For a disconnected environment, see
 [docs/deployment.md](docs/deployment.md#disconnected-install).

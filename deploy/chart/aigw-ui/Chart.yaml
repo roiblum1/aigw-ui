@@ -2,5 +2,5 @@ apiVersion: v2
 name: aigw-ui
 description: UI and API that manage Envoy AI Gateway on several clusters from one hub
 type: application
-version: 0.7.0
-appVersion: "0.7.0"
+version: 0.7.1
+appVersion: "0.7.1"

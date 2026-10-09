@@ -1,10 +1,11 @@
 # Release notes
 
 One file per release, newest first. The version is the chart version and the
-image tag (`docker.io/roi12345/aigw-ui:<version>`).
+image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.7.1](v0.7.1.md) | 2026-10-09 | The image moved to `ghcr.io/roiblum1/aigw-ui` |
 | [0.7.0](v0.7.0.md) | 2026-10-09 | Site weights from ready model instances |
 | [0.6.1](v0.6.1.md) | 2026-10-09 | **Security fix:** revoked keys and keys of disabled tenants kept working. Architecture page |
 | [0.6.0](v0.6.0.md) | 2026-10-08 | Gateway self-test, audit log, counters that survive other tenants' quota changes |

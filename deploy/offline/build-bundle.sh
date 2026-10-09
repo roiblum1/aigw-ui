@@ -13,7 +13,7 @@ cd "$(dirname "$0")/../.."
 VERSION="${1:-$(sed -n 's/^appVersion: *"\(.*\)"/\1/p' deploy/chart/aigw-ui/Chart.yaml)}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 PG_IMAGE="${PG_IMAGE:-quay.io/sclorg/postgresql-16-c9s:latest}"
-APP_IMAGE="${APP_REPO:-docker.io/roi12345/aigw-ui}:${VERSION}"
+APP_IMAGE="${APP_REPO:-ghcr.io/roiblum1/aigw-ui}:${VERSION}"
 OUT="dist/aigw-ui-offline-${VERSION}"
 
 rm -rf "$OUT" && mkdir -p "$OUT"
