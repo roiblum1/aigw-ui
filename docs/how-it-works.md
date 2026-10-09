@@ -237,7 +237,9 @@ instance, which you declare on the `LLMInferenceService` with
   weights in place Envoy AI Gateway up to 1.2.0 attaches no quota to the
   route. A model with one site therefore keeps its quotas on the entry
   route. With a second site the weights are needed, the quota is not
-  enforced, and the model's row shows a warning.
+  enforced, and the model's row shows a warning. The fix is proposed
+  upstream in
+  [agent-router#2833](https://github.com/theagentrouter/agent-router/pull/2833).
 - *Once per round, for the whole fleet.* Working the weights out after each
   cluster would send the gateways several lists in a row, and every list
   moves conversations.
