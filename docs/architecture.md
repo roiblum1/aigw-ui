@@ -160,7 +160,15 @@ sum over the model's LLMInferenceServices on that cluster of
   `aigw-ui.io/capacity-per-instance`, as any number in a unit that is the same
   for that model everywhere, for example tokens per second from a benchmark.
   Without the annotation an instance counts as 1. The older name
-  `aigw-ui.io/capacity-per-replica` is read when the newer one is not set.
+  `aigw-ui.io/capacity-per-replica` is read when the newer one is not set,
+  and the Models page says so. The number must be from 0.01 to 10000;
+  anything else counts as 1, with a note on the Models page.
+- Every `LLMInferenceService` of the model on the cluster is counted, in any
+  namespace. Set `aigw-ui.io/ignore: "true"` on one that the gateway does
+  not route to, such as a canary, to leave it out.
+- A deployment that has not reported a ready count next to one that has adds
+  nothing. The model is "unknown" on a site only while none of its
+  deployments has reported.
 
 **Which sites.** The sites are the clusters marked *Part of the fleet*. A
 cluster serves a model when it has an `LLMInferenceService` for it;
@@ -193,8 +201,11 @@ The zone weight is the applied capacity × 100, rounded, **and never below
 - A model that would be left with no site keeps the sites and weights it
   has, and the Models page shows why.
 
-The weights are worked out once per discovery round for the whole fleet and
-stored on the model (`models.fleet_zones`). Every cluster is rendered from
+The weight stops at 10,000,000, so the sum over a model's sites fits the
+32-bit number the gateway takes.
+
+The weights are worked out once per discovery round for the whole fleet,
+after every cluster has been polled, and stored on the model (`models.fleet_zones`). Every cluster is rendered from
 that one list: gateways with different weights would send one conversation
 to different sites.
 
@@ -207,7 +218,7 @@ it on every fleet cluster, in the gateway namespace, all named
 | Object | What it says |
 |---|---|
 | `Backend` | One endpoint per site of the model: the site's peer host and port, with the cluster name as `zone`, over mTLS with the fleet CA and the gateway's client certificate |
-| `AIServiceBackend` | Points at that `Backend`. The model's `QuotaPolicy` attaches here and nowhere else |
+| `AIServiceBackend` | Points at that `Backend`. The model's `QuotaPolicy` attaches here |
 | `AIGatewayRoute` | On the client listener: requests for the model go to that backend. Request timeout 3600s in place of the gateway's 60s |
 | `BackendTrafficPolicy` | On the `HTTPRoute` the gateway generates from the route, which has the same name |
 
@@ -224,7 +235,21 @@ The policy holds the routing:
   over its limit answers 503 at once and the request goes to the next one.
 - **Health check:** `GET /healthz/<model>` on each site's peer listener
   every 5s, with `panicThreshold: 0`, so a site that fails is never used
-  however many fail.
+  however many fail. Slashes in a model name stay in the path.
+- **Failing site:** a site that answers five requests in a row with a 5xx is
+  taken out for 30s, longer each time it happens again, and at most half the
+  sites at once. The retry alone does not do this. It picks a site again by
+  the same weights, up to five times, and then takes the failing site
+  anyway: with one site holding 800 of 1100 and answering 503 to everything,
+  one request in seven came back as 503 on a test gateway. One good answer
+  in between keeps a site in, so a site that sheds only part of its load
+  stays.
+- **The health check has to tell the truth.** Every passing check puts a
+  site that was taken out back in. On the test gateway, a site that failed
+  every request **and** its health check lost none of 150 requests to the
+  client. A site that failed every request and still passed its health
+  check lost 7 in 100, down from 15 without the step above. So
+  `/healthz/<model>` on a site must fail when the model cannot serve.
 - **Circuit breaker:** as good as off (100000). Each site's own limit decides.
 
 Nothing is owned twice: the hub is the only writer of these objects, and the
@@ -232,11 +257,35 @@ charts no longer ship an entry policy.
 
 **Switching it on** (Models page, per model, off by default) is refused
 while no fleet cluster serves the model, while the model has endpoints
-entered by hand, or while the server has no `FLEET_DOMAIN`. From then on the
-model's quotas attach to the entry backend alone; the `QuotaPolicy` objects
-next to the clusters' own backends are removed, so the model's quota
-counters restart once. A route a cluster already has for the model keeps the
-traffic until it is removed, because the older route wins the match.
+entered by hand, or while the server has no `FLEET_DOMAIN`. From then on
+requests through the entry route are counted on the entry backend, in a
+counter of its own, so a tenant's usage starts at 0 there.
+
+**A cluster's own route and the quota.** A route a cluster already has for
+the model on the client listener is older than the entry route and wins the
+match, so clients of that cluster keep using it until it is moved. Discovery
+reads which listeners each route is attached to:
+
+| The cluster's own route is attached to | Quota on its backends | What it means |
+|---|---|---|
+| The client listener, or the whole Gateway | Kept | Clients still reach the backend. The Models page names the cluster |
+| Only other listeners, such as the peer listener | Removed | Only other sites' gateways reach it, and they have charged the request already |
+
+A route on the whole Gateway is reached from both sides, so a request that
+another site forwards is counted there a second time, in the backend's own
+counter. Attach the route to the peer listener alone to end that.
+
+**An entry route that cannot be rendered is held.** When the server has no
+`FLEET_DOMAIN`, or none of a model's sites is a fleet cluster with a peer
+host any more, the hub renders nothing for that model and removes nothing
+of it: the four objects and the `QuotaPolicy` stay on the clusters as they
+are. Keys, quotas and every other model are still synced. The cluster's
+sync message and the Models page say which model is held and why. A missing
+setting is never read as "switched off".
+
+**A fleet cluster cannot be renamed.** Its name is its zone on every
+gateway, and a new zone deals every model's conversations out again. Take
+the cluster out of the fleet first.
 
 **Same fleet everywhere.** Everything that must be equal on every fleet
 cluster (each model's sites and weights, and the shared settings) is hashed
@@ -244,6 +293,25 @@ into a *fleet revision*. A sync that applied everything stores it on the
 cluster. The Clusters page shows it, and marks a fleet cluster "outdated"
 while its revision is not the fleet's current one: until it is synced, it
 can send a conversation to another site than the other clusters do.
+
+**What the entry route does not do.** These are limits of this version:
+
+- A request without the session header has nothing to hash and goes to a
+  site picked at random each time, so only clients that send the header get
+  cache reuse. A client that sends it also chooses its site by choosing the
+  value.
+- The site is picked by capacity, not by load. A site that is up and slow
+  keeps its share.
+- Sites that declare different `aigw-ui.io/model-revision` values still
+  share the model's traffic. The Models page warns; nothing is held back.
+- A request that was reset after it was sent in full is tried on another
+  site, so the work can be done twice. It is charged once.
+- Every gateway checks every site of every model: gateways × sites × models
+  probes every 5 seconds. Six clusters, six sites and 20 models are 720.
+- A cluster's own traffic also goes out to its peer host and comes back in.
+- The peer listener checks no key. The client certificate in
+  `llm-peer-client` is all that stands between a caller and every model,
+  without a quota. Whoever can read Secrets in a gateway namespace has that.
 
 **What each cluster must already have** (from the gateway chart): the client
 and peer listeners, the ConfigMap `llm-peer-ca` and the Secret

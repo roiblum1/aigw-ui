@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/url"
 	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -45,6 +47,17 @@ const (
 	// decides how much it takes.
 	fleetBreakerLimit int64 = 100000
 )
+
+// healthPath is where a site answers for one model. The slashes of a name
+// such as "zai-org/GLM-5.3" stay: they are part of the path. Anything else
+// that is not allowed in a path is escaped.
+func healthPath(model string) string {
+	segments := strings.Split(model, "/")
+	for i, s := range segments {
+		segments[i] = url.PathEscape(s)
+	}
+	return "/healthz/" + strings.Join(segments, "/")
+}
 
 // FleetName is the name of a model's entry objects.
 func FleetName(slug string) string { return "fleet-" + slug }
@@ -176,9 +189,34 @@ func fleetTrafficPolicy(s State, m Model) *unstructured.Unstructured {
 				"healthyThreshold":   int64(2),
 				"http": map[string]any{
 					"hostname":         s.Fleet.PeerSNI,
-					"path":             "/healthz/" + m.Name,
+					"path":             healthPath(m.Name),
 					"expectedStatuses": []any{int64(200)},
 				},
+			},
+			// A site can pass its health check and still answer every
+			// request with an error. The retry does not reliably leave such
+			// a site: it picks again by the same weights, and after five
+			// picks it takes the failing site anyway. With one site holding
+			// 800 of 1100, one request in seven came back as 503 on a test
+			// gateway. So a site that answers five requests in a row with
+			// an error is taken out for a while, and its conversations go
+			// to the others. One good answer in between keeps it in: a site
+			// that only sheds part of its load is not taken out.
+			//
+			// This covers the seconds until the health check fails as well.
+			// It only halves the errors while the health check keeps
+			// passing, because every passing check puts the site back. The
+			// site's /healthz/<model> has to fail when the model cannot
+			// serve.
+			"passive": map[string]any{
+				"consecutive5XxErrors":     int64(5),
+				"consecutiveGatewayErrors": int64(5),
+				"interval":                 "3s",
+				"baseEjectionTime":         "30s",
+				// Never more than half the sites, and always at least one,
+				// so a model with two sites is covered too.
+				"maxEjectionPercent":     int64(50),
+				"alwaysEjectOneEndpoint": true,
 			},
 		},
 		"circuitBreaker": map[string]any{

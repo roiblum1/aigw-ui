@@ -85,13 +85,16 @@ polls, and the health checks take a dead site out sooner.
 |---|---|---|
 | A site shows "not listed" | The cluster is not **Part of the fleet**, or has no `LLMInferenceService` whose `spec.model.name` is the model name here | Tick it, or make the names equal on every site |
 | "Site weights not updated: no site is left that serves the model" | Every site stopped serving the model or left the fleet | The gateways keep the last sites. Bring a site back, or switch the entry route off |
-| Sync fails with "has an entry route and no site to send to" | The model's sites have no peer host any more | Set the peer host on the fleet clusters. Nothing was changed on the cluster |
+| A sync message says "The entry route of … was left as it is" | The server has no `FLEET_DOMAIN`, or none of the model's sites is a fleet cluster with a peer host | Set the chart's `fleet.domain`, or bring a site back into the fleet. Until then the model's objects stay on the clusters unchanged, and everything else is synced |
+| The Models page says a cluster's own route "is still attached to the client listener or the whole Gateway" | The model has an entry route, and the cluster's chart still exposes the model to clients itself. The older route wins | Attach the chart's route to the peer listener alone. Until then the cluster's backends keep the quota |
+| A site's weight is higher than what the gateway can route to | A canary or test `LLMInferenceService` with the same model name is counted | Set `aigw-ui.io/ignore: "true"` on it |
+| Requests fail with 503 for a while after a site starts failing | A site is taken out after five 5xx answers in a row, and tried again after 30s | Expected for a few requests each time. If it goes on, drain the site |
 | Discovery fails with "read what the cluster serves" | The kubeconfig cannot list `llminferenceservices` | Use a kubeconfig that can. The poll changed nothing |
 | "Entry route" cannot be switched on: "no FLEET_DOMAIN" | The chart's `fleet.domain` is empty | Set it and upgrade |
 | A cluster shows "fleet · outdated" for more than a few minutes | Its last sync failed, or auto sync is off | Read the cluster's sync message and press **Sync**. Until then it can choose another site for a conversation than the rest |
 | A site in the fleet gets no traffic for a model | Its health check `GET /healthz/<model>` on the peer listener fails | Check the model's serving route on that site and the peer certificates |
 | Cross-site requests get 401 at the serving site | The API-key policy covers the listener other sites forward to | Set the cluster's **Client listener** |
-| Saving a cluster fails with "a fleet cluster …" | **Part of the fleet** needs **Enforce API keys**, a client listener, a peer host, and the gateway namespace the other fleet clusters use | Set them, or leave the fleet |
+| Saving a cluster fails with "a fleet cluster …" | **Part of the fleet** needs **Enforce API keys**, a client listener, a peer host, and the gateway namespace the other fleet clusters use. A fleet cluster also cannot be renamed | Set them, or leave the fleet |
 
 ## Checking what is on a cluster
 

@@ -221,3 +221,25 @@ func TestQuotaStaysOnBackendsClientsReach(t *testing.T) {
 		t.Errorf("quota targets = %v, want %v", targets, want)
 	}
 }
+
+func TestHealthPath(t *testing.T) {
+	for model, want := range map[string]string{
+		"glm-5.3":             "/healthz/glm-5.3",
+		"zai-org/GLM-5.3-FP8": "/healthz/zai-org/GLM-5.3-FP8",
+		"my model?v=1#a":      "/healthz/my%20model%3Fv=1%23a",
+	} {
+		if got := healthPath(model); got != want {
+			t.Errorf("healthPath(%q) = %q, want %q", model, got, want)
+		}
+	}
+}
+
+// Without passive checks a site that passes its health check and answers
+// every request with 503 keeps part of its conversations.
+func TestFleetPolicyTakesOutAFailingSite(t *testing.T) {
+	policy := find(t, Objects(fleetState()), "BackendTrafficPolicy", "fleet-glm-5-3")
+	passive, found, _ := unstructured.NestedMap(policy.Object, "spec", "healthCheck", "passive")
+	if !found || passive["consecutive5XxErrors"] != int64(5) || passive["alwaysEjectOneEndpoint"] != true {
+		t.Errorf("passive = %v", passive)
+	}
+}
