@@ -162,6 +162,17 @@ model's quota counters restart once. Do not switch it on before the clusters
 have their peer listeners and certificates; see
 [architecture.md](architecture.md#entry-route).
 
+**When a budget is spent.** A model with an entry route has a second
+selector in its row. *Refuse* answers 429 to a tenant whose budget is spent,
+as before. *Best-effort* keeps answering: the tenant's requests are queued
+behind everyone else's and are the first to be dropped when a site is full.
+The tenant goes back to normal when its quota's window ends. *Best-effort,
+also without a quota* does the same for tenants that have no quota on the
+model. The Usage page shows who is served as best-effort right now, how many
+tokens that was, and the earlier periods. Read
+[what it does and why](how-it-works.md#best-effort-when-a-budget-is-spent)
+before turning it on: a tenant can still get 429 for a few seconds.
+
 **Drain a site.** Before maintenance on one site, press **Drain** next to the
 cluster in the model's row. The site's weight steps down to 1, then the site
 leaves the model's sites, and its conversations move to the other sites. Press **Undrain** afterwards. The last

@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.9.0](v0.9.0.md) | not released yet | A model can serve a tenant past its budget as best-effort; a new quota reaches the proxy without another change |
 | [0.8.0](v0.8.0.md) | not released yet | The hub renders each model's entry route for the fleet; no zone weight below 1 |
 | [0.7.1](v0.7.1.md) | 2026-10-09 | The image moved to `ghcr.io/roiblum1/aigw-ui` |
 | [0.7.0](v0.7.0.md) | 2026-10-09 | Site weights from ready model instances |

@@ -99,6 +99,8 @@ Back up the encryption key straight away. See
 | `redis.allowReset` | `false` | Allow resetting a tenant's usage. The server then deletes counters in Redis, so its Redis user needs `DEL` |
 | `redis.keyPrefix` | empty | The rate limit service's `CACHE_KEY_PREFIX`, if set |
 | `config.syncInterval` | `5m` | How often every cluster is synced again without a change. `0` turns it off. Needs `autoSync` |
+| `config.overageInterval` | `15s` | For models that serve a spent budget as best-effort: how often the usage counters are read. At least `5s`. Needs `redis.url` |
+| `config.overageThreshold` | `0.9` | The share of its budget a tenant has to have used to be moved to best-effort, from `0.5` to `1` |
 | `fleet.domain` | empty | The sites' listener for other sites answers as `peers.llm.<domain>`. Empty, with `fleet.peerSNI` empty too: no entry route can be turned on |
 | `fleet.peerSNI` | empty | That server name, when it is not `peers.llm.<domain>` |
 | `fleet.peerCAConfigMap` | `llm-peer-ca` | ConfigMap in each gateway namespace with the CA of the sites' peer certificates |
@@ -148,6 +150,20 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
    route before it passes.
 4. Run the self-test again after every upgrade of Envoy Gateway or the AI
    Gateway. The patch names the generated route, and that name can change.
+
+## Before a model serves a spent budget as best-effort
+
+1. The model needs its entry route, and the server needs Redis
+   (`redis.url`): it finds a spent budget in the usage counters.
+2. On every cluster that serves the model, the model's release must define
+   an `InferenceObjective` named `best-effort` in the model's namespace,
+   with a lower priority than `standard`. The hub sends the name in the
+   header `x-llm-d-inference-objective` and does not create the object. A
+   serving site that does not know the name cannot queue these requests
+   behind the others.
+3. After switching the model, run **Self-test** on a cluster with that
+   model. Its step "A tenant past its budget is served as best-effort"
+   proves that the second route takes the tenant's requests.
 
 ## Upgrade
 

@@ -364,6 +364,33 @@ revision means one model name gives different answers, and a smaller
 `max-model-len` means a long request fails at that site. The tool only warns;
 the operator decides, and can drain a site.
 
+## Best-effort route
+
+A model in best-effort mode has, on every fleet cluster, a second
+`AIServiceBackend`, `fleet-<slug>-be`, that sends to the same `Backend` and
+sets `x-llm-d-inference-objective: best-effort`, and a `QuotaPolicy` of the
+same name that counts in shadow mode. While at least one tenant is past its
+budget it also has an `AIGatewayRoute`, a `BackendTrafficPolicy` and an
+`EnvoyPatchPolicy` called `fleet-<slug>-be` (the patch `…-be-retry`). The
+route matches the model header and `x-aigw-client-id` against the listed
+tenants. The traffic policy is the entry route's, with 429 added to the
+statuses that send a request to the next site.
+
+The overage loop (`internal/overage`) decides who is listed. It reads the
+usage report, the same counters as the Usage page, every `OVERAGE_INTERVAL`
+and stores each move in the table `overage` with the end of the quota's
+window. A change of the set queues one sync of all clusters.
+[What each action does](how-it-works.md#best-effort-when-a-budget-is-spent)
+has the reasons.
+
+Seen on a test gateway (Envoy Gateway 1.9.1, AI Gateway 1.1.0): a tenant at
+38 of 30 tokens was moved 4 seconds after the mode was set and answered 18
+seconds after; the serving site received `best-effort` for it and `standard`
+for another tenant, also when the client sent a class of its own; a usage
+reset put it back. Not seen there: a request going to a second site after a
+429, because the test fleet has one site, and a serving site dropping
+best-effort requests first, because it runs no real model.
+
 ## API-key policy and the peer listener
 
 A fleet cluster must have a *Client listener* set. The `SecurityPolicy`
