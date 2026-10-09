@@ -73,14 +73,27 @@ const Scale = 100
 // publishing every change to that gateway, key revocations included.
 const MinWeight = 1
 
+// MaxWeight is the highest weight a site gets. The gateway takes a 32-bit
+// number and adds the weights of a model's sites up; with this limit a model
+// would need more than 400 sites to pass it.
+const MaxWeight = 10_000_000
+
 // Weight returns the zone weight for a capacity. A site with nothing ready,
 // or one that has not reported yet, gets MinWeight: its health check keeps
 // traffic off it, and it ramps up from there.
 func Weight(capacity *float64) int64 {
-	if capacity == nil {
+	if capacity == nil || math.IsNaN(*capacity) {
 		return MinWeight
 	}
-	return max(MinWeight, int64(math.Round(*capacity*Scale)))
+	// Compared as floats: converting a number that does not fit is undefined.
+	scaled := math.Round(*capacity * Scale)
+	switch {
+	case scaled >= MaxWeight:
+		return MaxWeight
+	case scaled <= MinWeight:
+		return MinWeight
+	}
+	return int64(scaled)
 }
 
 // Zones returns the zone weights of the sites listed for one model, sorted

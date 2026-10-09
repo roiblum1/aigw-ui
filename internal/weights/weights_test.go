@@ -1,6 +1,9 @@
 package weights
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func f(v float64) *float64 { return &v }
 func n(v int64) *int64     { return &v }
@@ -59,7 +62,7 @@ func TestZones(t *testing.T) {
 // Envoy rejects a locality weight below 1, and Envoy Gateway then stops
 // publishing anything to that gateway.
 func TestWeightIsNeverBelowOne(t *testing.T) {
-	for _, c := range []*float64{nil, f(0), f(-1), f(0.0001), f(0.004), f(0.005), f(1), f(1e6)} {
+	for _, c := range []*float64{nil, f(0), f(-1), f(0.0001), f(0.004), f(0.005), f(1), f(1e6), f(math.NaN()), f(math.Inf(-1))} {
 		if w := Weight(c); w < 1 {
 			t.Errorf("Weight(%v) = %d", c, w)
 		}
@@ -84,5 +87,17 @@ func TestInstances(t *testing.T) {
 		if got != tc.want || known != tc.known {
 			t.Errorf("%s: got %v %v, want %v %v", name, got, known, tc.want, tc.known)
 		}
+	}
+}
+
+// A capacity that does not fit a weight must not wrap around.
+func TestWeightHasAnUpperLimit(t *testing.T) {
+	for _, c := range []*float64{f(1e6), f(1e30), f(math.Inf(1))} {
+		if w := Weight(c); w != MaxWeight {
+			t.Errorf("Weight(%v) = %d, want %d", *c, w, MaxWeight)
+		}
+	}
+	if w := Weight(f(8)); w != 800 {
+		t.Errorf("Weight(8) = %d", w)
 	}
 }

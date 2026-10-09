@@ -52,6 +52,14 @@ func TestRealAPIServerCapacity(t *testing.T) {
 	svc("older", `"aigw-ui.io/capacity-per-replica":"2"`, `{"model":{"name":"`+model("older")+`"}}`, `{"primary":{"kind":"Deployment","name":"older","readyReplicas":3}}`)
 	// Just created: no status yet. Unknown, not zero.
 	svc("new", "", `{"model":{"name":"`+model("new")+`"},"replicas":2}`, "")
+	// A canary is left out. A new deployment next to a running one adds
+	// nothing and does not make the model unknown.
+	svc("canary", `"aigw-ui.io/ignore":"true"`, `{"model":{"name":"`+model("mixed")+`"}}`, `{"primary":{"kind":"Deployment","name":"canary","readyReplicas":5}}`)
+	svc("mixed-old", "", `{"model":{"name":"`+model("mixed")+`"}}`, `{"primary":{"kind":"Deployment","name":"mixed-old","readyReplicas":0}}`)
+	svc("mixed-new", "", `{"model":{"name":"`+model("mixed")+`"}}`, "")
+	// A declared capacity that is no usable number counts as 1.
+	svc("inf", `"aigw-ui.io/capacity-per-instance":"Inf"`, `{"model":{"name":"`+model("inf")+`"}}`, `{"primary":{"kind":"Deployment","name":"inf","readyReplicas":2}}`)
+	svc("huge", `"aigw-ui.io/capacity-per-instance":"1e12"`, `{"model":{"name":"`+model("huge")+`"}}`, `{"primary":{"kind":"Deployment","name":"huge","readyReplicas":2}}`)
 	svc("stopped", `"serving.kserve.io/stop":"true"`, `{"model":{"name":"`+model("stopped")+`"},"replicas":2}`, "")
 
 	all, err := c.Capacity(ctx)
@@ -69,6 +77,9 @@ func TestRealAPIServerCapacity(t *testing.T) {
 		model("older"):   {6, true, 2},
 		model("new"):     {0, false, 1},
 		model("stopped"): {0, true, 1},
+		model("mixed"):   {0, true, 1},
+		model("inf"):     {2, true, 1},
+		model("huge"):    {2, true, 1},
 	}
 	seen := 0
 	for _, m := range all {
