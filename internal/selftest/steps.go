@@ -279,6 +279,7 @@ func (t *test) counter() (string, string) {
 	}
 	start := time.Now()
 	hint := ""
+	again := false
 	for time.Since(start) < counterWait {
 		rep, err := t.r.usage.Report(t.ctx, t.tenant.ID)
 		if err != nil {
@@ -300,6 +301,17 @@ func (t *test) counter() (string, string) {
 				return Failed, detail
 			}
 			return Passed, fmt.Sprintf("%d tokens counted for the tenant on %s, for one request that used %d. The counter names the Usage page computes are right.", q.Used, strings.Join(where, ", "), t.firstTokens)
+		}
+		// The key can reach the gateway before the tenant's rule reaches
+		// the rate limit service. The first request is then answered and
+		// counted nowhere under the tenant's name. Counting is done when
+		// the answer is, so a counter that is not there by now will not
+		// come: one more request tells a late rule from a wrong name.
+		if !again && time.Since(start) > counterWait/2 {
+			again = true
+			if res, err := t.chat(t.key); err == nil && res.Status == http.StatusOK {
+				t.firstTokens = res.Tokens
+			}
 		}
 		if !t.wait() {
 			break

@@ -7,7 +7,10 @@
 package render
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"regexp"
 	"sort"
 	"strings"
@@ -152,6 +155,11 @@ type State struct {
 }
 
 // Objects returns the desired objects in the order they should be applied.
+//
+// A model's routes come before its QuotaPolicy, and that order matters. The
+// gateway's controller takes a route's annotation over to the proxy only
+// when something makes it look at the route again, and a changed
+// QuotaPolicy is what does. See quotaRevision.
 func Objects(s State) []*unstructured.Unstructured {
 	models := append([]Model(nil), s.Models...)
 	sort.Slice(models, func(i, j int) bool { return models[i].Slug < models[j].Slug })
@@ -185,6 +193,42 @@ func Objects(s State) []*unstructured.Unstructured {
 		out = append(out, authPolicy(s))
 	}
 	return out
+}
+
+// QuotaRevisionAnnotation is set on every AIGatewayRoute this tool renders.
+const QuotaRevisionAnnotation = "aigw-ui.io/quota-revision"
+
+// quotaRevision identifies the quota rules of a model. It goes on the
+// model's routes as an annotation, to work around this in AI Gateway 1.1.0:
+// a tenant's rule is enforced through an entry in the proxy's route, and
+// that entry is only written when Envoy Gateway builds the route again. A
+// changed QuotaPolicy alone does not make it do so: the controller looks at
+// the route, finds nothing to change, and the new tenant is not counted or
+// limited until something else changes, such as a key.
+//
+// The controller copies a route's annotations to the HTTPRoute it generates,
+// so an annotation that changes with the rules makes the HTTPRoute change,
+// and Envoy Gateway builds the route with the new rules.
+func quotaRevision(m Model) string {
+	limit, window := m.defaultBucket(false)
+	data, err := json.Marshal(struct {
+		Rules  []TenantQuota
+		Limit  int64
+		Window string
+		Cost   string
+	}{tenantRules(m), limit, window, m.CostExpression})
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:6])
+}
+
+// modelRoute returns an AIGatewayRoute of a model without its spec.
+func modelRoute(namespace, name string, m Model) *unstructured.Unstructured {
+	u := object(aigwAPI, "AIGatewayRoute", namespace, name)
+	u.SetAnnotations(map[string]string{QuotaRevisionAnnotation: quotaRevision(m)})
+	return u
 }
 
 func object(apiVersion, kind, namespace, name string) *unstructured.Unstructured {
@@ -221,7 +265,7 @@ func aiServiceBackend(s State, m Model) *unstructured.Unstructured {
 }
 
 func route(s State, m Model) *unstructured.Unstructured {
-	u := object(aigwAPI, "AIGatewayRoute", s.Namespace, m.Slug)
+	u := modelRoute(s.Namespace, m.Slug, m)
 	u.Object["spec"] = map[string]any{
 		"parentRefs": []any{
 			map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName},

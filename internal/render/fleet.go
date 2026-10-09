@@ -196,7 +196,7 @@ func fleetRoute(s State, m Model) *unstructured.Unstructured {
 		// cannot be sent as another class by a header of its own.
 		backendRef["headerMutation"] = objectiveHeader(ObjectiveStandard)
 	}
-	u := object(aigwAPI, "AIGatewayRoute", s.Namespace, FleetName(m.Slug))
+	u := modelRoute(s.Namespace, FleetName(m.Slug), m)
 	u.Object["spec"] = map[string]any{
 		"parentRefs": []any{fleetParent(s)},
 		"rules": []any{
@@ -223,7 +223,7 @@ func fleetRoute(s State, m Model) *unstructured.Unstructured {
 // before the AI gateway reads the model from the body and matches again.
 func fleetOverageRoute(s State, m Model, tenants []string) *unstructured.Unstructured {
 	name := BestEffortName(m.Slug)
-	u := object(aigwAPI, "AIGatewayRoute", s.Namespace, name)
+	u := modelRoute(s.Namespace, name, m)
 	u.Object["spec"] = map[string]any{
 		"parentRefs": []any{fleetParent(s)},
 		"rules": []any{

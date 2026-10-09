@@ -227,3 +227,39 @@ func TestFleetRevisionCoversOverage(t *testing.T) {
 		t.Error("the revision depends on the order the tenants are given in")
 	}
 }
+
+// A new tenant rule has to change the model's routes, and the routes have to
+// be applied before the QuotaPolicy: see quotaRevision.
+func TestQuotaRevisionOnRoutes(t *testing.T) {
+	revision := func(s State, name string) string {
+		return find(t, Objects(s), "AIGatewayRoute", name).GetAnnotations()[QuotaRevisionAnnotation]
+	}
+	before := bestEffortState("team-a")
+	after := bestEffortState("team-a")
+	after.Models[0].Quotas = append(after.Models[0].Quotas, TenantQuota{TenantSlug: "team-b", Slot: 1, Limit: 5, Window: "1h"})
+	for _, name := range []string{"fleet-glm-5-3", "fleet-glm-5-3-be"} {
+		a, b := revision(before, name), revision(after, name)
+		if a == "" || a == b {
+			t.Errorf("%s: revision %q before and %q after a tenant got a quota", name, a, b)
+		}
+	}
+	if revision(before, "fleet-glm-5-3") != revision(bestEffortState("team-a", "team-b"), "fleet-glm-5-3") {
+		t.Error("the revision changed although no quota did")
+	}
+	if revision(before, "local") == "" {
+		t.Error("a model added by hand has no revision on its route")
+	}
+
+	position := map[string]int{}
+	for i, o := range Objects(after) {
+		position[o.GetKind()+"/"+o.GetName()] = i
+	}
+	for route, policy := range map[string]string{
+		"AIGatewayRoute/fleet-glm-5-3":    "QuotaPolicy/glm-5-3",
+		"AIGatewayRoute/fleet-glm-5-3-be": "QuotaPolicy/fleet-glm-5-3-be",
+	} {
+		if position[route] > position[policy] {
+			t.Errorf("%s is applied after %s", route, policy)
+		}
+	}
+}
