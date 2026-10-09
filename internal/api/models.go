@@ -263,7 +263,7 @@ func ownRouteWarnings(m store.Model, fleet map[string]bool) []string {
 	if len(clusters) == 0 {
 		return nil
 	}
-	return []string{"On " + strings.Join(clusters, ", ") + " the cluster's own route for the model is still attached to the client listener or the whole Gateway. " +
+	return []string{"On " + strings.Join(clusters, ", ") + " the cluster's own route for the model is still attached to the client listener, to the whole Gateway, or by port and not by listener name. " +
 		"It is older than the entry route and wins, so clients there do not use the entry route. Its backends keep the quota. Attach that route to the peer listener alone."}
 }
 

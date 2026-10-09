@@ -213,6 +213,15 @@ func (s *Syncer) Probe(ctx context.Context, id string) (kube.Probe, error) {
 	return client.Probe(ctx, c.Namespace, c.GatewayName)
 }
 
+// ProbeWith is Probe for a cluster that is not stored yet.
+func (s *Syncer) ProbeWith(ctx context.Context, kubeconfig []byte, namespace, gatewayName string) (kube.Probe, error) {
+	client, err := kube.New(kubeconfig)
+	if err != nil {
+		return kube.Probe{}, err
+	}
+	return client.Probe(ctx, namespace, gatewayName)
+}
+
 func (s *Syncer) client(ctx context.Context, id string) (*kube.Client, error) {
 	kubeconfig, err := s.st.Kubeconfig(ctx, id)
 	if err != nil {

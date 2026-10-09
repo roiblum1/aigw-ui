@@ -54,10 +54,11 @@ const (
 	// on it for one conversation in seven, and those get that site's 503
 	// however many retries are allowed. 20 leaves none.
 	fleetHostAttempts int64 = 20
-
-	// RetryPatchName is the EnvoyPatchPolicy that sets fleetHostAttempts.
-	RetryPatchName = "aigw-ui-fleet-retry"
 )
+
+// RetryPatchName is the name of the EnvoyPatchPolicy that sets
+// fleetHostAttempts on one model's entry route.
+func RetryPatchName(slug string) string { return FleetName(slug) + "-retry" }
 
 // healthPath is where a site answers for one model. The slashes of a name
 // such as "zai-org/GLM-5.3" stay: they are part of the path. Anything else
@@ -85,7 +86,7 @@ func (m Model) fleetSites() []FleetSite {
 // site's gateway take a request for the model and send it to a site that
 // serves it.
 func fleetObjects(s State, m Model) []*unstructured.Unstructured {
-	return []*unstructured.Unstructured{fleetBackend(s, m), fleetServiceBackend(s, m), fleetRoute(s, m), fleetTrafficPolicy(s, m)}
+	return []*unstructured.Unstructured{fleetBackend(s, m), fleetServiceBackend(s, m), fleetRoute(s, m), fleetTrafficPolicy(s, m), fleetRetryPatch(s, m)}
 }
 
 // fleetBackend lists the sites that serve the model, one zone each. The
@@ -226,47 +227,47 @@ func sessionHeaders(f FleetConfig) []any {
 }
 
 // fleetRetryPatch raises the number of sites the gateway picks from on a
-// retry, for the route of every model with an entry route. Envoy Gateway has
-// no setting for it, so the generated route is patched. It needs
+// retry, on the route of one model's entry route. Envoy Gateway has no
+// setting for it, so the generated route is patched. It needs
 // enableEnvoyPatchPolicy in the Envoy Gateway configuration; without it the
 // policy is not programmed and a sync reports it.
-func fleetRetryPatch(s State, models []Model) *unstructured.Unstructured {
-	patches := make([]any, 0, len(models))
-	for _, m := range models {
-		patches = append(patches, map[string]any{
+//
+// Each model has a policy of its own: Envoy Gateway applies the patches of
+// one policy together, so in a shared policy one model whose route is not
+// there yet would take the setting away from every model.
+func fleetRetryPatch(s State, m Model) *unstructured.Unstructured {
+	u := object(egAPI, "EnvoyPatchPolicy", s.Namespace, RetryPatchName(m.Slug))
+	u.Object["spec"] = map[string]any{
+		"targetRef": map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName},
+		"type":      "JSONPatch",
+		"jsonPatches": []any{map[string]any{
 			"type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
 			// The route configuration of the listener the entry route is on.
 			"name": s.Namespace + "/" + s.GatewayName + "/" + s.ClientListener,
 			"operation": map[string]any{
-				"op": "replace",
+				// "add" also replaces a value that is there, so the patch
+				// still works if Envoy Gateway stops setting its own.
+				"op": "add",
 				// The route Envoy Gateway generates from the "fleet" rule,
 				// the first of the model's AIGatewayRoute.
 				"jsonPath": "..routes[?(@.name == 'httproute/" + s.Namespace + "/" + FleetName(m.Slug) + "/rule/0/match/0/*')].route.retry_policy",
 				"path":     "host_selection_retry_max_attempts",
 				"value":    fleetHostAttempts,
 			},
-		})
-	}
-	u := object(egAPI, "EnvoyPatchPolicy", s.Namespace, RetryPatchName)
-	u.Object["spec"] = map[string]any{
-		"targetRef":   map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName},
-		"type":        "JSONPatch",
-		"jsonPatches": patches,
+		}},
 	}
 	return u
 }
 
 // HeldNames returns the names of the objects a sync must not remove: the
-// entry objects and the QuotaPolicy of every held model.
+// entry objects of every held model. All of them are in the gateway
+// namespace, and no other object of this tool has such a name.
 func HeldNames(s State) map[string]bool {
 	names := map[string]bool{}
 	for _, m := range s.Models {
 		if m.Held() {
 			names[FleetName(m.Slug)] = true
-			names[m.Slug] = true
-			// The patch is rendered from the models that are not held. It
-			// stays while any is, or a held route would lose its part of it.
-			names[RetryPatchName] = true
+			names[RetryPatchName(m.Slug)] = true
 		}
 	}
 	return names

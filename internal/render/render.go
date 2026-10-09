@@ -85,9 +85,9 @@ type Model struct {
 	// that clients can still reach through a route of the cluster's own.
 	Fleet []FleetSite
 	// HeldReason is set for a model that has an entry route which cannot be
-	// rendered right now, with the reason. Nothing is rendered for it and
-	// what the cluster has for it is left as it is: removing the route
-	// would make the model unreachable, and with it its quotas.
+	// rendered right now, with the reason. Its entry objects on the cluster
+	// are left as they are: removing the route would make the model
+	// unreachable. Its quotas are still rendered.
 	HeldReason string
 }
 
@@ -140,17 +140,17 @@ func Objects(s State) []*unstructured.Unstructured {
 	sort.Slice(models, func(i, j int) bool { return models[i].Slug < models[j].Slug })
 
 	var out []*unstructured.Unstructured
-	var fleet []Model
 	if s.AuthEnabled {
 		out = append(out, keysSecret(s))
 	}
 	for _, m := range models {
-		if m.Held() {
-			continue
-		}
 		switch {
+		case m.Held():
+			// The entry objects stay on the cluster as they are. The quotas
+			// are still rendered, against the entry backend that is there:
+			// a model can be held for days, and a limit that was lowered
+			// or a tenant that left must not wait for that.
 		case len(m.Fleet) > 0:
-			fleet = append(fleet, m)
 			out = append(out, fleetObjects(s, m)...)
 		case m.Existing == nil:
 			out = append(out, backend(s, m), aiServiceBackend(s, m), route(s, m))
@@ -159,23 +159,10 @@ func Objects(s State) []*unstructured.Unstructured {
 			out = append(out, quotaPolicies(s, m)...)
 		}
 	}
-	if len(fleet) > 0 && !held(s) {
-		out = append(out, fleetRetryPatch(s, fleet))
-	}
 	if s.AuthEnabled {
 		out = append(out, authPolicy(s))
 	}
 	return out
-}
-
-// held reports whether any model of the state is held.
-func held(s State) bool {
-	for _, m := range s.Models {
-		if m.Held() {
-			return true
-		}
-	}
-	return false
 }
 
 func object(apiVersion, kind, namespace, name string) *unstructured.Unstructured {

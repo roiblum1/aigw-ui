@@ -8,6 +8,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"aigw-ui/internal/gateway"
+	"aigw-ui/internal/kube"
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
 )
@@ -137,6 +138,19 @@ func checkFleet(c store.Cluster, all []store.Cluster) error {
 	return nil
 }
 
+// fleetProbeError refuses a cluster that joins the fleet without the
+// EnvoyPatchPolicy kind. Every entry route needs one: without it a site that
+// answers 503 keeps part of its conversations.
+func fleetProbeError(p kube.Probe, err error) error {
+	switch {
+	case err != nil:
+		return invalid("the cluster could not be asked whether it has what a fleet cluster needs: %v", err)
+	case !p.Kinds["EnvoyPatchPolicy"]:
+		return invalid("the cluster has no EnvoyPatchPolicy kind, which every entry route needs. Install the Envoy Gateway CRDs and set extensionApis.enableEnvoyPatchPolicy: true")
+	}
+	return nil
+}
+
 func (s *Server) checkFleet(r *http.Request, c store.Cluster) error {
 	all, err := s.st.ListClusters(r.Context())
 	if err != nil {
@@ -171,6 +185,9 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 	in, err := b.cluster(nil)
 	if err == nil {
 		err = s.checkFleet(r, in)
+	}
+	if err == nil && in.FleetEnabled {
+		err = fleetProbeError(s.sy.ProbeWith(r.Context(), []byte(b.Kubeconfig), in.Namespace, in.GatewayName))
 	}
 	if err != nil {
 		fail(w, err)
@@ -207,6 +224,9 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = s.checkFleet(r, in)
 	}
+	if err == nil && in.FleetEnabled && !current.FleetEnabled {
+		err = fleetProbeError(s.sy.Probe(r.Context(), current.ID))
+	}
 	if err != nil {
 		fail(w, err)
 		return
@@ -228,17 +248,18 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	if c.FleetEnabled {
+		// Its gateway would keep the entry routes with the sites and weights
+		// of today, and its keys, with nobody to update or revoke them.
+		writeError(w, http.StatusConflict, c.Name+" is part of the fleet. Take it out of the fleet and wait for its sync first, so its entry routes are removed.")
+		return
+	}
 	if err := s.st.DeleteCluster(r.Context(), c.ID); err != nil {
 		fail(w, err)
 		return
 	}
-	if c.FleetEnabled {
-		// The other fleet clusters still list it as a site.
-		s.changed(r, "cluster.delete", "Removed fleet cluster "+c.Name+". Objects already applied to it were left in place.")
-	} else {
-		s.log(r, "cluster.delete", "Removed cluster "+c.Name, true,
-			"The cluster is no longer managed. Objects already applied to it were left in place.")
-	}
+	s.log(r, "cluster.delete", "Removed cluster "+c.Name, true,
+		"The cluster is no longer managed. Objects already applied to it were left in place.")
 	w.WriteHeader(http.StatusNoContent)
 }
 

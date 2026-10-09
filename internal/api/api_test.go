@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"aigw-ui/internal/kube"
 	"aigw-ui/internal/store"
 )
 
@@ -192,5 +194,23 @@ func TestOwnRouteWarnings(t *testing.T) {
 	m.Fleet = false
 	if got := ownRouteWarnings(m, fleet); got != nil {
 		t.Errorf("a model without an entry route got %q", got)
+	}
+}
+
+// A cluster joins the fleet only when it can take the retry patch every
+// entry route comes with.
+func TestFleetNeedsThePatchKind(t *testing.T) {
+	for name, tc := range map[string]struct {
+		probe kube.Probe
+		err   error
+		ok    bool
+	}{
+		"has the kind":    {kube.Probe{Kinds: map[string]bool{"EnvoyPatchPolicy": true}}, nil, true},
+		"kind missing":    {kube.Probe{Kinds: map[string]bool{"EnvoyPatchPolicy": false, "Backend": true}}, nil, false},
+		"cannot be asked": {kube.Probe{}, errors.New("dial tcp: timeout"), false},
+	} {
+		if err := fleetProbeError(tc.probe, tc.err); (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok = %v", name, err, tc.ok)
+		}
 	}
 }

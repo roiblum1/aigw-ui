@@ -57,7 +57,7 @@ func TestRealAPIServerEntryRoute(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"Backend/fleet-glm-5-3", "AIServiceBackend/fleet-glm-5-3", "AIGatewayRoute/fleet-glm-5-3",
-		"BackendTrafficPolicy/fleet-glm-5-3", "QuotaPolicy/glm-5-3", "EnvoyPatchPolicy/" + render.RetryPatchName,
+		"BackendTrafficPolicy/fleet-glm-5-3", "QuotaPolicy/glm-5-3", "EnvoyPatchPolicy/" + render.RetryPatchName("glm-5-3"),
 		"SecurityPolicy/" + render.AuthPolicyName} {
 		if !created[want] {
 			t.Errorf("%s was not created; changes: %+v", want, res.Changes)

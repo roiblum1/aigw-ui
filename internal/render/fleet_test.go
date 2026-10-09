@@ -174,51 +174,32 @@ func TestFleetRevision(t *testing.T) {
 	}
 }
 
-// A model whose entry route cannot be rendered gets no object at all, not
-// even the QuotaPolicy on the backends it had before: that policy has the
-// same name as the one on the cluster and would replace it.
-func TestHeldModelRendersNothing(t *testing.T) {
+// A model whose entry route cannot be rendered keeps its entry objects on the
+// cluster untouched. Its quotas are still rendered, on the entry backend
+// that is there, so a lowered limit reaches the cluster while it is held.
+func TestHeldModelKeepsItsQuotas(t *testing.T) {
 	s := fleetState()
 	s.Models[0].Fleet, s.Models[0].HeldReason = nil, "no setting"
-	for _, o := range Objects(s) {
-		if o.GetName() == "glm-5-3" || o.GetName() == "fleet-glm-5-3" {
+	s.Models[0].Quotas[0].Limit = 7
+	objs := Objects(s)
+	for _, o := range objs {
+		if o.GetName() == "fleet-glm-5-3" || o.GetName() == "fleet-glm-5-3-retry" {
 			t.Errorf("rendered %s %s for a held model", o.GetKind(), o.GetName())
 		}
 	}
-	find(t, Objects(s), "Backend", "local")
-	if held := HeldNames(s); !held["glm-5-3"] || !held["fleet-glm-5-3"] || len(held) != 3 {
+	policy := find(t, objs, "QuotaPolicy", "glm-5-3")
+	refs, _, _ := unstructured.NestedSlice(policy.Object, "spec", "targetRefs")
+	if len(refs) != 1 || refs[0].(map[string]any)["name"] != "fleet-glm-5-3" {
+		t.Errorf("quota targets = %v", refs)
+	}
+	quotas, _, _ := unstructured.NestedSlice(policy.Object, "spec", "perModelQuotas")
+	rules, _, _ := unstructured.NestedSlice(quotas[0].(map[string]any), "quota", "bucketRules")
+	if limit, _, _ := unstructured.NestedInt64(rules[0].(map[string]any), "quota", "limit"); limit != 7 {
+		t.Errorf("limit = %d, want the new one", limit)
+	}
+	find(t, objs, "Backend", "local")
+	if held := HeldNames(s); !held["fleet-glm-5-3"] || !held["fleet-glm-5-3-retry"] || len(held) != 2 {
 		t.Errorf("held = %v", held)
-	}
-	// Usage is still read from where the route on the cluster counts.
-	for _, c := range Counters(s) {
-		if c.ModelSlug == "glm-5-3" && c.Backend != "ai-gateway/fleet-glm-5-3" {
-			t.Errorf("counter on %s", c.Backend)
-		}
-	}
-}
-
-// While a cluster still has a route of its own for the model that clients
-// reach, that route wins over the entry route. Its backend keeps the quota,
-// or turning the entry route on would lift every tenant's limit.
-func TestQuotaStaysOnBackendsClientsReach(t *testing.T) {
-	s := fleetState()
-	s.Models[0].Existing = []Target{
-		{Namespace: "llms", Backend: "glm", Model: "glm-5.3"},
-		{Namespace: "llms", Backend: "glm-peers", Model: "glm-5.3", PeerOnly: true},
-	}
-	targets := map[string][]string{}
-	for _, o := range Objects(s) {
-		if o.GetKind() != "QuotaPolicy" {
-			continue
-		}
-		refs, _, _ := unstructured.NestedSlice(o.Object, "spec", "targetRefs")
-		for _, r := range refs {
-			targets[o.GetNamespace()] = append(targets[o.GetNamespace()], r.(map[string]any)["name"].(string))
-		}
-	}
-	want := map[string][]string{"ai-gateway": {"fleet-glm-5-3"}, "llms": {"glm"}}
-	if !reflect.DeepEqual(targets, want) {
-		t.Errorf("quota targets = %v, want %v", targets, want)
 	}
 }
 
@@ -235,40 +216,41 @@ func TestHealthPath(t *testing.T) {
 }
 
 // Envoy Gateway lets the gateway pick a site five times on a retry. With a
-// hash that is too few, so the route of every entry route is patched.
+// hash that is too few, so the route of every entry route is patched, each
+// by a policy of its own: one that cannot apply must not undo the others.
 func TestFleetRetryPatch(t *testing.T) {
 	s := fleetState()
-	patch := find(t, Objects(s), "EnvoyPatchPolicy", RetryPatchName)
+	s.Models = append(s.Models, Model{Name: "qwen", Slug: "qwen", Fleet: s.Models[0].Fleet})
+	objs := Objects(s)
+	find(t, objs, "EnvoyPatchPolicy", "fleet-qwen-retry")
+	patch := find(t, objs, "EnvoyPatchPolicy", "fleet-glm-5-3-retry")
 	patches, _, _ := unstructured.NestedSlice(patch.Object, "spec", "jsonPatches")
-	if len(patches) != 1 {
-		t.Fatalf("patches = %v", patches)
-	}
-	got := patches[0].(map[string]any)
-	want := map[string]any{
+	want := []any{map[string]any{
 		"type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
 		"name": "ai-gateway/ai-gateway/https",
 		"operation": map[string]any{
-			"op":       "replace",
+			"op":       "add",
 			"jsonPath": "..routes[?(@.name == 'httproute/ai-gateway/fleet-glm-5-3/rule/0/match/0/*')].route.retry_policy",
 			"path":     "host_selection_retry_max_attempts",
 			"value":    int64(20),
 		},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("patch = %v\nwant    %v", got, want)
+	}}
+	if !reflect.DeepEqual(patches, want) {
+		t.Errorf("patches = %v\nwant      %v", patches, want)
 	}
 
-	// No entry route, no patch: a patch that finds no route is an error.
-	s.Models[0].Fleet = nil
-	for _, o := range Objects(s) {
-		if o.GetKind() == "EnvoyPatchPolicy" {
-			t.Error("rendered a patch without an entry route")
+	// A held model keeps its patch on the cluster, and a model that is
+	// switched on meanwhile still gets its own.
+	s.Models[0].Fleet, s.Models[0].HeldReason = nil, "no site"
+	objs = Objects(s)
+	find(t, objs, "EnvoyPatchPolicy", "fleet-qwen-retry")
+	for _, o := range objs {
+		if o.GetName() == "fleet-glm-5-3-retry" {
+			t.Error("rendered the patch of a held model")
 		}
 	}
-	// With a held model the patch on the cluster is left as it is.
-	s.Models[0].HeldReason = "no setting"
-	if !HeldNames(s)[RetryPatchName] {
-		t.Error("the patch is not held with the model")
+	if held := HeldNames(s); !held["fleet-glm-5-3-retry"] || held["fleet-qwen-retry"] {
+		t.Errorf("held = %v", held)
 	}
 }
 
