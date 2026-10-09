@@ -37,6 +37,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/tasks", s.listTasks)
 	api.HandleFunc("GET /api/v1/audit", s.listAudit)
 	api.HandleFunc("GET /api/v1/docs/platform-architecture", s.platformArchitecture)
+	api.HandleFunc("GET /api/v1/docs", s.listDocs)
+	api.HandleFunc("GET /api/v1/docs/text/{name...}", s.readDoc)
 	api.HandleFunc("GET /api/v1/usage", s.getUsage)
 	api.HandleFunc("POST /api/v1/tenants/{id}/quotas/{model_id}/reset", s.resetUsage)
 

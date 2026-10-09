@@ -74,8 +74,11 @@ workflow refuses a version without a release note.
 
 ## Documentation
 
+The same documents are in the website, on the **Docs** page.
+
 | Document | Contents |
 |---|---|
+| [docs/how-it-works.md](docs/how-it-works.md) | What each action does, how, and why it was built that way |
 | [docs/user-guide.md](docs/user-guide.md) | Using the UI: clusters, models, tenants, keys, quotas |
 | [docs/platform-architecture.md](docs/platform-architecture.md) | The design of the whole multi-site platform, with diagrams, and what of it is built |
 | [docs/architecture.md](docs/architecture.md) | Components, data flows, what is applied to the clusters |

@@ -280,6 +280,13 @@ export function setName(name: string) {
   }
 }
 
+export interface DocEntry {
+  /** The file's path without ".md", such as "user-guide" or "release-notes/v0.8.0". */
+  name: string;
+  title: string;
+  group: string;
+}
+
 export class Unauthorized extends Error {}
 export class NotFound extends Error {}
 
@@ -312,6 +319,9 @@ export const api = {
     if (!res.ok) throw new Error(`Request failed (${res.status})`);
     return res.text();
   },
+  /** The guides and release notes built into the server. */
+  docs: () => request<DocEntry[]>("GET", "/docs"),
+  doc: (name: string) => request<{ name: string; title: string; markdown: string }>("GET", "/docs/text/" + name),
   tasks: () => request<Task[]>("GET", "/tasks"),
   audit: (before?: number) => request<AuditEntry[]>("GET", "/audit" + (before ? `?before=${before}` : "")),
   startSelfTest: (clusterId: string, model_id: string) =>

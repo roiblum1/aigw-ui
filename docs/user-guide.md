@@ -268,6 +268,13 @@ is a target design. The bar at the top opens a list of what this tool does
 today and what is not built. The same page is in the repository as
 `docs/platform-architecture.html`.
 
+## Docs
+
+The **Docs** page shows the guides and the release notes of the version that
+is running. Start with *What each action does, and why*: it goes through
+every action in the UI and says what happens, how the server does it and why
+it was built that way. Links between documents stay inside the page.
+
 ## Usage
 
 The **Usage** page shows, for every tenant quota, how many tokens were used in

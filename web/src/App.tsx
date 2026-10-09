@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Activity as ActivityIcon,
+  BookOpen,
   Boxes,
   ListChecks,
   LayoutDashboard,
@@ -18,6 +19,7 @@ import Tenants from "./pages/Tenants";
 import Usage from "./pages/Usage";
 import Activity from "./pages/Activity";
 import Architecture from "./pages/Architecture";
+import Docs from "./pages/Docs";
 import BrandMark from "./BrandMark";
 import Login from "./pages/Login";
 import Overview from "./pages/Overview";
@@ -31,11 +33,13 @@ const pages = [
   { name: "Usage", icon: ActivityIcon },
   { name: "Activity", icon: ListChecks },
   { name: "Architecture", icon: Network },
+  { name: "Docs", icon: BookOpen },
 ] as const;
 type Page = (typeof pages)[number]["name"];
 
 function pageFromHash(): Page {
-  const name = decodeURIComponent(location.hash.slice(1));
+  // "#docs/user-guide" is the Docs page; what follows the slash is the page's own.
+  const name = decodeURIComponent(location.hash.slice(1)).split("/")[0];
   return pages.find((p) => p.name.toLowerCase() === name)?.name ?? "Overview";
 }
 
@@ -134,6 +138,7 @@ export default function App() {
         {page === "Usage" && <Usage />}
         {page === "Activity" && <Activity />}
         {page === "Architecture" && <Architecture />}
+        {page === "Docs" && <Docs />}
       </main>
     </div>
   );

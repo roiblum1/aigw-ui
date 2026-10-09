@@ -83,6 +83,8 @@ whether its request reached the clusters.
 | Method | Path | Result |
 |---|---|---|
 | GET | `/docs/platform-architecture` | The platform design as one HTML page, `text/html` |
+| GET | `/docs` | The guides and release notes built into the server: `[{"name", "title", "group"}]`. `group` is `Guides` or `Release notes` |
+| GET | `/docs/text/{name}` | One document: `{"name", "title", "markdown"}`. `name` is one from the list, for example `user-guide` or `release-notes/v0.8.0`. 404 for any other |
 
 ## Audit log
 
