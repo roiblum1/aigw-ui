@@ -9,7 +9,6 @@ import (
 
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
-	"aigw-ui/internal/weights"
 )
 
 // modelBody is the body of a model create or update. On an update every field
@@ -128,16 +127,60 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	fleet, err := s.st.ZoneWeights(r.Context())
+	clusters, err := s.st.ListClusters(r.Context())
 	if err != nil {
 		fail(w, err)
 		return
 	}
+	fleet := map[string]bool{}
+	for _, c := range clusters {
+		fleet[c.ID] = c.FleetEnabled
+	}
 	for i := range out {
-		setSiteWeights(&out[i], fleet[out[i].Name])
-		out[i].Warnings = recipeWarnings(out[i])
+		out[i].Warnings = append(recipeWarnings(out[i]), ownRouteWarnings(out[i], fleet)...)
+		if out[i].Fleet && !s.st.FleetConfigured() {
+			out[i].Warnings = append(out[i].Warnings, "The server has no FLEET_DOMAIN or FLEET_PEER_SNI set, so the entry route is left as it is on the clusters and gets no weight changes.")
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// fleetBody is the body of turning a model's entry route on or off.
+type fleetBody struct {
+	Enabled bool `json:"enabled"`
+}
+
+// setModelFleet turns the entry route of a model on or off. When on, every
+// fleet cluster gets a route for the model that sends each conversation to
+// one of the sites that serve it.
+func (s *Server) setModelFleet(w http.ResponseWriter, r *http.Request) {
+	var b fleetBody
+	if err := decode(r, &b); err != nil {
+		fail(w, err)
+		return
+	}
+	if b.Enabled && !s.st.FleetConfigured() {
+		writeError(w, http.StatusConflict, "The server has no FLEET_DOMAIN or FLEET_PEER_SNI set, so it cannot render an entry route.")
+		return
+	}
+	name, err := s.st.SetModelFleet(r.Context(), r.PathValue("id"), b.Enabled)
+	switch {
+	case errors.Is(err, store.ErrFleetNoSite):
+		writeError(w, http.StatusConflict, "No fleet cluster serves "+name+" yet. Mark the clusters as part of the fleet and wait for a poll.")
+		return
+	case errors.Is(err, store.ErrFleetManual):
+		writeError(w, http.StatusConflict, name+" has endpoints entered by hand. Remove them first: the entry route replaces them.")
+		return
+	case err != nil:
+		fail(w, err)
+		return
+	}
+	if b.Enabled {
+		s.changed(r, "model.fleet-on", "Turned the entry route on for "+name+". Requests through it are counted on the entry route, so the model's quota counters restart once.")
+	} else {
+		s.changed(r, "model.fleet-off", "Turned the entry route off for "+name+". Its quota counters restart once.")
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // drainBody is the body of a drain or undrain.
@@ -167,8 +210,9 @@ func (s *Server) drainSite(w http.ResponseWriter, r *http.Request) {
 	if !b.Drained {
 		action, summary = "site.undrain", "Ended the drain of "+model+" on cluster "+cluster
 	}
-	// The weight moves on the next polls; each step is its own task.
-	s.record(r, action, summary, r.PathValue("cluster_id"))
+	// Ending a drain lists the site again at once, at the lowest weight.
+	// The weight then moves on the next polls; each step is its own task.
+	s.changed(r, action, summary)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -197,6 +241,32 @@ func recipeWarnings(m store.Model) []string {
 	return out
 }
 
+// ownRouteWarnings names the fleet clusters whose own route for a model with
+// an entry route is still reachable by clients. fleet says which clusters
+// are in the fleet, by ID.
+func ownRouteWarnings(m store.Model, fleet map[string]bool) []string {
+	if !m.Fleet {
+		return nil
+	}
+	var clusters []string
+	for _, e := range m.Endpoints {
+		if !fleet[e.ClusterID] {
+			continue
+		}
+		for _, b := range e.Backends {
+			if !b.PeerOnly {
+				clusters = append(clusters, e.ClusterName)
+				break
+			}
+		}
+	}
+	if len(clusters) == 0 {
+		return nil
+	}
+	return []string{"On " + strings.Join(clusters, ", ") + " the cluster's own route for the model is still attached to the client listener, to the whole Gateway, or by port and not by listener name. " +
+		"It is older than the entry route and wins, so clients there do not use the entry route. Its backends keep the quota. Attach that route to the peer listener alone."}
+}
+
 // valueList formats "value on site, site; value on site".
 func valueList(sites map[string][]string) string {
 	values := make([]string, 0, len(sites))
@@ -208,28 +278,6 @@ func valueList(sites map[string][]string) string {
 		values[i] = v + " on " + strings.Join(sites[v], ", ")
 	}
 	return strings.Join(values, "; ")
-}
-
-// setSiteWeights works out the zone weights a sync writes for the model, the
-// same way the sync does, so the UI shows what the gateways get.
-//
-// sites is the model's entry from the fleet-wide zone weights; it is empty
-// when no fleet cluster serves the model.
-func setSiteWeights(m *store.Model, sites []weights.Site) {
-	m.SiteWeights = []store.SiteWeight{}
-	if len(sites) == 0 {
-		for _, e := range m.Endpoints {
-			if e.Capacity.Weight != nil {
-				m.SiteWeightsNote = "no cluster that serves the model is in the fleet"
-			}
-		}
-		return
-	}
-	zones, reason := weights.Zones(sites)
-	m.SiteWeightsNote = reason
-	for _, z := range zones {
-		m.SiteWeights = append(m.SiteWeights, store.SiteWeight{Zone: z.Zone, Weight: z.Weight})
-	}
 }
 
 func (s *Server) createModel(w http.ResponseWriter, r *http.Request) {

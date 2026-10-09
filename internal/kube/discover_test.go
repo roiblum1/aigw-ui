@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/rest"
 )
 
@@ -53,7 +54,7 @@ func TestDiscover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := client.Discover(context.Background(), "ai-gateway")
+	got, err := client.Discover(context.Background(), Gateway{Namespace: "ai-gateway", Name: "llm"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +87,7 @@ func TestDiscoverMissingCRD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Discover(context.Background(), "ai-gateway"); err == nil {
+	if _, err := client.Discover(context.Background(), Gateway{Namespace: "ai-gateway", Name: "llm"}); err == nil {
 		t.Error("want an error when the AIGatewayRoute CRD is not installed")
 	}
 }
@@ -114,7 +115,7 @@ func TestDiscoverAttached(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := client.DiscoverAttached(context.Background(), "ai-gateway", "llm")
+	got, err := client.DiscoverAttached(context.Background(), Gateway{Namespace: "ai-gateway", Name: "llm"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,5 +129,50 @@ func TestDiscoverAttached(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got  %+v\nwant %+v", got, want)
+	}
+}
+
+// A backend is peer-only when every route to it is attached to listeners
+// other than the client one. Whatever is not certain counts as reachable by
+// clients, so it keeps its quota.
+func TestPeerOnlyBackends(t *testing.T) {
+	route := func(name, model, backend string, parents string) string {
+		return `{"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"AIGatewayRoute","metadata":{"name":"` + name + `","namespace":"ai-gateway"},
+		 "spec":{"parentRefs":[` + parents + `],"rules":[{"matches":[{"headers":[{"name":"x-ai-eg-model","value":"` + model + `"}]}],"backendRefs":[{"name":"` + backend + `"}]}]}}`
+	}
+	var routes []unstructured.Unstructured
+	for _, doc := range []string{
+		route("a", "peer", "peer", `{"name":"llm","sectionName":"peers"}`),
+		route("b", "client", "client", `{"name":"llm","sectionName":"https"}`),
+		route("c", "whole", "whole", `{"name":"llm"}`),
+		route("d", "both", "both", `{"name":"llm","sectionName":"peers"},{"name":"llm","sectionName":"https"}`),
+		// The same backend through a peer route and a client route.
+		route("e", "two-routes", "shared", `{"name":"llm","sectionName":"peers"}`),
+		route("f", "two-routes", "shared", `{"name":"llm","sectionName":"https"}`),
+		route("g", "elsewhere", "elsewhere", `{"name":"other","sectionName":"peers"}`),
+	} {
+		var u unstructured.Unstructured
+		if err := u.UnmarshalJSON([]byte(doc)); err != nil {
+			t.Fatal(err)
+		}
+		routes = append(routes, u)
+	}
+	peerOnly := func(gw Gateway) map[string]bool {
+		out := map[string]bool{}
+		for _, m := range modelsFromRoutes(routes, gw, false) {
+			out[m.Name] = len(m.Backends) == 1 && m.Backends[0].PeerOnly
+		}
+		return out
+	}
+	got := peerOnly(Gateway{Namespace: "ai-gateway", Name: "llm", ClientListener: "https"})
+	want := map[string]bool{"peer": true, "client": false, "whole": false, "both": false, "two-routes": false, "elsewhere": false}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("peer-only = %v, want %v", got, want)
+	}
+	// Without a client listener nothing tells clients from other sites.
+	for model, only := range peerOnly(Gateway{Namespace: "ai-gateway", Name: "llm"}) {
+		if only {
+			t.Errorf("%s is peer-only on a gateway without a client listener", model)
+		}
 	}
 }

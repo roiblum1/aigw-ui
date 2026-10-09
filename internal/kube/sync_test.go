@@ -43,12 +43,22 @@ func TestSyncPrunesOnlyManagedObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := client.Sync(context.Background(), "ns", nil)
+	res, err := client.Sync(context.Background(), "ns", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(deleted) != 1 || !strings.HasSuffix(deleted[0], "/aigatewayroutes/ours-stale") || res.Pruned != 1 {
 		t.Errorf("deleted %v (pruned %d), want only ours-stale", deleted, res.Pruned)
+	}
+
+	// A held name stays, although nothing desired has it.
+	deleted = nil
+	res, err = client.Sync(context.Background(), "ns", nil, map[string]bool{"ours-stale": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted) != 0 || res.Pruned != 0 {
+		t.Errorf("deleted %v (pruned %d), want nothing", deleted, res.Pruned)
 	}
 }
 
@@ -90,7 +100,7 @@ func TestSyncQuotaPoliciesAcrossNamespaces(t *testing.T) {
 	policy.SetNamespace("team-b")
 	policy.SetName("glm")
 
-	if _, err := client.Sync(context.Background(), "ai-gateway", []*unstructured.Unstructured{policy}); err != nil {
+	if _, err := client.Sync(context.Background(), "ai-gateway", []*unstructured.Unstructured{policy}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(applied) != 1 || !strings.Contains(applied[0], "/namespaces/team-b/quotapolicies/glm") {
@@ -149,7 +159,7 @@ func TestSyncReportsChangesAndGatewayStatus(t *testing.T) {
 		p.SetName(name)
 		desired = append(desired, p)
 	}
-	res, err := client.Sync(context.Background(), "ns", desired)
+	res, err := client.Sync(context.Background(), "ns", desired, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

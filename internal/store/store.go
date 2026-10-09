@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"aigw-ui/internal/render"
 	"aigw-ui/internal/secretbox"
 )
 
@@ -30,7 +31,25 @@ var (
 type Store struct {
 	db  *pgxpool.Pool
 	box *secretbox.Box
+	// fleet is what every site's entry route has in common.
+	fleet render.FleetConfig
 }
+
+// SetFleet sets the shared settings of the entry routes. Call it before the
+// store is used.
+func (s *Store) SetFleet(cfg render.FleetConfig) { s.fleet = cfg }
+
+// SessionHeader is the first of the request headers that carry the
+// conversation key, or "" when none is set.
+func (s *Store) SessionHeader() string {
+	if len(s.fleet.SessionHeaders) == 0 {
+		return ""
+	}
+	return s.fleet.SessionHeaders[0]
+}
+
+// FleetConfigured reports whether entry routes can be rendered at all.
+func (s *Store) FleetConfigured() bool { return s.fleet.PeerSNI != "" }
 
 func Open(ctx context.Context, url string, box *secretbox.Box) (*Store, error) {
 	db, err := pgxpool.New(ctx, url)

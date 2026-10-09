@@ -21,6 +21,10 @@ type ModelBackend struct {
 	// Override reports whether the route sets modelNameOverride. The gateway
 	// documents quota matching only for that case.
 	Override bool
+	// PeerOnly is true when no route that sends the model to this backend
+	// can be reached from the listener clients come in on. Such a backend
+	// only sees requests another site's gateway has already charged.
+	PeerOnly bool
 }
 
 // DiscoveredModel is a model that routes expose. Backends is empty when none
@@ -31,32 +35,40 @@ type DiscoveredModel struct {
 	Backends []ModelBackend
 }
 
-// Discover lists the models that the AIGatewayRoutes in namespace expose.
-// Routes created by this tool are skipped: they are desired state, not
-// something to learn from the cluster.
-func (c *Client) Discover(ctx context.Context, namespace string) ([]DiscoveredModel, error) {
+// Gateway names a cluster's gateway and the listener clients come in on.
+// ClientListener is empty when the gateway does not tell clients and other
+// sites apart.
+type Gateway struct {
+	Namespace, Name, ClientListener string
+}
+
+// Discover lists the models that the AIGatewayRoutes in the gateway's
+// namespace expose. Routes created by this tool are skipped: they are desired
+// state, not something to learn from the cluster.
+func (c *Client) Discover(ctx context.Context, gw Gateway) ([]DiscoveredModel, error) {
 	gvr, _ := gvrFor("AIGatewayRoute")
-	list, err := c.dyn.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	list, err := c.dyn.Resource(gvr).Namespace(gw.Namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, describe(err)
 	}
-	return modelsFromRoutes(list.Items, nil), nil
+	return modelsFromRoutes(list.Items, gw, false), nil
 }
 
 // DiscoverAttached lists the models exposed by routes in any namespace that
 // are attached to the given gateway.
-func (c *Client) DiscoverAttached(ctx context.Context, gatewayNamespace, gatewayName string) ([]DiscoveredModel, error) {
+func (c *Client) DiscoverAttached(ctx context.Context, gw Gateway) ([]DiscoveredModel, error) {
 	gvr, _ := gvrFor("AIGatewayRoute")
 	list, err := c.dyn.Resource(gvr).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, describe(err)
 	}
-	return modelsFromRoutes(list.Items, func(route *unstructured.Unstructured) bool {
-		return attachedTo(route, gatewayNamespace, gatewayName)
-	}), nil
+	return modelsFromRoutes(list.Items, gw, true), nil
 }
 
-func attachedTo(route *unstructured.Unstructured, gatewayNamespace, gatewayName string) bool {
+// listeners returns the listeners of the gateway a route is attached to, and
+// whether it is attached at all. An empty name stands for every listener.
+func (gw Gateway) listeners(route *unstructured.Unstructured) ([]string, bool) {
+	var sections []string
 	parents, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
 	for _, p := range parents {
 		parent, ok := p.(map[string]any)
@@ -70,26 +82,47 @@ func attachedTo(route *unstructured.Unstructured, gatewayNamespace, gatewayName 
 		if ns == "" {
 			ns = route.GetNamespace()
 		}
-		if name, _ := parent["name"].(string); name == gatewayName && ns == gatewayNamespace {
-			return true
+		if name, _ := parent["name"].(string); name == gw.Name && ns == gw.Namespace {
+			section, _ := parent["sectionName"].(string)
+			sections = append(sections, section)
 		}
 	}
-	return false
+	return sections, len(sections) > 0
+}
+
+// peerOnly reports whether clients cannot reach the route: it is attached to
+// the gateway, and only to listeners other than the client one. Anything
+// that is not certain counts as reachable, because a backend clients can
+// reach must keep its quota.
+func (gw Gateway) peerOnly(route *unstructured.Unstructured) bool {
+	sections, attached := gw.listeners(route)
+	if gw.ClientListener == "" || !attached {
+		return false
+	}
+	for _, section := range sections {
+		if section == "" || section == gw.ClientListener {
+			return false
+		}
+	}
+	return true
 }
 
 // modelsFromRoutes reads the models out of route rules. A rule exposes a model
 // when it matches the model header exactly; other match types cannot be mapped
 // to one model name and are ignored.
-func modelsFromRoutes(routes []unstructured.Unstructured, keep func(*unstructured.Unstructured) bool) []DiscoveredModel {
+//
+// With attachedOnly, routes that are not attached to gw are left out.
+func modelsFromRoutes(routes []unstructured.Unstructured, gw Gateway, attachedOnly bool) []DiscoveredModel {
 	byName := map[string]*DiscoveredModel{}
 	for i := range routes {
 		route := &routes[i]
 		if route.GetLabels()[render.ManagedLabel] == render.ManagedValue {
 			continue
 		}
-		if keep != nil && !keep(route) {
+		if _, attached := gw.listeners(route); attachedOnly && !attached {
 			continue
 		}
+		peerOnly := gw.peerOnly(route)
 		rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
 		for _, r := range rules {
 			rule, ok := r.(map[string]any)
@@ -107,8 +140,12 @@ func modelsFromRoutes(routes []unstructured.Unstructured, keep func(*unstructure
 					if b.Model == "" {
 						b.Model = model
 					}
-					if !containsBackend(d.Backends, b) {
+					b.PeerOnly = peerOnly
+					if i := indexBackend(d.Backends, b); i < 0 {
 						d.Backends = append(d.Backends, b)
+					} else if !peerOnly {
+						// One route clients can reach is enough.
+						d.Backends[i].PeerOnly = false
 					}
 				}
 			}
@@ -181,11 +218,13 @@ func backendRefs(rule map[string]any, routeNamespace string) []ModelBackend {
 	return out
 }
 
-func containsBackend(list []ModelBackend, b ModelBackend) bool {
-	for _, x := range list {
+// indexBackend finds a backend whatever its PeerOnly, or returns -1.
+func indexBackend(list []ModelBackend, b ModelBackend) int {
+	for i, x := range list {
+		x.PeerOnly = b.PeerOnly
 		if x == b {
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
 }

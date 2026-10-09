@@ -26,6 +26,8 @@ const emptyCluster: ClusterInput = {
   discovery_token: "",
   fleet_enabled: false,
   client_listener: "",
+  peer_host: "",
+  peer_port: 8443,
 };
 
 export default function Clusters() {
@@ -97,8 +99,16 @@ export default function Clusters() {
                     {c.auth_enabled ? "Enforced" : "Off"}
                     {c.auth_enabled && c.client_listener && <div className="detail">on listener {c.client_listener}</div>}
                     {c.fleet_enabled && (
-                      <span className="tag manual" title="This cluster shares traffic with the other fleet clusters.">
-                        fleet
+                      <span
+                        className={c.fleet_outdated ? "tag warn" : "tag manual"}
+                        title={
+                          c.fleet_outdated
+                            ? "This cluster's entry routes are older than the fleet's. Until it is synced it can send a conversation to another site than the other clusters do."
+                            : "This cluster shares traffic with the other fleet clusters, and its entry routes are the fleet's current ones."
+                        }
+                      >
+                        {c.fleet_outdated ? "fleet · outdated" : "fleet"}
+                        {c.fleet_revision && ` · ${c.fleet_revision}`}
                       </span>
                     )}
                   </td>
@@ -191,6 +201,8 @@ function ClusterForm(props: { cluster: Cluster | null; onClose: () => void; onSa
       discovery_token: form.discovery_token,
       fleet_enabled: form.fleet_enabled,
       client_listener: form.client_listener,
+      peer_host: form.peer_host,
+      peer_port: form.peer_port,
     };
     if (cluster) await api.updateCluster(cluster.id, body);
     else await api.createCluster(body);
@@ -285,18 +297,33 @@ function ClusterForm(props: { cluster: Cluster | null; onClose: () => void; onSa
           onChange={(e) => set({ client_listener: e.target.value })}
         />
       </Field>
+      <div className="grid-2">
+        <Field label="Peer host" hint="Optional. The name the other sites reach this gateway under, for example llm.site1-a.example.com.">
+          <input value={form.peer_host} onChange={(e) => set({ peer_host: e.target.value })} />
+        </Field>
+        <Field label="Peer port">
+          <input
+            type="number"
+            min={1}
+            max={65535}
+            value={form.peer_port}
+            onChange={(e) => set({ peer_port: Number(e.target.value) })}
+          />
+        </Field>
+      </div>
       <label className="check">
         <input
           type="checkbox"
           checked={form.fleet_enabled}
-          disabled={!form.auth_enabled && !form.fleet_enabled}
+          disabled={(!form.auth_enabled || !form.client_listener || !form.peer_host) && !form.fleet_enabled}
           onChange={(e) => set({ fleet_enabled: e.target.checked })}
         />
         <span>
           Part of the fleet
           <small>
             This cluster shares each model's traffic with the other fleet clusters. It gets the site weights, under its
-            name as the zone, with weight 0 for a model it does not serve. Needs API keys enforced.
+            name as the zone, for the models it serves. Needs API keys enforced, a client listener and a peer host, and
+            the same gateway namespace as the other fleet clusters.
           </small>
         </span>
       </label>

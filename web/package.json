@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "lucide-react": "^1.52.0",
+    "marked": "^18.1.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

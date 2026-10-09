@@ -1,6 +1,10 @@
 package store
 
-import "time"
+import (
+	"time"
+
+	"aigw-ui/internal/weights"
+)
 
 type Cluster struct {
 	ID          string     `json:"id"`
@@ -28,6 +32,14 @@ type Cluster struct {
 	// ClientListener is the Gateway listener clients come in on. The API-key
 	// policy attaches to it alone; empty attaches it to the whole Gateway.
 	ClientListener string `json:"client_listener"`
+	// PeerHost and PeerPort are where the other sites reach this site's
+	// gateway. A fleet cluster needs them.
+	PeerHost string `json:"peer_host"`
+	PeerPort int    `json:"peer_port"`
+	// FleetRevision identifies the entry routes last applied to the
+	// cluster. FleetOutdated is true when the fleet has moved on since.
+	FleetRevision string `json:"fleet_revision"`
+	FleetOutdated bool   `json:"fleet_outdated"`
 }
 
 const (
@@ -45,6 +57,9 @@ type BackendRef struct {
 	// Override reports whether the route sets modelNameOverride for this
 	// backend. The gateway documents quota matching only for that case.
 	Override bool `json:"override"`
+	// PeerOnly is true when clients cannot reach the backend through the
+	// cluster's own routes, only other sites' gateways can.
+	PeerOnly bool `json:"peer_only,omitempty"`
 }
 
 type Endpoint struct {
@@ -66,6 +81,10 @@ type Endpoint struct {
 type DiscoveredModel struct {
 	Name     string
 	Backends []BackendRef
+	// OnlyIfKnown is set for a model the cluster has a deployment of but
+	// does not expose itself. It is recorded for a model that is already
+	// in the catalog and never adds one.
+	OnlyIfKnown bool
 }
 
 type Model struct {
@@ -81,11 +100,14 @@ type Model struct {
 	Endpoints      []Endpoint `json:"endpoints"`
 	// QuotaCapable is false when no cluster has anything a quota can attach to.
 	QuotaCapable bool `json:"quota_capable"`
-	// SiteWeights is each site's share of the model's traffic as it is
-	// written to the gateways. It is empty, with SiteWeightsNote saying why,
-	// while the weights are not managed for this model.
-	SiteWeights     []SiteWeight `json:"site_weights"`
-	SiteWeightsNote string       `json:"site_weights_note"`
+	// SiteWeights is the zone weight of every site listed for the model,
+	// the same on every cluster. SiteWeightsNote says why they were not
+	// replaced on the last discovery round, when they were not.
+	SiteWeights     []weights.Zone `json:"site_weights"`
+	SiteWeightsNote string         `json:"site_weights_note"`
+	// Fleet is true when this tool renders the model's entry route on every
+	// fleet cluster.
+	Fleet bool `json:"fleet"`
 	// Warnings are differences between the sites that serve the model which
 	// an operator should look at.
 	Warnings []string `json:"warnings"`
@@ -129,10 +151,4 @@ type Overview struct {
 	Tenants       int `json:"tenants"`
 	ActiveKeys    int `json:"active_keys"`
 	Quotas        int `json:"quotas"`
-}
-
-// SiteWeight is one site's zone weight for a model.
-type SiteWeight struct {
-	Zone   string `json:"zone"`
-	Weight int64  `json:"weight"`
 }

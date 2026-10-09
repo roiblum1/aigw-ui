@@ -9,19 +9,23 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
 	"aigw-ui/internal/render"
 )
 
-// realClient returns a client for the API server in KUBE_TEST_KUBECONFIG, or
-// skips the test. Server-side apply is done by the API server, so what it
-// does to a Secret cannot be tested against a stand-in.
+// realClient returns a client for the API server in KUBE_TEST_KUBECONFIG and
+// a namespace made for this test, or skips the test. Server-side apply is
+// done by the API server, so what it does cannot be tested against a
+// stand-in.
 //
-//	KUBE_TEST_KUBECONFIG=/path/to/kubeconfig go test ./internal/kube/ -run RealAPIServer
+//	hack/test-apiserver.sh
 //
-// The namespace "aigw-ui-test" must exist. Use a throwaway cluster.
-func realClient(t *testing.T) *Client {
+// starts a throwaway API server and runs these tests. The namespace is
+// deleted when the test ends, so tests do not see each other's objects and
+// the server can be reused.
+func realClient(t *testing.T) (*Client, string) {
 	path := os.Getenv("KUBE_TEST_KUBECONFIG")
 	if path == "" {
 		t.Skip("KUBE_TEST_KUBECONFIG is not set")
@@ -35,14 +39,27 @@ func realClient(t *testing.T) *Client {
 		t.Fatal(err)
 	}
 	c.settle = 0
-	return c
+
+	ctx := context.Background()
+	namespaces := c.dyn.Resource(schema.GroupVersionResource{Version: "v1", Resource: "namespaces"})
+	ns := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"generateName": "aigw-ui-test-"},
+	}}
+	created, err := namespaces.Create(ctx, ns, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := namespaces.Delete(ctx, created.GetName(), metav1.DeleteOptions{}); err != nil {
+			t.Errorf("delete namespace %s: %v", created.GetName(), err)
+		}
+	})
+	return c, created.GetName()
 }
 
-const testNamespace = "aigw-ui-test"
-
-func secretEntries(t *testing.T, c *Client) string {
+func secretEntries(t *testing.T, c *Client, namespace string) string {
 	gvr, _ := gvrFor("Secret")
-	live, err := c.dyn.Resource(gvr).Namespace(testNamespace).Get(context.Background(), render.KeysSecretName, metav1.GetOptions{})
+	live, err := c.dyn.Resource(gvr).Namespace(namespace).Get(context.Background(), render.KeysSecretName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,8 +72,8 @@ func secretEntries(t *testing.T, c *Client) string {
 	return strings.Join(names, " ")
 }
 
-func keysState(clientIDs ...string) render.State {
-	s := render.State{Namespace: testNamespace, GatewayName: "llm", AuthEnabled: true}
+func keysState(namespace string, clientIDs ...string) render.State {
+	s := render.State{Namespace: namespace, GatewayName: "llm", AuthEnabled: true}
 	for _, id := range clientIDs {
 		s.Keys = append(s.Keys, render.Key{ClientID: id, Value: "sk-" + id})
 	}
@@ -64,8 +81,8 @@ func keysState(clientIDs ...string) render.State {
 }
 
 // syncKeys applies only the key Secret; the SecurityPolicy needs a CRD.
-func syncKeys(t *testing.T, c *Client, clientIDs ...string) SyncResult {
-	res, err := c.Sync(context.Background(), testNamespace, render.Objects(keysState(clientIDs...))[:1])
+func syncKeys(t *testing.T, c *Client, namespace string, clientIDs ...string) SyncResult {
+	res, err := c.Sync(context.Background(), namespace, render.Objects(keysState(namespace, clientIDs...))[:1], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,22 +91,20 @@ func syncKeys(t *testing.T, c *Client, clientIDs ...string) SyncResult {
 
 // A revoked key must leave the Secret: the gateway trusts every entry in it.
 func TestRealAPIServerRevokedKeyLeavesSecret(t *testing.T) {
-	c := realClient(t)
-	gvr, _ := gvrFor("Secret")
-	c.dyn.Resource(gvr).Namespace(testNamespace).Delete(context.Background(), render.KeysSecretName, metav1.DeleteOptions{})
+	c, ns := realClient(t)
 
-	syncKeys(t, c, "team-a.01", "team-a.02", "team-b.03")
-	if got := secretEntries(t, c); got != "team-a.01 team-a.02 team-b.03" {
+	syncKeys(t, c, ns, "team-a.01", "team-a.02", "team-b.03")
+	if got := secretEntries(t, c, ns); got != "team-a.01 team-a.02 team-b.03" {
 		t.Fatalf("after the first sync the Secret holds %q", got)
 	}
-	res := syncKeys(t, c, "team-a.01")
-	if got := secretEntries(t, c); got != "team-a.01" {
+	res := syncKeys(t, c, ns, "team-a.01")
+	if got := secretEntries(t, c, ns); got != "team-a.01" {
 		t.Errorf("after revoking two keys the Secret holds %q, want only team-a.01", got)
 	}
 	if len(res.Changes) != 1 || res.Changes[0].Action != "updated" {
 		t.Errorf("changes = %+v, want the Secret updated", res.Changes)
 	}
-	if res := syncKeys(t, c, "team-a.01"); len(res.Changes) != 0 {
+	if res := syncKeys(t, c, ns, "team-a.01"); len(res.Changes) != 0 {
 		t.Errorf("a sync that changes nothing reported %+v", res.Changes)
 	}
 }
@@ -97,21 +112,20 @@ func TestRealAPIServerRevokedKeyLeavesSecret(t *testing.T) {
 // A Secret written by a version before 0.6.1 holds entries that came in
 // through stringData, which no apply can remove. The first sync must.
 func TestRealAPIServerCleansSecretOfOlderVersion(t *testing.T) {
-	c := realClient(t)
+	c, ns := realClient(t)
 	gvr, _ := gvrFor("Secret")
 	ctx := context.Background()
-	c.dyn.Resource(gvr).Namespace(testNamespace).Delete(ctx, render.KeysSecretName, metav1.DeleteOptions{})
 
 	old := `{"apiVersion":"v1","kind":"Secret","metadata":{"name":"` + render.KeysSecretName + `","labels":{"app.kubernetes.io/managed-by":"aigw-ui"}},
 		"type":"Opaque","stringData":{"team-a.01":"sk-team-a.01","team-a.02":"sk-revoked","team-b.03":"sk-disabled"}}`
 	force := true
-	if _, err := c.dyn.Resource(gvr).Namespace(testNamespace).Patch(ctx, render.KeysSecretName, types.ApplyPatchType, []byte(old),
+	if _, err := c.dyn.Resource(gvr).Namespace(ns).Patch(ctx, render.KeysSecretName, types.ApplyPatchType, []byte(old),
 		metav1.PatchOptions{FieldManager: fieldManager, Force: &force}); err != nil {
 		t.Fatal(err)
 	}
 
-	res := syncKeys(t, c, "team-a.01")
-	if got := secretEntries(t, c); got != "team-a.01" {
+	res := syncKeys(t, c, ns, "team-a.01")
+	if got := secretEntries(t, c, ns); got != "team-a.01" {
 		t.Errorf("the Secret still holds %q, want only team-a.01", got)
 	}
 	if len(res.Changes) != 1 || res.Changes[0].Action != "updated" {

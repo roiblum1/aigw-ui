@@ -71,6 +71,22 @@ spec:
               value: {{ .Values.config.syncInterval | quote }}
             - name: AUTO_SYNC
               value: {{ .Values.config.autoSync | quote }}
+            {{- with .Values.fleet }}
+            {{- if .domain }}
+            - name: FLEET_DOMAIN
+              value: {{ .domain | quote }}
+            {{- end }}
+            {{- if .peerSNI }}
+            - name: FLEET_PEER_SNI
+              value: {{ .peerSNI | quote }}
+            {{- end }}
+            - name: FLEET_PEER_CA_CONFIGMAP
+              value: {{ .peerCAConfigMap | quote }}
+            - name: FLEET_PEER_CLIENT_SECRET
+              value: {{ .peerClientSecret | quote }}
+            - name: FLEET_SESSION_HEADER
+              value: {{ .sessionHeader | quote }}
+            {{- end }}
           readinessProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 10

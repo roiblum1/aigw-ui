@@ -33,6 +33,17 @@ const (
 	MaxModelLenAnnotation = "aigw-ui.io/max-model-len"
 )
 
+// IgnoreAnnotation set to "true" keeps an LLMInferenceService out of the
+// count: a canary, a test deployment, or one the gateway has no route to.
+const IgnoreAnnotation = "aigw-ui.io/ignore"
+
+// A declared capacity outside these bounds is a mistake, and a huge one
+// would overflow the weight the gateway takes.
+const (
+	minPerInstance = 0.01
+	maxPerInstance = 10000
+)
+
 // stopAnnotation is how KServe is told to stop a service's workloads.
 const stopAnnotation = "serving.kserve.io/stop"
 
@@ -48,8 +59,10 @@ type ModelCapacity struct {
 	// LLMInferenceService when that is empty.
 	Model string
 	// Capacity is ready instances times the capacity of one, summed over the
-	// model's deployments. Known is false when any of them has not reported
-	// its ready count; that is "unknown", never "zero".
+	// model's deployments. Known is false when none of them has reported its
+	// ready count; that is "unknown", never "zero". A deployment without a
+	// count next to one that has reported adds nothing: it is new, and
+	// waiting for it would keep the weight up while the others lose pods.
 	Capacity float64
 	Known    bool
 	// Step is the capacity of the model's largest single instance.
@@ -63,7 +76,7 @@ type ModelCapacity struct {
 }
 
 // Capacity reads how many instances of each model are ready, from the
-// LLMInferenceServices in every namespace. A cluster without KServe has none
+// LLMInferenceServices in every namespace that are not marked to be ignored. A cluster without KServe has none
 // and that is not an error: it serves no model this tool can count.
 func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 	var items []unstructured.Unstructured
@@ -85,25 +98,28 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 	byModel := map[string]*ModelCapacity{}
 	for i := range items {
 		svc := &items[i]
+		if svc.GetAnnotations()[IgnoreAnnotation] == "true" {
+			continue
+		}
 		model, _, _ := unstructured.NestedString(svc.Object, "spec", "model", "name")
 		if model == "" {
 			model = svc.GetName()
 		}
-		w := workload(svc)
+		w, note := workload(svc)
 		instances, known := w.Instances()
 
 		mc := byModel[model]
 		if mc == nil {
-			mc = &ModelCapacity{Model: model, Known: true}
+			mc = &ModelCapacity{Model: model}
 			byModel[model] = mc
 		}
-		mc.Known = mc.Known && known
+		mc.Known = mc.Known || known
 		mc.Capacity += instances * w.PerInstance
 		mc.Step = max(mc.Step, w.PerInstance)
 		if mc.Detail != "" {
 			mc.Detail += "; "
 		}
-		mc.Detail += describeWorkload(svc, w, instances, known)
+		mc.Detail += describeWorkload(svc, w, instances, known) + note
 		mc.Revision = addValue(mc.Revision, svc.GetAnnotations()[RevisionAnnotation])
 		mc.MaxModelLen = addValue(mc.MaxModelLen, svc.GetAnnotations()[MaxModelLenAnnotation])
 	}
@@ -119,14 +135,23 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 // copies the ready counts into status.workloads from the Deployment's
 // available replicas, or from the LeaderWorkerSet's ready groups for a
 // multi-node deployment, so one multi-node instance counts once.
-func workload(svc *unstructured.Unstructured) weights.Workload {
+//
+// The note says what an operator should know about the declared capacity.
+func workload(svc *unstructured.Unstructured) (weights.Workload, string) {
 	w := weights.Workload{PerInstance: 1, Desired: replicas(svc, "spec", "replicas")}
-	declared := svc.GetAnnotations()[CapacityAnnotation]
+	declared, note := svc.GetAnnotations()[CapacityAnnotation], ""
 	if declared == "" {
-		declared = svc.GetAnnotations()[capacityPerReplica]
+		if declared = svc.GetAnnotations()[capacityPerReplica]; declared != "" {
+			note = " (declared with " + capacityPerReplica + ", the older name of " + CapacityAnnotation + ")"
+		}
 	}
-	if v, err := strconv.ParseFloat(declared, 64); err == nil && v > 0 {
-		w.PerInstance = v
+	if declared != "" {
+		// ParseFloat also takes "Inf" and "NaN"; the bounds refuse both.
+		if v, err := strconv.ParseFloat(declared, 64); err == nil && v >= minPerInstance && v <= maxPerInstance {
+			w.PerInstance = v
+		} else {
+			note = fmt.Sprintf(" (declared capacity %q is not a number from %v to %v, so an instance counts as 1)", declared, minPerInstance, maxPerInstance)
+		}
 	}
 	stopped := svc.GetAnnotations()[stopAnnotation] == "true"
 	w.Ready = readyReplicas(svc, "primary", stopped)
@@ -136,7 +161,7 @@ func workload(svc *unstructured.Unstructured) weights.Workload {
 			Ready:   readyReplicas(svc, "prefill", stopped),
 		}
 	}
-	return w
+	return w, note
 }
 
 // replicas returns a replica count from the spec, which is 1 when left out.

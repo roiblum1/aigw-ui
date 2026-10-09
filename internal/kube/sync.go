@@ -23,6 +23,8 @@ type SyncResult struct {
 	Changes []Change `json:"changes"`
 	// Rejected lists objects the gateway's controller reports as not accepted.
 	Rejected []Change `json:"rejected"`
+	// Held says which models' objects were left as they are, and why.
+	Held []string `json:"held,omitempty"`
 }
 
 // Change is one object on the cluster and what happened to it.
@@ -53,7 +55,10 @@ func version(obj *unstructured.Unstructured) string {
 // Sync makes the managed objects match desired. Everything lives in namespace
 // except QuotaPolicies, which sit next to the backends they target and so can
 // be in any namespace.
-func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstructured.Unstructured) (SyncResult, error) {
+//
+// held names objects of this tool that are not in desired and must stay as
+// they are all the same.
+func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstructured.Unstructured, held map[string]bool) (SyncResult, error) {
 	var res SyncResult
 	// kept holds "<kind>/<namespace>/<name>" of every desired object, so the
 	// prune step knows what to leave alone.
@@ -79,7 +84,7 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 		}
 	}
 
-	if err := c.prune(ctx, namespace, quotaNamespaces, kept, &res); err != nil {
+	if err := c.prune(ctx, namespace, quotaNamespaces, kept, held, &res); err != nil {
 		return res, err
 	}
 	c.readGatewayStatus(ctx, namespace, desired, &res)
@@ -155,8 +160,9 @@ func (c *Client) dropUnownedSecretEntries(ctx context.Context, gvr schema.GroupV
 	return err == nil, err
 }
 
-// prune deletes the objects this tool created earlier that are not in kept.
-func (c *Client) prune(ctx context.Context, namespace string, quotaNamespaces, kept map[string]bool, res *SyncResult) error {
+// prune deletes the objects this tool created earlier that are not in kept
+// and whose name is not in held.
+func (c *Client) prune(ctx context.Context, namespace string, quotaNamespaces, kept, held map[string]bool, res *SyncResult) error {
 	selector := render.ManagedLabel + "=" + render.ManagedValue
 	for _, m := range managed {
 		var items []unstructured.Unstructured
@@ -175,7 +181,7 @@ func (c *Client) prune(ctx context.Context, namespace string, quotaNamespaces, k
 			if item.GetLabels()[render.ManagedLabel] != render.ManagedValue {
 				continue
 			}
-			if kept[objectKey(m.Kind, item.GetNamespace(), item.GetName())] {
+			if kept[objectKey(m.Kind, item.GetNamespace(), item.GetName())] || held[item.GetName()] {
 				continue
 			}
 			err := c.dyn.Resource(m.GVR).Namespace(item.GetNamespace()).Delete(ctx, item.GetName(), metav1.DeleteOptions{})

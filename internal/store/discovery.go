@@ -32,6 +32,9 @@ func (s *Store) ApplyDiscovery(ctx context.Context, clusterID string, found []Di
 
 			var modelID string
 			err := tx.QueryRow(ctx, `SELECT id FROM models WHERE name = $1`, d.Name).Scan(&modelID)
+			if errors.Is(err, pgx.ErrNoRows) && d.OnlyIfKnown {
+				continue
+			}
 			if errors.Is(err, pgx.ErrNoRows) {
 				// ON CONFLICT covers a different model whose name gives the same slug.
 				err = tx.QueryRow(ctx,

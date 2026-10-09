@@ -15,7 +15,6 @@ import (
 	"aigw-ui/internal/kube"
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
-	"aigw-ui/internal/weights"
 )
 
 type Syncer struct {
@@ -35,8 +34,20 @@ func New(st *store.Store, auto bool, discoverEvery, syncEvery time.Duration) *Sy
 // saying what changed. Clusters are marked pending and, when auto sync is on,
 // a background sync is queued.
 func (s *Syncer) Changed(ctx context.Context, action, summary string) {
+	// A change to the clusters can change which sites a model has.
+	if _, err := s.st.RefreshFleetZones(context.WithoutCancel(ctx)); err != nil {
+		slog.Error("store zone weights", "err", err)
+	}
+	s.queue(ctx, action, summary)
+}
+
+// queue records a task, marks the clusters pending and, when auto sync is
+// on, queues a background sync.
+func (s *Syncer) queue(ctx context.Context, action, summary string) {
 	s.Record(ctx, action, summary, "")
-	if err := s.st.MarkPending(ctx); err != nil {
+	// The change is saved already, so the clusters are marked even if the
+	// request that made it has gone away.
+	if err := s.st.MarkPending(context.WithoutCancel(ctx)); err != nil {
 		slog.Error("mark clusters pending", "err", err)
 	}
 	if !s.auto {
@@ -129,6 +140,9 @@ func (s *Syncer) SyncCluster(ctx context.Context, id string) (kube.SyncResult, e
 	}
 	res, err := s.syncCluster(ctx, id)
 	status, msg := "synced", fmt.Sprintf("%d applied, %d removed", res.Applied, res.Pruned)
+	if len(res.Held) > 0 {
+		msg += ". " + strings.Join(res.Held, " ")
+	}
 	if err != nil {
 		status, msg = "error", err.Error()
 	}
@@ -149,13 +163,20 @@ func taskMessage(res kube.SyncResult, err error) string {
 	case err != nil:
 		return err.Error() + " (will be tried again)"
 	case len(res.Changes) == 0:
-		return fmt.Sprintf("Nothing had to change: all %d objects were already in place.", res.Applied)
+		return fmt.Sprintf("Nothing had to change: all %d objects were already in place.", res.Applied) + heldNote(res)
 	}
 	noun := "objects"
 	if len(res.Changes) == 1 {
 		noun = "object"
 	}
-	return fmt.Sprintf("%d %s changed, %d already in place.", len(res.Changes), noun, res.Applied+res.Pruned-len(res.Changes))
+	return fmt.Sprintf("%d %s changed, %d already in place.", len(res.Changes), noun, res.Applied+res.Pruned-len(res.Changes)) + heldNote(res)
+}
+
+func heldNote(res kube.SyncResult) string {
+	if len(res.Held) == 0 {
+		return ""
+	}
+	return " " + strings.Join(res.Held, " ")
 }
 
 func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, error) {
@@ -167,34 +188,17 @@ func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, e
 	if err != nil {
 		return kube.SyncResult{}, err
 	}
-	res, err := client.Sync(ctx, state.Namespace, render.Objects(state))
+	res, err := client.Sync(ctx, state.Namespace, render.Objects(state), render.HeldNames(state))
 	if err != nil {
 		return res, err
 	}
-	c, err := s.st.GetCluster(ctx, id)
-	if err != nil || !c.FleetEnabled {
-		return res, err // only the fleet's gateways share traffic between sites
-	}
-	changes, err := s.applyZoneWeights(ctx, client)
-	res.Changes = append(res.Changes, changes...)
-	return res, err
-}
-
-// applyZoneWeights writes each model's site weights to the cluster's
-// BackendTrafficPolicies that ask for them. A model whose weights cannot be
-// worked out safely is left alone.
-func (s *Syncer) applyZoneWeights(ctx context.Context, client *kube.Client) ([]kube.Change, error) {
-	sites, err := s.st.ZoneWeights(ctx)
-	if err != nil {
-		return nil, err
-	}
-	byModel := make(map[string][]weights.Zone, len(sites))
-	for model, list := range sites {
-		if zones, reason := weights.Zones(list); reason == "" {
-			byModel[model] = zones
+	for _, m := range state.Models {
+		if m.Held() {
+			res.Held = append(res.Held, "The entry route of "+m.Name+" was left as it is: "+m.HeldReason+".")
 		}
 	}
-	return client.ApplyZoneWeights(ctx, byModel)
+	// Only a sync that applied everything moves the cluster to the revision.
+	return res, s.st.SetFleetRevision(ctx, id, render.FleetRevision(state))
 }
 
 func (s *Syncer) Probe(ctx context.Context, id string) (kube.Probe, error) {
@@ -209,6 +213,15 @@ func (s *Syncer) Probe(ctx context.Context, id string) (kube.Probe, error) {
 	return client.Probe(ctx, c.Namespace, c.GatewayName)
 }
 
+// ProbeWith is Probe for a cluster that is not stored yet.
+func (s *Syncer) ProbeWith(ctx context.Context, kubeconfig []byte, namespace, gatewayName string) (kube.Probe, error) {
+	client, err := kube.New(kubeconfig)
+	if err != nil {
+		return kube.Probe{}, err
+	}
+	return client.Probe(ctx, namespace, gatewayName)
+}
+
 func (s *Syncer) client(ctx context.Context, id string) (*kube.Client, error) {
 	kubeconfig, err := s.st.Kubeconfig(ctx, id)
 	if err != nil {
@@ -217,7 +230,10 @@ func (s *Syncer) client(ctx context.Context, id string) (*kube.Client, error) {
 	return kube.New(kubeconfig)
 }
 
-// DiscoverAll polls every cluster for the models it exposes.
+// DiscoverAll polls every cluster for the models it exposes and what it
+// serves, and then works out the site weights once for the whole round.
+// Doing that after each cluster would send the gateways several sets of
+// weights in a row, and every set moves conversations.
 func (s *Syncer) DiscoverAll(ctx context.Context) {
 	clusters, err := s.st.ListClusters(ctx)
 	if err != nil {
@@ -227,18 +243,29 @@ func (s *Syncer) DiscoverAll(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, c := range clusters {
 		wg.Go(func() {
-			if _, err := s.DiscoverCluster(ctx, c.ID); err != nil {
+			if _, err := s.pollCluster(ctx, c.ID); err != nil {
 				slog.Warn("discovery failed", "cluster", c.Name, "err", err)
 			}
 		})
 	}
 	wg.Wait()
+	s.refreshWeights(ctx, "a poll of all clusters")
 }
 
 // DiscoverCluster reads the models one cluster exposes and stores them. A
 // failed poll changes nothing: models are only removed when the cluster
 // answered and no longer lists them.
 func (s *Syncer) DiscoverCluster(ctx context.Context, id string) (int, error) {
+	n, err := s.pollCluster(ctx, id)
+	if err == nil {
+		s.refreshWeights(ctx, "a poll of one cluster")
+	}
+	return n, err
+}
+
+// pollCluster is DiscoverCluster without the site weights, which the caller
+// works out when it has polled every cluster it meant to.
+func (s *Syncer) pollCluster(ctx context.Context, id string) (int, error) {
 	n, err := s.discoverCluster(ctx, id)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		if serr := s.st.SetDiscoveryError(context.WithoutCancel(ctx), id, err.Error()); serr != nil {
@@ -261,59 +288,80 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 	if c.GatewayURL != "" {
 		found, err = s.discoverViaGateway(ctx, c, client)
 	} else {
-		found, err = client.Discover(ctx, c.Namespace)
+		found, err = client.Discover(ctx, gatewayOf(c))
 	}
 	if err != nil {
 		return 0, err
 	}
+	// What the cluster serves is read in the same poll. If it cannot be
+	// read the poll fails and nothing changes: "unknown" must not be taken
+	// for "nothing is running".
+	capacity, err := client.Capacity(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read what the cluster serves: %w", err)
+	}
 	models := make([]store.DiscoveredModel, 0, len(found))
+	exposed := map[string]bool{}
 	for _, f := range found {
+		exposed[f.Name] = true
 		m := store.DiscoveredModel{Name: f.Name}
 		for _, b := range f.Backends {
 			ns := b.Namespace
 			if ns == c.Namespace {
 				ns = "" // stored as "the gateway namespace" so it follows a change of that setting
 			}
-			m.Backends = append(m.Backends, store.BackendRef{Name: b.Name, Namespace: ns, Model: b.Model, Override: b.Override})
+			m.Backends = append(m.Backends, store.BackendRef{Name: b.Name, Namespace: ns, Model: b.Model, Override: b.Override, PeerOnly: b.PeerOnly})
 		}
 		models = append(models, m)
+	}
+	// A cluster serves a model when it has a deployment of it, whether or
+	// not its own gateway still has a route for it.
+	for _, mc := range capacity {
+		if !exposed[mc.Model] {
+			models = append(models, store.DiscoveredModel{Name: mc.Model, OnlyIfKnown: true})
+		}
 	}
 	changed, err := s.st.ApplyDiscovery(ctx, id, models)
 	if err != nil {
 		return 0, err
 	}
 	if changed {
-		s.Changed(ctx, "discovery", "Models changed on cluster "+c.Name)
+		s.queue(ctx, "discovery", "Models changed on cluster "+c.Name)
 	}
-	s.observeCapacity(ctx, c, client)
-	return len(models), nil
+	s.observeCapacity(ctx, c, capacity)
+	return len(found), nil
 }
 
-// observeCapacity reads how many instances of each model the cluster has
-// ready and moves the site weights towards it. It never fails discovery: a
-// cluster that cannot be asked keeps its last weights, because "unknown" must
-// not be taken for "nothing is running".
-func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, client *kube.Client) {
-	found, err := client.Capacity(ctx)
-	if err != nil {
-		slog.Warn("read model capacity", "cluster", c.Name, "err", err)
-		return
-	}
+// observeCapacity stores how many instances of each model the cluster has
+// ready and moves its applied capacities one step towards it.
+func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, found []kube.ModelCapacity) {
 	reported := make([]store.Capacity, 0, len(found))
 	for _, f := range found {
 		reported = append(reported, store.Capacity{Model: f.Model, Capacity: f.Capacity, Step: f.Step, Detail: f.Detail,
 			Revision: f.Revision, MaxModelLen: f.MaxModelLen, Known: f.Known})
 	}
-	moved, err := s.st.ApplyCapacity(ctx, c.ID, reported)
-	if err != nil {
+	if err := s.st.ApplyCapacity(ctx, c.ID, reported); err != nil {
 		slog.Error("store model capacity", "cluster", c.Name, "err", err)
+	}
+}
+
+// refreshWeights turns the applied capacities into zone weights and queues a
+// sync when a model's weights moved.
+func (s *Syncer) refreshWeights(ctx context.Context, after string) {
+	moved, err := s.st.RefreshFleetZones(context.WithoutCancel(ctx))
+	if err != nil {
+		slog.Error("store zone weights", "err", err)
 		return
 	}
 	if len(moved) > 0 {
 		// Every cluster gets the new weights: gateways with different
 		// weights would send one conversation to different sites.
-		s.Changed(ctx, "weights", "Site weight of "+strings.Join(moved, ", ")+" changed on cluster "+c.Name)
+		s.queue(ctx, "weights", "Site weights of "+strings.Join(moved, ", ")+" changed after "+after)
 	}
+}
+
+func gatewayOf(c store.Cluster) kube.Gateway {
+	return kube.Gateway{Namespace: c.Namespace, Name: c.GatewayName, ClientListener: c.ClientListener}
 }
 
 // discoverViaGateway takes the list of models from the gateway itself, which
@@ -326,13 +374,22 @@ func (s *Syncer) discoverViaGateway(ctx context.Context, c store.Cluster, client
 	if err != nil {
 		return nil, err
 	}
-	names, err := gateway.ListModels(ctx, c.GatewayURL, token)
-	if err != nil {
-		return nil, fmt.Errorf("list models from the gateway: %w", err)
-	}
-	routes, err := client.DiscoverAttached(ctx, c.Namespace, c.GatewayName)
+	routes, err := client.DiscoverAttached(ctx, gatewayOf(c))
 	if err != nil {
 		return nil, fmt.Errorf("read routes for the backends: %w", err)
+	}
+	names, err := gateway.ListModels(ctx, c.GatewayURL, token)
+	if err != nil && c.FleetEnabled {
+		// A fleet cluster's client listener can have no route at all until
+		// the first entry route is on, and /v1/models then answers 404. What
+		// the cluster serves is read from its deployments, so the routes
+		// alone are enough here, and they carry every backend a quota can
+		// attach to.
+		slog.Warn("the gateway did not list its models; using the routes alone", "cluster", c.Name, "err", err)
+		return routes, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list models from the gateway: %w", err)
 	}
 	byName := make(map[string]kube.DiscoveredModel, len(routes))
 	for _, r := range routes {

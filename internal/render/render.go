@@ -59,6 +59,9 @@ type Target struct {
 	Namespace string
 	Backend   string
 	Model     string
+	// PeerOnly is set for a backend clients cannot reach through the
+	// cluster's own routes: only other sites' gateways send to it.
+	PeerOnly bool
 }
 
 type Model struct {
@@ -77,9 +80,36 @@ type Model struct {
 	// backends are already there and owned by someone else, so only the
 	// QuotaPolicy is rendered and it is attached to these backends.
 	Existing []Target
+	// Fleet is set for a model whose entry route this tool renders: the
+	// sites that serve it. Quotas attach to it, and to the Existing backends
+	// that clients can still reach through a route of the cluster's own.
+	Fleet []FleetSite
+	// HeldReason is set for a model that has an entry route which cannot be
+	// rendered right now, with the reason. Its entry objects on the cluster
+	// are left as they are: removing the route would make the model
+	// unreachable. Its quotas are still rendered.
+	HeldReason string
 }
 
+// Held reports whether the model's objects on the cluster are left alone.
+func (m Model) Held() bool { return m.HeldReason != "" }
+
 func (m Model) targets() []Target {
+	if len(m.Fleet) > 0 || m.Held() {
+		out := []Target{{Backend: FleetName(m.Slug), Model: m.Name}}
+		// A route the cluster already has for the model on the client
+		// listener is older than the entry route and wins the match, so
+		// clients still reach its backends. Without a quota there, turning
+		// the entry route on would lift every tenant's limit. A backend
+		// that only other sites reach gets none: the entry gateway has
+		// charged the request already.
+		for _, t := range m.Existing {
+			if !t.PeerOnly {
+				out = append(out, t)
+			}
+		}
+		return out
+	}
 	if m.Existing != nil {
 		return m.Existing
 	}
@@ -98,8 +128,10 @@ type State struct {
 	// to. Empty attaches it to the whole Gateway.
 	ClientListener string
 	AuthEnabled    bool
-	Models         []Model
-	Keys           []Key
+	// Fleet is used by the models that have Fleet sites.
+	Fleet  FleetConfig
+	Models []Model
+	Keys   []Key
 }
 
 // Objects returns the desired objects in the order they should be applied.
@@ -112,7 +144,15 @@ func Objects(s State) []*unstructured.Unstructured {
 		out = append(out, keysSecret(s))
 	}
 	for _, m := range models {
-		if m.Existing == nil {
+		switch {
+		case m.Held():
+			// The entry objects stay on the cluster as they are. The quotas
+			// are still rendered, against the entry backend that is there:
+			// a model can be held for days, and a limit that was lowered
+			// or a tenant that left must not wait for that.
+		case len(m.Fleet) > 0:
+			out = append(out, fleetObjects(s, m)...)
+		case m.Existing == nil:
 			out = append(out, backend(s, m), aiServiceBackend(s, m), route(s, m))
 		}
 		if len(m.Quotas) > 0 {

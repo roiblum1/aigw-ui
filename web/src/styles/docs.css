@@ -1,0 +1,138 @@
+@layer components {
+  /* ---- docs ---- */
+  .docs {
+    display: grid;
+    gap: 24px;
+  }
+  @media (min-width: 900px) {
+    .docs {
+      grid-template-columns: 220px minmax(0, 1fr);
+      align-items: start;
+    }
+    .docs-nav {
+      position: sticky;
+      top: 24px;
+      max-height: calc(100vh - 48px);
+      overflow-y: auto;
+    }
+  }
+  .docs-nav h3 {
+    margin: 0 0 6px;
+  }
+  .docs-nav > div + div {
+    margin-top: 18px;
+  }
+  .docs-nav a {
+    display: block;
+    padding: 5px 10px;
+    border-radius: 8px;
+    color: var(--foreground);
+    font-size: 13.5px;
+    text-decoration: none;
+  }
+  .docs-nav a:hover {
+    background: var(--muted);
+  }
+  .docs-nav a[aria-current="page"] {
+    background: var(--primary-soft);
+    color: var(--primary);
+    font-weight: 600;
+  }
+
+  .doc {
+    min-width: 0;
+    max-width: 860px;
+    padding: 28px 32px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--card);
+    box-shadow: var(--shadow);
+    font-size: 14.5px;
+    line-height: 1.65;
+    scroll-margin-top: 16px;
+  }
+  .doc > :first-child {
+    margin-top: 0;
+  }
+  .doc h1 {
+    margin-bottom: 14px;
+  }
+  .doc h2 {
+    margin: 34px 0 10px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    font-size: 18px;
+    scroll-margin-top: 12px;
+  }
+  /* The app's own h3 is a small uppercase label; in a document it is a heading. */
+  .doc h3 {
+    margin: 24px 0 8px;
+    font-size: 15px;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--foreground);
+    scroll-margin-top: 12px;
+  }
+  .doc :is(p, ul, ol, table, pre, blockquote) {
+    margin: 0 0 12px;
+  }
+  .doc :is(ul, ol) {
+    padding-left: 22px;
+  }
+  .doc ul {
+    list-style: disc;
+  }
+  .doc ol {
+    list-style: decimal;
+  }
+  .doc li + li {
+    margin-top: 4px;
+  }
+  .doc li > :is(ul, ol) {
+    margin: 4px 0 0;
+  }
+  .doc code {
+    padding: 1px 5px;
+    border-radius: 5px;
+    background: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+  }
+  .doc pre {
+    overflow-x: auto;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--muted);
+  }
+  .doc pre code {
+    padding: 0;
+    background: none;
+  }
+  .doc table {
+    display: block;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 13.5px;
+  }
+  .doc :is(th, td) {
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+  }
+  .doc th {
+    background: var(--muted);
+    font-weight: 600;
+  }
+  .doc blockquote {
+    padding-left: 14px;
+    border-left: 3px solid var(--border);
+    color: var(--muted-foreground);
+  }
+  @media (max-width: 640px) {
+    .doc {
+      padding: 18px 16px;
+    }
+  }
+}

@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
+
+	"aigw-ui/internal/render"
 )
 
 type Config struct {
@@ -29,6 +32,11 @@ type Config struct {
 	RedisKeyPrefix   string
 	// RedisAllowReset lets an admin delete a quota's counter to reset its usage.
 	RedisAllowReset bool
+
+	// Fleet is what every site's entry route has in common. PeerSNI is
+	// empty when neither FLEET_PEER_SNI nor FLEET_DOMAIN is set, and no
+	// entry route can be turned on then.
+	Fleet render.FleetConfig
 }
 
 func Load() (*Config, error) {
@@ -44,6 +52,20 @@ func Load() (*Config, error) {
 		RedisTLSInsecure: os.Getenv("REDIS_TLS_INSECURE") == "true",
 		RedisKeyPrefix:   os.Getenv("REDIS_KEY_PREFIX"),
 		RedisAllowReset:  os.Getenv("REDIS_ALLOW_RESET") == "true",
+	}
+	c.Fleet = render.FleetConfig{
+		PeerSNI:      os.Getenv("FLEET_PEER_SNI"),
+		CAConfigMap:  envOr("FLEET_PEER_CA_CONFIGMAP", "llm-peer-ca"),
+		ClientSecret: envOr("FLEET_PEER_CLIENT_SECRET", "llm-peer-client"),
+	}
+	// One name per kind of client: Claude Code and Open WebUI by default.
+	for _, name := range strings.Split(envOr("FLEET_SESSION_HEADER", "x-claude-code-session-id,x-openwebui-chat-id"), ",") {
+		if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
+			c.Fleet.SessionHeaders = append(c.Fleet.SessionHeaders, name)
+		}
+	}
+	if domain := os.Getenv("FLEET_DOMAIN"); c.Fleet.PeerSNI == "" && domain != "" {
+		c.Fleet.PeerSNI = "peers.llm." + domain
 	}
 	if c.DatabaseURL == "" {
 		return nil, errors.New("DATABASE_URL is required")

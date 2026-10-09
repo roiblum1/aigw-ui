@@ -2,8 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
+	"aigw-ui/internal/kube"
 	"aigw-ui/internal/store"
 )
 
@@ -12,7 +15,7 @@ import (
 func TestClusterUpdateKeepsOmittedFields(t *testing.T) {
 	current := store.Cluster{
 		ID: "c1", Name: "site1-a", Site: "site1", Namespace: "ai-gateway", GatewayName: "llm",
-		AuthEnabled: true, GatewayURL: "https://gw.site1.example",
+		AuthEnabled: true, GatewayURL: "https://gw.site1.example", PeerPort: 8443,
 	}
 	for name, tc := range map[string]struct {
 		body string
@@ -104,9 +107,9 @@ func TestValidCostExpression(t *testing.T) {
 // A fleet cluster without key enforcement would let a client name its own
 // tenant, so the two settings cannot be combined either way round.
 func TestFleetClusterMustEnforceKeys(t *testing.T) {
-	enforcing := store.Cluster{ID: "c1", Name: "site1-a", Namespace: "ai-gateway", GatewayName: "llm", AuthEnabled: true}
+	enforcing := store.Cluster{ID: "c1", Name: "site1-a", Namespace: "ai-gateway", GatewayName: "llm", AuthEnabled: true, PeerHost: "llm.site1-a.example.com"}
 	open := with(enforcing, func(c *store.Cluster) { c.AuthEnabled = false })
-	fleet := with(enforcing, func(c *store.Cluster) { c.FleetEnabled = true })
+	fleet := with(enforcing, func(c *store.Cluster) { c.FleetEnabled, c.ClientListener = true, "https" })
 	for name, tc := range map[string]struct {
 		current store.Cluster
 		body    string
@@ -114,16 +117,46 @@ func TestFleetClusterMustEnforceKeys(t *testing.T) {
 	}{
 		"join the fleet with keys enforced": {enforcing, `{"fleet_enabled":true,"client_listener":"https"}`, true},
 		"join the fleet without":            {open, `{"fleet_enabled":true}`, false},
-		"join and enforce in one change":    {open, `{"fleet_enabled":true,"auth_enabled":true}`, true},
+		"join and enforce in one change":    {open, `{"fleet_enabled":true,"auth_enabled":true,"client_listener":"https"}`, true},
+		"join the fleet without a listener": {enforcing, `{"fleet_enabled":true}`, false},
+		"drop the listener while in it":     {fleet, `{"client_listener":""}`, false},
 		"stop enforcing while in the fleet": {fleet, `{"auth_enabled":false}`, false},
 		"leave the fleet and stop":          {fleet, `{"auth_enabled":false,"fleet_enabled":false}`, true},
 		"bad listener name":                 {enforcing, `{"client_listener":"HTTPS listener"}`, false},
+		"drop the peer host while in it":    {fleet, `{"peer_host":""}`, false},
+		"rename while in the fleet":         {fleet, `{"name":"site1-b"}`, false},
+		"rename and leave the fleet":        {fleet, `{"name":"site1-b","fleet_enabled":false}`, true},
+		"rename outside the fleet":          {enforcing, `{"name":"site1-b"}`, true},
+		"a peer host that is no DNS name":   {enforcing, `{"peer_host":"https://llm.site1-a"}`, false},
+		"a peer port out of range":          {enforcing, `{"peer_port":70000}`, false},
 	} {
 		var b clusterBody
 		if err := json.Unmarshal([]byte(tc.body), &b); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := b.cluster(&tc.current); (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok = %v", name, err, tc.ok)
+		}
+	}
+}
+
+// The gateway namespace is part of every quota counter's name, so a fleet
+// site with another one would silently get a budget of its own.
+func TestFleetClustersShareTheGatewayNamespace(t *testing.T) {
+	site := func(id, namespace string, fleet bool) store.Cluster {
+		return store.Cluster{ID: id, Name: id, Namespace: namespace, FleetEnabled: fleet}
+	}
+	others := []store.Cluster{site("a", "ai-gateway", true), site("b", "elsewhere", false)}
+	for name, tc := range map[string]struct {
+		c  store.Cluster
+		ok bool
+	}{
+		"same namespace":               {site("c", "ai-gateway", true), true},
+		"another namespace":            {site("c", "envoy-ai-system", true), false},
+		"another one, not in fleet":    {site("c", "envoy-ai-system", false), true},
+		"the only fleet cluster moves": {site("a", "envoy-ai-system", true), true},
+	} {
+		if err := checkFleet(tc.c, others); (err == nil) != tc.ok {
 			t.Errorf("%s: err = %v, want ok = %v", name, err, tc.ok)
 		}
 	}
@@ -145,5 +178,39 @@ func TestRecipeWarnings(t *testing.T) {
 	differ := store.Model{Endpoints: []store.Endpoint{site("a", "r1", "262144", true), site("b", "r2", "131072", true)}}
 	if got := recipeWarnings(differ); len(got) != 2 {
 		t.Errorf("different recipes: %v", got)
+	}
+}
+
+func TestOwnRouteWarnings(t *testing.T) {
+	endpoint := func(id string, peerOnly bool) store.Endpoint {
+		return store.Endpoint{ClusterID: id, ClusterName: id, Backends: []store.BackendRef{{Name: "glm", PeerOnly: peerOnly}}}
+	}
+	fleet := map[string]bool{"site1": true, "site2": true}
+	m := store.Model{Fleet: true, Endpoints: []store.Endpoint{endpoint("site1", true), endpoint("site2", false), endpoint("other", false)}}
+	got := ownRouteWarnings(m, fleet)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "On site2 the cluster's own route") {
+		t.Errorf("warnings = %q", got)
+	}
+	m.Fleet = false
+	if got := ownRouteWarnings(m, fleet); got != nil {
+		t.Errorf("a model without an entry route got %q", got)
+	}
+}
+
+// A cluster joins the fleet only when it can take the retry patch every
+// entry route comes with.
+func TestFleetNeedsThePatchKind(t *testing.T) {
+	for name, tc := range map[string]struct {
+		probe kube.Probe
+		err   error
+		ok    bool
+	}{
+		"has the kind":    {kube.Probe{Kinds: map[string]bool{"EnvoyPatchPolicy": true}}, nil, true},
+		"kind missing":    {kube.Probe{Kinds: map[string]bool{"EnvoyPatchPolicy": false, "Backend": true}}, nil, false},
+		"cannot be asked": {kube.Probe{}, errors.New("dial tcp: timeout"), false},
+	} {
+		if err := fleetProbeError(tc.probe, tc.err); (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok = %v", name, err, tc.ok)
+		}
 	}
 }

@@ -57,8 +57,21 @@ for _ in $(seq 60); do
 done
 kc get --raw /readyz >/dev/null || { echo "the API server did not start:"; tail -20 "$work/apiserver.log"; exit 1; }
 
-kc create namespace aigw-ui-test
-kc apply -f internal/kube/testdata/weights-crds.yaml
+# The gateway CRDs are the real ones, at the versions the clusters run, so the
+# API server checks what this tool renders against their schema and rules.
+eg="https://raw.githubusercontent.com/envoyproxy/gateway/${ENVOY_GATEWAY_VERSION:-v1.9.1}/charts/gateway-helm/charts/crds/crds/generated"
+aigw="https://raw.githubusercontent.com/envoyproxy/ai-gateway/${AI_GATEWAY_VERSION:-v1.1.0}/manifests/charts/ai-gateway-crds-helm/templates"
+for crd in \
+  "$eg/gateway.envoyproxy.io_backends.yaml" \
+  "$eg/gateway.envoyproxy.io_backendtrafficpolicies.yaml" \
+  "$eg/gateway.envoyproxy.io_envoypatchpolicies.yaml" \
+  "$eg/gateway.envoyproxy.io_securitypolicies.yaml" \
+  "$aigw/aigateway.envoyproxy.io_aigatewayroutes.yaml" \
+  "$aigw/aigateway.envoyproxy.io_aiservicebackends.yaml" \
+  "$aigw/aigateway.envoyproxy.io_quotapolicies.yaml"; do
+  curl -fsSL "$crd" | kc apply --server-side -f -
+done
+kc apply -f internal/kube/testdata/llminferenceservice-crd.yaml
 kc wait --for=condition=Established crd --all --timeout=60s
 
 KUBE_TEST_KUBECONFIG="$work/kubeconfig" go test ./internal/kube/ -run RealAPIServer -count=1 -v

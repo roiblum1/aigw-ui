@@ -20,12 +20,23 @@ type ChatResult struct {
 	Tokens int64
 	// Body is the start of the response body, for an error message.
 	Body string
+	// ServedBy is the site that served the request, from the response
+	// header of that name. Empty when the answer does not carry it.
+	ServedBy string
 }
+
+// ServedByHeader is set on the response by the site that served a request.
+const ServedByHeader = "x-llm-served-by"
 
 // Chat sends the smallest possible chat completion for model through the
 // gateway at baseURL. key is sent as a bearer token when it is not empty. An
 // HTTP error status is not an error: it is returned in the result.
 func Chat(ctx context.Context, baseURL, key, model string) (ChatResult, error) {
+	return ChatWith(ctx, baseURL, key, model, nil)
+}
+
+// ChatWith is Chat with extra request headers.
+func ChatWith(ctx context.Context, baseURL, key, model string, headers map[string]string) (ChatResult, error) {
 	body, err := json.Marshal(map[string]any{
 		"model":      model,
 		"messages":   []map[string]string{{"role": "user", "content": "Reply with OK."}},
@@ -42,6 +53,9 @@ func Chat(ctx context.Context, baseURL, key, model string) (ChatResult, error) {
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
 	resp, err := chatClient.Do(req)
 	if err != nil {
 		return ChatResult{}, err
@@ -51,7 +65,7 @@ func Chat(ctx context.Context, baseURL, key, model string) (ChatResult, error) {
 	if err != nil {
 		return ChatResult{}, err
 	}
-	res := ChatResult{Status: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
+	res := ChatResult{Status: resp.StatusCode, Body: strings.TrimSpace(string(raw)), ServedBy: resp.Header.Get(ServedByHeader)}
 	if len(res.Body) > 300 {
 		res.Body = res.Body[:300] + "…"
 	}

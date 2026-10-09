@@ -2,9 +2,13 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+
 	"aigw-ui/internal/render"
+	"aigw-ui/internal/weights"
 )
 
 // RenderState collects everything one cluster should be running.
@@ -23,7 +27,7 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 	if err != nil {
 		return render.State{}, err
 	}
-	st := render.State{Namespace: c.Namespace, GatewayName: c.GatewayName, ClientListener: c.ClientListener, AuthEnabled: c.AuthEnabled}
+	st := render.State{Namespace: c.Namespace, GatewayName: c.GatewayName, ClientListener: c.ClientListener, AuthEnabled: c.AuthEnabled, Fleet: s.fleet}
 
 	rows, err := s.db.Query(ctx,
 		`SELECT m.id, m.name, m.slug, e.host, e.port, e.upstream_model, m.default_limit, m.default_window, m.cost_expression, e.source, e.backends
@@ -44,7 +48,7 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 		if source == SourceDiscovered {
 			m.Existing = make([]render.Target, 0, len(backends))
 			for _, b := range backends {
-				m.Existing = append(m.Existing, render.Target{Namespace: b.Namespace, Backend: b.Name, Model: b.Model})
+				m.Existing = append(m.Existing, render.Target{Namespace: b.Namespace, Backend: b.Name, Model: b.Model, PeerOnly: b.PeerOnly})
 			}
 		}
 		index[id] = len(st.Models)
@@ -52,6 +56,11 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 	}
 	if err := rows.Err(); err != nil {
 		return st, err
+	}
+	if c.FleetEnabled {
+		if err := s.addFleetModels(ctx, &st, index); err != nil {
+			return st, err
+		}
 	}
 
 	rows, err = s.db.Query(ctx,
@@ -98,4 +107,107 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 		st.Keys = append(st.Keys, render.Key{ClientID: clientID, Value: string(plain)})
 	}
 	return st, rows.Err()
+}
+
+// Reasons an entry route is left as it is on the clusters.
+const (
+	heldNoConfig = "the server has no FLEET_DOMAIN or FLEET_PEER_SNI set"
+	heldNoSite   = "none of its sites is a fleet cluster with a peer host"
+)
+
+// addFleetModels gives every model with an entry route its sites, adding the
+// models this cluster does not serve itself: the entry route is on every
+// fleet cluster. index maps a model's ID to its position in st.Models.
+//
+// A model whose entry route cannot be rendered is held: the cluster keeps
+// what it has for it, and everything else is still synced. A missing setting
+// or a site that left the fleet must never read as "the route was turned
+// off", and one such model must not keep keys and quotas from being applied.
+func (s *Store) addFleetModels(ctx context.Context, st *render.State, index map[string]int) error {
+	rows, err := s.db.Query(ctx, `SELECT name, peer_host, peer_port FROM clusters WHERE fleet_enabled AND peer_host <> ''`)
+	if err != nil {
+		return err
+	}
+	type peer struct {
+		host string
+		port int
+	}
+	peers := map[string]peer{}
+	for rows.Next() {
+		var name string
+		var p peer
+		if err := rows.Scan(&name, &p.host, &p.port); err != nil {
+			rows.Close()
+			return err
+		}
+		peers[name] = p
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	rows, err = s.db.Query(ctx,
+		`SELECT id, name, slug, default_limit, default_window, cost_expression, fleet_zones FROM models WHERE fleet ORDER BY name`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var m render.Model
+		var zones []weights.Zone
+		if err := rows.Scan(&id, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &zones); err != nil {
+			return err
+		}
+		i, ok := index[id]
+		if !ok {
+			i = len(st.Models)
+			index[id] = i
+			st.Models = append(st.Models, m)
+		}
+		if !s.FleetConfigured() {
+			st.Models[i].HeldReason = heldNoConfig
+			continue
+		}
+		var sites []render.FleetSite
+		for _, z := range zones {
+			if p, ok := peers[z.Zone]; ok {
+				sites = append(sites, render.FleetSite{Name: z.Zone, Host: p.host, Port: p.port, Weight: z.Weight})
+			}
+		}
+		if len(sites) == 0 {
+			st.Models[i].HeldReason = heldNoSite
+			continue
+		}
+		st.Models[i].Fleet = sites
+	}
+	return rows.Err()
+}
+
+// FleetModels returns the names of the models that have an entry route.
+func (s *Store) FleetModels(ctx context.Context) ([]string, error) {
+	rows, err := s.db.Query(ctx, `SELECT name FROM models WHERE fleet ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
+// CurrentFleetRevision returns the revision a fleet cluster has once it is
+// synced: render.FleetRevision of the fleet as it is now. It is the same for
+// every fleet cluster, and empty when no model has an entry route.
+func (s *Store) CurrentFleetRevision(ctx context.Context) (string, error) {
+	var id string
+	err := s.db.QueryRow(ctx, `SELECT id FROM clusters WHERE fleet_enabled ORDER BY name LIMIT 1`).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	st, err := s.renderState(ctx, id, false)
+	if err != nil {
+		return "", err
+	}
+	return render.FleetRevision(st), nil
 }

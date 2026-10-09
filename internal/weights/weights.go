@@ -49,67 +49,66 @@ func Next(applied *float64, observed, step float64, lowStreak int, drain bool) (
 // minStep keeps a deployment with a tiny declared capacity from ramping forever.
 const minStep = 0.01
 
-// Site is one cluster of the fleet, for one model. Capacity is nil while the
-// cluster has never reported one. A site that does not serve the model and
-// has no capacity takes part with weight 0.
+// Site is one site that is listed for a model: a fleet cluster that serves
+// the model and is not drained out. Capacity is nil while the cluster has
+// never reported one.
 type Site struct {
 	Zone     string
-	Serving  bool
 	Capacity *float64
 }
 
 // Zone is the weight of one site as the gateway takes it.
 type Zone struct {
-	Zone   string
-	Weight int64
+	Zone   string `json:"zone"`
+	Weight int64  `json:"weight"`
 }
 
-// Zones turns the capacities of the fleet's sites for one model into integer
-// zone weights. Every site is listed, with 0 where it does not serve the
-// model, because the gateway gives an unlisted zone a weight of 1. It returns no weights and a reason when applying any would be
-// worse than leaving the gateways as they are:
+// Scale turns a capacity into a zone weight. It keeps two decimals of the
+// capacity, and it makes MinWeight small next to any site that has an
+// instance ready.
+const Scale = 100
+
+// MinWeight is the lowest weight a listed site gets. Zero is not possible:
+// Envoy rejects a locality weight below 1, and Envoy Gateway then stops
+// publishing every change to that gateway, key revocations included.
+const MinWeight = 1
+
+// MaxWeight is the highest weight a site gets. The gateway takes a 32-bit
+// number and adds the weights of a model's sites up; with this limit a model
+// would need more than 400 sites to pass it.
+const MaxWeight = 10_000_000
+
+// Weight returns the zone weight for a capacity. A site with nothing ready,
+// or one that has not reported yet, gets MinWeight: its health check keeps
+// traffic off it, and it ramps up from there.
+func Weight(capacity *float64) int64 {
+	if capacity == nil || math.IsNaN(*capacity) {
+		return MinWeight
+	}
+	// Compared as floats: converting a number that does not fit is undefined.
+	scaled := math.Round(*capacity * Scale)
+	switch {
+	case scaled >= MaxWeight:
+		return MaxWeight
+	case scaled <= MinWeight:
+		return MinWeight
+	}
+	return int64(scaled)
+}
+
+// Zones returns the zone weights of the sites listed for one model, sorted
+// by zone. The gateways build their hash table from this list, so the order
+// must be the same on every cluster.
 //
-//   - a serving site with unknown capacity cannot be left out, because the
-//     gateway gives an unlisted zone a weight of its own, and cannot be
-//     guessed;
-//   - weights that add up to zero would make the model unreachable. Taking a
-//     dead site out is the job of the health checks.
-func Zones(in []Site) ([]Zone, string) {
-	sites := append([]Site(nil), in...)
-	if len(sites) == 0 {
-		return nil, "no site serves the model"
-	}
-	total, whole := 0.0, true
-	zero := 0.0
-	for i, s := range sites {
-		if s.Capacity == nil && !s.Serving {
-			sites[i].Capacity, s.Capacity = &zero, &zero
-		}
-		if s.Capacity == nil {
-			return nil, "the capacity of " + s.Zone + " is not known yet"
-		}
-		total += *s.Capacity
-		whole = whole && *s.Capacity == math.Trunc(*s.Capacity)
-	}
-	if total <= 0 {
-		return nil, "no site has a ready instance; the last weights are kept"
-	}
-	// Whole numbers are used as they are, so 8 and 3 instances read as 8 and
-	// 3. Anything else is scaled to keep two decimals.
-	scale := 1.0
-	if !whole {
-		scale = 100
-	}
+// The list has to be exactly the sites in the model's Backend: a zone that
+// has endpoints but is not listed gets a weight of 1 from the gateway.
+func Zones(sites []Site) []Zone {
 	zones := make([]Zone, 0, len(sites))
 	for _, s := range sites {
-		w := int64(math.Round(*s.Capacity * scale))
-		if w == 0 && *s.Capacity > 0 {
-			w = 1 // never round a serving site down to nothing
-		}
-		zones = append(zones, Zone{Zone: s.Zone, Weight: w})
+		zones = append(zones, Zone{Zone: s.Zone, Weight: Weight(s.Capacity)})
 	}
 	sort.Slice(zones, func(i, j int) bool { return zones[i].Zone < zones[j].Zone })
-	return zones, ""
+	return zones
 }
 
 // Workload is one LLMInferenceService as far as capacity is concerned.

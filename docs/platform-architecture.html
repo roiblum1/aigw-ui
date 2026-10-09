@@ -193,7 +193,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
   <ul class="meta">
     <li>hub: ocp4-prod-hub-site1</li>
     <li>sites: site1-a · site1-b · site2-a · site3-a · site4-a</li>
-    <li>checked against Envoy Gateway 1.8.5 · KServe 0.21 · llm-d EPP 0.10 source</li>
+    <li>checked against Envoy Gateway 1.9.1 · KServe 0.21 · llm-d EPP 0.10 source</li>
   </ul>
 </header>
 
@@ -567,7 +567,7 @@ spec:
       <p class="kicker">Phase 1 · config only</p>
       <h3>Weighted session hash</h3>
       <ul>
-        <li>Works on Envoy Gateway 1.8.5 today: zone weights become Maglev locality weights.</li>
+        <li>Works on Envoy Gateway 1.9.1 today: zone weights become Maglev locality weights.</li>
         <li>Requests without the session header are spread by weight at random.</li>
         <li>A 503 retry goes to the conversation’s stable second site.</li>
         <li>Limits: weights change only as fast as the hub polls the clusters, chat without a session header isn’t sticky, and overload only moves through shed and retry.</li>
@@ -672,7 +672,7 @@ f_s -= 0.01  while not queueing and under ~95% busy</code></pre>
   <h2 id="confirm">To confirm before building</h2>
   <ol class="confirm">
     <li><b>Fairness header.</b> The simplest path is to have the API-key auth write the tenant ID straight into <code>x-llm-d-inference-fairness-id</code> and key token budgets on that same header. The serving site must trust it only from peer certificates.</li>
-    <li><b>Endpoint override with hostname endpoints.</b> Confirm that Envoy Gateway 1.8.5 matches the override (IP:port) against the resolved VIP addresses of the site Backend.</li>
+    <li><b>Endpoint override with hostname endpoints.</b> Confirm that Envoy Gateway 1.9.1 matches the override (IP:port) against the resolved VIP addresses of the site Backend.</li>
     <li><b>Spill constants.</b> The +0.03 / −0.01 per second steps and the 1 s report interval come from the simulation. Tune them on real traffic.</li>
     <li><b>Chat UIs.</b> A UI that sends a stable conversation header makes chat sticky in phase 1 as well.</li>
     <li><b>Peer listener limit.</b> It sheds by request count, while the real cost is tokens. Size it from vLLM’s reported concurrency at a realistic context length.</li>
@@ -683,7 +683,7 @@ f_s -= 0.01  while not queueing and under ~95% busy</code></pre>
   <span>Sources</span>
   <ul>
     <li><a href="https://cloud.google.com/blog/products/containers-kubernetes/how-gke-inference-gateway-improved-latency-for-vertex-ai">How we cut Vertex AI latency by 35% with GKE Inference Gateway</a></li>
-    <li><a href="https://github.com/envoyproxy/gateway/blob/v1.8.5/api/v1alpha1/loadbalancer_types.go">Envoy Gateway v1.8.5 load balancer API</a> and <a href="https://github.com/envoyproxy/gateway/blob/v1.8.5/internal/xds/translator/cluster.go">xDS translator</a></li>
+    <li><a href="https://github.com/envoyproxy/gateway/blob/v1.9.1/api/v1alpha1/loadbalancer_types.go">Envoy Gateway v1.9.1 load balancer API</a> and <a href="https://github.com/envoyproxy/gateway/blob/v1.9.1/internal/xds/translator/cluster.go">xDS translator</a></li>
     <li><a href="https://github.com/llm-d/llm-d-router/blob/v0.10.0/pkg/epp/framework/plugins/scheduling/filter/prefixcacheaffinity/plugin.go">llm-d router v0.10.0 prefix-cache affinity filter</a> and <a href="https://github.com/llm-d/llm-d-router/blob/v0.10.0/apix/config/v1alpha1/endpointpickerconfig_types.go">EndpointPickerConfig</a></li>
     <li><a href="https://github.com/kserve/kserve/blob/v0.21.0/config/llmisvcconfig/config-llm-scheduler-eppconfig-default.yaml">KServe v0.21.0 default EPP config</a></li>
     <li><a href="https://claudeissues.com/issue/40119-docs-llm-gateway-docs-missing-x-claude-code-session-id-header-guidance">Claude Code X-Claude-Code-Session-Id header</a></li>
