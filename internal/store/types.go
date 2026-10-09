@@ -1,6 +1,10 @@
 package store
 
-import "time"
+import (
+	"time"
+
+	"aigw-ui/internal/weights"
+)
 
 type Cluster struct {
 	ID          string     `json:"id"`
@@ -81,11 +85,11 @@ type Model struct {
 	Endpoints      []Endpoint `json:"endpoints"`
 	// QuotaCapable is false when no cluster has anything a quota can attach to.
 	QuotaCapable bool `json:"quota_capable"`
-	// SiteWeights is each site's share of the model's traffic as it is
-	// written to the gateways. It is empty, with SiteWeightsNote saying why,
-	// while the weights are not managed for this model.
-	SiteWeights     []SiteWeight `json:"site_weights"`
-	SiteWeightsNote string       `json:"site_weights_note"`
+	// SiteWeights is the zone weight of every site listed for the model,
+	// the same on every cluster. SiteWeightsNote says why they were not
+	// replaced on the last discovery round, when they were not.
+	SiteWeights     []weights.Zone `json:"site_weights"`
+	SiteWeightsNote string         `json:"site_weights_note"`
 	// Warnings are differences between the sites that serve the model which
 	// an operator should look at.
 	Warnings []string `json:"warnings"`
@@ -129,10 +133,4 @@ type Overview struct {
 	Tenants       int `json:"tenants"`
 	ActiveKeys    int `json:"active_keys"`
 	Quotas        int `json:"quotas"`
-}
-
-// SiteWeight is one site's zone weight for a model.
-type SiteWeight struct {
-	Zone   string `json:"zone"`
-	Weight int64  `json:"weight"`
 }

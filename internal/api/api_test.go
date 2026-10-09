@@ -106,7 +106,7 @@ func TestValidCostExpression(t *testing.T) {
 func TestFleetClusterMustEnforceKeys(t *testing.T) {
 	enforcing := store.Cluster{ID: "c1", Name: "site1-a", Namespace: "ai-gateway", GatewayName: "llm", AuthEnabled: true}
 	open := with(enforcing, func(c *store.Cluster) { c.AuthEnabled = false })
-	fleet := with(enforcing, func(c *store.Cluster) { c.FleetEnabled = true })
+	fleet := with(enforcing, func(c *store.Cluster) { c.FleetEnabled, c.ClientListener = true, "https" })
 	for name, tc := range map[string]struct {
 		current store.Cluster
 		body    string
@@ -114,7 +114,9 @@ func TestFleetClusterMustEnforceKeys(t *testing.T) {
 	}{
 		"join the fleet with keys enforced": {enforcing, `{"fleet_enabled":true,"client_listener":"https"}`, true},
 		"join the fleet without":            {open, `{"fleet_enabled":true}`, false},
-		"join and enforce in one change":    {open, `{"fleet_enabled":true,"auth_enabled":true}`, true},
+		"join and enforce in one change":    {open, `{"fleet_enabled":true,"auth_enabled":true,"client_listener":"https"}`, true},
+		"join the fleet without a listener": {enforcing, `{"fleet_enabled":true}`, false},
+		"drop the listener while in it":     {fleet, `{"client_listener":""}`, false},
 		"stop enforcing while in the fleet": {fleet, `{"auth_enabled":false}`, false},
 		"leave the fleet and stop":          {fleet, `{"auth_enabled":false,"fleet_enabled":false}`, true},
 		"bad listener name":                 {enforcing, `{"client_listener":"HTTPS listener"}`, false},
@@ -124,6 +126,28 @@ func TestFleetClusterMustEnforceKeys(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := b.cluster(&tc.current); (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok = %v", name, err, tc.ok)
+		}
+	}
+}
+
+// The gateway namespace is part of every quota counter's name, so a fleet
+// site with another one would silently get a budget of its own.
+func TestFleetClustersShareTheGatewayNamespace(t *testing.T) {
+	site := func(id, namespace string, fleet bool) store.Cluster {
+		return store.Cluster{ID: id, Name: id, Namespace: namespace, FleetEnabled: fleet}
+	}
+	others := []store.Cluster{site("a", "ai-gateway", true), site("b", "elsewhere", false)}
+	for name, tc := range map[string]struct {
+		c  store.Cluster
+		ok bool
+	}{
+		"same namespace":               {site("c", "ai-gateway", true), true},
+		"another namespace":            {site("c", "envoy-ai-system", true), false},
+		"another one, not in fleet":    {site("c", "envoy-ai-system", false), true},
+		"the only fleet cluster moves": {site("a", "envoy-ai-system", true), true},
+	} {
+		if err := checkFleet(tc.c, others); (err == nil) != tc.ok {
 			t.Errorf("%s: err = %v, want ok = %v", name, err, tc.ok)
 		}
 	}

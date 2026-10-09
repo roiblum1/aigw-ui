@@ -57,7 +57,6 @@ for _ in $(seq 60); do
 done
 kc get --raw /readyz >/dev/null || { echo "the API server did not start:"; tail -20 "$work/apiserver.log"; exit 1; }
 
-kc create namespace aigw-ui-test
 kc apply -f internal/kube/testdata/weights-crds.yaml
 kc wait --for=condition=Established crd --all --timeout=60s
 

@@ -120,7 +120,7 @@ export default function Models() {
                           </>
                         )}
                         <SiteWeight model={m} endpoint={e} />
-                        {e.capacity && e.capacity.weight !== null && (
+                        {e.capacity && (e.capacity.weight !== null || e.capacity.drained) && (
                           <button
                             className="link"
                             disabled={action.busy}
@@ -142,8 +142,8 @@ export default function Models() {
                       </div>
                     ))}
                     {m.site_weights_note && (
-                      <div className="detail" title="The gateways keep the weights they have.">
-                        Site weights not written: {m.site_weights_note}.
+                      <div className="detail warn-text" title="The gateways keep the sites and weights they have.">
+                        Site weights not updated: {m.site_weights_note}.
                       </div>
                     )}
                   </td>
@@ -180,23 +180,38 @@ export default function Models() {
   );
 }
 
-/** A site's share of the model's traffic, and the ready capacity it comes from. */
+/**
+ * A site's zone weight for the model and its share of the traffic. The weight
+ * is the capacity times 100, and never below 1: the gateway cannot take 0.
+ */
 function SiteWeight({ model, endpoint }: { model: Model; endpoint: Endpoint }) {
   const c = endpoint.capacity;
-  if (!c || c.weight === null) return null;
+  if (!c || (c.weight === null && !c.serving)) return null;
   const total = model.site_weights.reduce((sum, z) => sum + z.weight, 0);
   const mine = model.site_weights.find((z) => z.zone === endpoint.cluster_name);
-  const share = mine && total > 0 ? ` · ${Math.round((mine.weight / total) * 100)}% of traffic` : "";
+  if (!mine) {
+    const why = c.drained
+      ? "Drained: the site is out of this model's sites until Undrain."
+      : "Not one of the model's sites. Is the cluster part of the fleet?";
+    return (
+      <span className={c.drained ? "tag warn" : "tag manual"} title={why}>
+        {c.drained ? "drained · not listed" : "not listed"}
+      </span>
+    );
+  }
+  const share = total > 0 ? ` · ${Math.round((mine.weight / total) * 100)}% of traffic` : "";
   const target = c.drained ? 0 : c.observed;
   const moving = target !== null && target !== c.weight;
+  const goal = target === null ? "" : ` → ${Math.max(1, Math.round(target * 100))}`;
   const title =
-    `${c.detail}\nLast read ${formatTime(c.observed_at)}, weight last changed ${formatTime(c.changed_at)}.` +
-    (moving ? "\nThe weight follows the ready capacity one step per poll, and drops only after two polls agree." : "");
+    `${c.detail}\nCapacity applied ${c.weight ?? "unknown"}, last read ${c.observed ?? "unknown"} at ${formatTime(c.observed_at)}; ` +
+    `changed ${formatTime(c.changed_at)}.\nThe weight is the capacity × 100, and at least 1.` +
+    (moving ? "\nIt moves one instance per poll, and drops only after two polls agree." : "");
   return (
     <span className={moving || c.drained ? "tag warn" : "tag manual"} title={title}>
-      {c.drained ? (moving ? "draining · " : "drained · ") : ""}
-      weight {c.weight}
-      {moving ? ` → ${target}` : ""}
+      {c.drained ? "draining · " : ""}
+      weight {mine.weight}
+      {moving ? goal : ""}
       {share}
     </span>
   );

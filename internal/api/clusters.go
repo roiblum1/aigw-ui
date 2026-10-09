@@ -79,6 +79,11 @@ func (b *clusterBody) cluster(current *store.Cluster) (store.Cluster, error) {
 		// Without key enforcement a client can send the client ID header
 		// itself and spend another tenant's quota at any site.
 		return c, invalid("a fleet cluster must enforce API keys: turn auth_enabled on, or fleet_enabled off")
+	case c.FleetEnabled && c.ClientListener == "":
+		// Without a listener the key policy also covers the listener other
+		// sites forward to. The entry gateway removes the key before it
+		// forwards, so every cross-site request would be refused.
+		return c, invalid("a fleet cluster needs client_listener, the name of the Gateway listener clients come in on")
 	case b.DiscoveryToken != "" && c.GatewayURL == "":
 		return c, invalid("discovery_token needs a gateway_url")
 	case !dnsLabel.MatchString(c.Name):
@@ -91,6 +96,30 @@ func (b *clusterBody) cluster(current *store.Cluster) (store.Cluster, error) {
 		return c, invalid("kubeconfig is required")
 	}
 	return c, nil
+}
+
+// checkFleet refuses a fleet cluster whose gateway namespace differs from the
+// other fleet clusters'. The namespace is part of the name of every quota
+// counter, so a site with another one would count its tenants' tokens apart
+// from the rest of the fleet, without any error.
+func checkFleet(c store.Cluster, all []store.Cluster) error {
+	if !c.FleetEnabled {
+		return nil
+	}
+	for _, o := range all {
+		if o.FleetEnabled && o.ID != c.ID && o.Namespace != c.Namespace {
+			return invalid("fleet clusters must use the same gateway namespace: %s uses %q, this cluster %q", o.Name, o.Namespace, c.Namespace)
+		}
+	}
+	return nil
+}
+
+func (s *Server) checkFleet(r *http.Request, c store.Cluster) error {
+	all, err := s.st.ListClusters(r.Context())
+	if err != nil {
+		return err
+	}
+	return checkFleet(c, all)
 }
 
 func (s *Server) listClusters(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +138,9 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in, err := b.cluster(nil)
+	if err == nil {
+		err = s.checkFleet(r, in)
+	}
 	if err != nil {
 		fail(w, err)
 		return
@@ -141,6 +173,9 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in, err := b.cluster(&current)
+	if err == nil {
+		err = s.checkFleet(r, in)
+	}
 	if err != nil {
 		fail(w, err)
 		return

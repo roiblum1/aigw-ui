@@ -9,7 +9,6 @@ import (
 
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
-	"aigw-ui/internal/weights"
 )
 
 // modelBody is the body of a model create or update. On an update every field
@@ -128,13 +127,7 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	fleet, err := s.st.ZoneWeights(r.Context())
-	if err != nil {
-		fail(w, err)
-		return
-	}
 	for i := range out {
-		setSiteWeights(&out[i], fleet[out[i].Name])
 		out[i].Warnings = recipeWarnings(out[i])
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -167,8 +160,9 @@ func (s *Server) drainSite(w http.ResponseWriter, r *http.Request) {
 	if !b.Drained {
 		action, summary = "site.undrain", "Ended the drain of "+model+" on cluster "+cluster
 	}
-	// The weight moves on the next polls; each step is its own task.
-	s.record(r, action, summary, r.PathValue("cluster_id"))
+	// Ending a drain lists the site again at once, at the lowest weight.
+	// The weight then moves on the next polls; each step is its own task.
+	s.changed(r, action, summary)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -208,28 +202,6 @@ func valueList(sites map[string][]string) string {
 		values[i] = v + " on " + strings.Join(sites[v], ", ")
 	}
 	return strings.Join(values, "; ")
-}
-
-// setSiteWeights works out the zone weights a sync writes for the model, the
-// same way the sync does, so the UI shows what the gateways get.
-//
-// sites is the model's entry from the fleet-wide zone weights; it is empty
-// when no fleet cluster serves the model.
-func setSiteWeights(m *store.Model, sites []weights.Site) {
-	m.SiteWeights = []store.SiteWeight{}
-	if len(sites) == 0 {
-		for _, e := range m.Endpoints {
-			if e.Capacity.Weight != nil {
-				m.SiteWeightsNote = "no cluster that serves the model is in the fleet"
-			}
-		}
-		return
-	}
-	zones, reason := weights.Zones(sites)
-	m.SiteWeightsNote = reason
-	for _, z := range zones {
-		m.SiteWeights = append(m.SiteWeights, store.SiteWeight{Zone: z.Zone, Weight: z.Weight})
-	}
 }
 
 func (s *Server) createModel(w http.ResponseWriter, r *http.Request) {
