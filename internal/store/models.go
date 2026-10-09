@@ -20,13 +20,13 @@ type ModelInput struct {
 }
 
 func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet FROM models ORDER BY name`)
+	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet, spent_mode, best_effort_unlimited FROM models ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	models, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Model, error) {
 		m := Model{Endpoints: []Endpoint{}, Warnings: []string{}}
-		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet)
+		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet, &m.SpentMode, &m.BestEffortUnlimited)
 		return m, err
 	})
 	if err != nil {
@@ -135,6 +135,12 @@ var (
 	// ErrFleetManual is returned when an entry route is asked for a model
 	// that also has endpoints entered by hand.
 	ErrFleetManual = errors.New("the model has manual endpoints")
+	// ErrBestEffortOn is returned when the entry route of a model in
+	// best-effort mode is turned off: the mode is built on that route.
+	ErrBestEffortOn = errors.New("the model is in best-effort mode")
+	// ErrNoEntryRoute is returned when best-effort mode is asked for a model
+	// without an entry route.
+	ErrNoEntryRoute = errors.New("the model has no entry route")
 )
 
 // SetModelFleet turns the entry route of a model on or off and returns the
@@ -143,16 +149,19 @@ func (s *Store) SetModelFleet(ctx context.Context, id string, on bool) (string, 
 	var name string
 	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
 		var sites, manual int
+		var mode string
 		err := tx.QueryRow(ctx,
-			`SELECT m.name,
+			`SELECT m.name, m.spent_mode,
 			        (SELECT count(*) FROM jsonb_array_elements(m.fleet_zones) z JOIN clusters c ON c.name = z->>'zone'
 			         WHERE c.fleet_enabled AND c.peer_host <> ''),
 			        (SELECT count(*) FROM model_endpoints e WHERE e.model_id = m.id AND e.source = 'manual')
-			 FROM models m WHERE m.id = $1 FOR UPDATE`, id).Scan(&name, &sites, &manual)
+			 FROM models m WHERE m.id = $1 FOR UPDATE`, id).Scan(&name, &mode, &sites, &manual)
 		if err != nil {
 			return err
 		}
 		switch {
+		case !on && mode == SpentBestEffort:
+			return ErrBestEffortOn
 		case on && manual > 0:
 			return ErrFleetManual
 		case on && sites == 0:

@@ -76,8 +76,9 @@ func TestRealAPIServerEntryRoute(t *testing.T) {
 	if _, err := c.Sync(ctx, ns, render.Objects(fleetTestState(ns, site1)), nil); err != nil {
 		t.Fatal(err)
 	}
-	if zones := zonesOf(t, c, ns); len(zones) != 1 || zones[0].(map[string]any)["zone"] != "site1-a" {
-		t.Errorf("zones after a site left = %v", zones)
+	// One site is left, and a single site gets no zone weights.
+	if zones := zonesOf(t, c, ns); len(zones) != 0 {
+		t.Errorf("zones after a site left = %v, want none for a single site", zones)
 	}
 	backendGVR, _ := gvrFor("Backend")
 	backend, err := c.dyn.Resource(backendGVR).Namespace(ns).Get(ctx, "fleet-glm-5-3", metav1.GetOptions{})
@@ -103,5 +104,66 @@ func TestRealAPIServerEntryRoute(t *testing.T) {
 	}
 	if deleted != 6 {
 		t.Errorf("deleted %d objects, want the four entry objects, the QuotaPolicy and the retry patch: %+v", deleted, res.Changes)
+	}
+}
+
+// The best-effort route as the real CRDs take it: its backend and counting
+// policy come with the mode, its route with the first tenant past its
+// budget, and the route goes again when the last one is back.
+func TestRealAPIServerBestEffortRoute(t *testing.T) {
+	c, ns := realClient(t)
+	ctx := context.Background()
+	state := func(overage ...string) render.State {
+		s := fleetTestState(ns, render.FleetSite{Name: "site1-a", Host: "llm.site1-a.example.com", Port: 8443, Weight: 800})
+		s.Models[0].BestEffort = true
+		s.Models[0].Overage = overage
+		return s
+	}
+	changes := func(res SyncResult, action string) map[string]bool {
+		out := map[string]bool{}
+		for _, ch := range res.Changes {
+			if ch.Action == action {
+				out[ch.Kind+"/"+ch.Name] = true
+			}
+		}
+		return out
+	}
+	be := render.BestEffortName("glm-5-3")
+
+	res, err := c.Sync(ctx, ns, render.Objects(state()), nil)
+	if err != nil {
+		t.Fatalf("the API server refused a rendered object: %v", err)
+	}
+	created := changes(res, "created")
+	for _, want := range []string{"AIServiceBackend/" + be, "QuotaPolicy/" + be} {
+		if !created[want] {
+			t.Errorf("%s was not created; changes: %+v", want, res.Changes)
+		}
+	}
+	if created["AIGatewayRoute/"+be] {
+		t.Error("the best-effort route was created with nobody past its budget")
+	}
+
+	res, err = c.Sync(ctx, ns, render.Objects(state("team-a", "team-b")), nil)
+	if err != nil {
+		t.Fatalf("the API server refused the best-effort route: %v", err)
+	}
+	created = changes(res, "created")
+	for _, want := range []string{"AIGatewayRoute/" + be, "BackendTrafficPolicy/" + be, "EnvoyPatchPolicy/" + be + "-retry"} {
+		if !created[want] {
+			t.Errorf("%s was not created; changes: %+v", want, res.Changes)
+		}
+	}
+	res, err = c.Sync(ctx, ns, render.Objects(state("team-a", "team-b")), nil)
+	if err != nil || len(res.Changes) != 0 {
+		t.Errorf("a sync that changes nothing: %+v %v", res.Changes, err)
+	}
+
+	res, err = c.Sync(ctx, ns, render.Objects(state()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted := changes(res, "deleted"); len(deleted) != 3 || !deleted["AIGatewayRoute/"+be] {
+		t.Errorf("deleted %v, want the route, its traffic policy and its patch", deleted)
 	}
 }

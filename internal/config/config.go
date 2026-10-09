@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +33,14 @@ type Config struct {
 	RedisKeyPrefix   string
 	// RedisAllowReset lets an admin delete a quota's counter to reset its usage.
 	RedisAllowReset bool
+
+	// OverageEvery is how often the counters are read to find the tenants
+	// whose budget is nearly spent, for the models in best-effort mode.
+	OverageEvery time.Duration
+	// OverageThreshold is the share of its budget a tenant has to have used
+	// to be moved to best-effort. It is below 1 so the move comes before
+	// the gateway starts refusing.
+	OverageThreshold float64
 
 	// Fleet is what every site's entry route has in common. PeerSNI is
 	// empty when neither FLEET_PEER_SNI nor FLEET_DOMAIN is set, and no
@@ -86,6 +95,14 @@ func Load() (*Config, error) {
 	c.SyncEvery, err = time.ParseDuration(envOr("SYNC_INTERVAL", "5m"))
 	if err != nil || c.SyncEvery < 0 || (c.SyncEvery > 0 && c.SyncEvery < 30*time.Second) {
 		return nil, errors.New("SYNC_INTERVAL must be a duration of at least 30s such as 5m, or 0 to disable")
+	}
+	c.OverageEvery, err = time.ParseDuration(envOr("OVERAGE_INTERVAL", "15s"))
+	if err != nil || c.OverageEvery < 5*time.Second {
+		return nil, errors.New("OVERAGE_INTERVAL must be a duration of at least 5s such as 15s")
+	}
+	c.OverageThreshold, err = strconv.ParseFloat(envOr("OVERAGE_THRESHOLD", "0.9"), 64)
+	if err != nil || c.OverageThreshold < 0.5 || c.OverageThreshold > 1 {
+		return nil, errors.New("OVERAGE_THRESHOLD must be a number from 0.5 to 1 such as 0.9")
 	}
 	return c, nil
 }

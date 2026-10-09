@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"aigw-ui/internal/overage"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/syncer"
 	"aigw-ui/internal/usage"
@@ -67,14 +68,18 @@ type Runner struct {
 	st    *store.Store
 	sy    *syncer.Syncer
 	usage *usage.Service // nil when no Redis is configured
+	// overage moves a tenant past its budget to best-effort. It is nil
+	// when no Redis is configured.
+	overage *overage.Service
 
 	mu   sync.Mutex
 	runs map[string]*Run // by cluster ID
 }
 
-// New builds a Runner. Tests stop when base is cancelled. usage may be nil.
-func New(base context.Context, st *store.Store, sy *syncer.Syncer, usage *usage.Service) *Runner {
-	return &Runner{base: base, st: st, sy: sy, usage: usage, runs: map[string]*Run{}}
+// New builds a Runner. Tests stop when base is cancelled. usage and overage
+// may be nil.
+func New(base context.Context, st *store.Store, sy *syncer.Syncer, usage *usage.Service, overage *overage.Service) *Runner {
+	return &Runner{base: base, st: st, sy: sy, usage: usage, overage: overage, runs: map[string]*Run{}}
 }
 
 // Get returns the last self-test of a cluster.

@@ -165,9 +165,14 @@ each counter is held to the limit on its own. `hint` appears when no counter
 was found and says what Redis holds instead. If Redis cannot be reached the
 call returns 502.
 
+`overage_used` is what the tenant used as best-effort, after its budget was
+spent. It is counted apart and is not part of `used`. `best_effort_until` is
+there while the tenant's requests for the model are served as best-effort.
+
 A reset deletes the counter of the current window, on every cluster that
 shares it. The limit and the window do not change, and the window still ends
-at `resets_at`. It returns 403 unless `redis.allowReset` is on (`can_reset` in
+at `resets_at`. A tenant that was being served as best-effort is served as
+standard again (`ended_overage` in the answer). It returns 403 unless `redis.allowReset` is on (`can_reset` in
 `GET /usage`), and 404 when the tenant has no applied quota on that model.
 
 ## Clusters
@@ -306,11 +311,20 @@ revision or request length between the sites. These fields are read-only.
 | Method | Path | Body | Result |
 |---|---|---|---|
 | PUT | `/models/{id}/sites/{cluster_id}/drain` | `{"drained": true}` or `false` | 204. 409 when no other site has capacity for the model |
-| PUT | `/models/{id}/fleet` | `{"enabled": true}` or `false` | 204. 409 when no fleet cluster serves the model, the model has manual endpoints, or the server has no `FLEET_DOMAIN` |
+| PUT | `/models/{id}/fleet` | `{"enabled": true}` or `false` | 204. 409 when no fleet cluster serves the model, the model has manual endpoints, the server has no `FLEET_DOMAIN`, or the model is in best-effort mode and is being turned off |
+| PUT | `/models/{id}/spent` | `{"mode": "best-effort", "best_effort_unlimited": false}` | 204. `mode` is `refuse` or `best-effort`. 409 when the model has no entry route |
+| GET | `/overage?limit=100` | | The periods in which a tenant was served as best-effort, newest first: `model_id`, `model_name`, `tenant_id`, `tenant_slug`, `since`, `until`, `active`. `limit` is at most 500 |
 
 A drained site's weight steps down to 1, one instance per poll, and the site
 then leaves `site_weights`. `fleet` on a model says whether the hub renders
 its entry route on every fleet cluster.
+
+`spent_mode` on a model says what happens to a tenant whose budget for it is
+spent. With `best-effort` the tenant is not refused: once it has used 90% of
+an hourly or daily quota, its requests for the model are sent as the lowest
+class until the window ends. `best_effort_unlimited` does the same, all the
+time, for tenants that have no quota on the model. See
+[how it works](how-it-works.md#best-effort-when-a-budget-is-spent).
 
 ## Tenants, keys and quotas
 

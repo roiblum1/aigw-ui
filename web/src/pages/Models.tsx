@@ -46,6 +46,22 @@ export default function Models() {
     });
   };
 
+  const setSpent = (m: Model, choice: string) => {
+    const bestEffort = choice !== "refuse";
+    if (
+      bestEffort &&
+      m.spent_mode === "refuse" &&
+      !confirm(
+        `Serve tenants past their budget on ${m.name} as best-effort? They are no longer refused: their requests are queued behind all others and dropped first when a site is full. Every serving cluster needs an InferenceObjective named best-effort for the model.`,
+      )
+    )
+      return;
+    action.run(async () => {
+      await api.setModelSpent(m.id, bestEffort ? "best-effort" : "refuse", choice === "best-effort-all");
+      await reload();
+    });
+  };
+
   const drain = (m: Model, e: Endpoint) => {
     const on = !e.capacity?.drained;
     if (on && !confirm(`Drain ${m.name} on ${e.cluster_name}? Its conversations move to the other sites, step by step.`))
@@ -179,6 +195,19 @@ export default function Models() {
                       >
                         {m.fleet ? "Entry route: on" : "Entry route: off"}
                       </button>
+                    )}
+                    {m.fleet && (
+                      <select
+                        aria-label={`When a budget is spent on ${m.name}`}
+                        title="What happens to a tenant whose budget for the model is spent. Best-effort needs the entry route."
+                        disabled={action.busy}
+                        value={m.spent_mode === "refuse" ? "refuse" : m.best_effort_unlimited ? "best-effort-all" : "best-effort"}
+                        onChange={(e) => setSpent(m, e.target.value)}
+                      >
+                        <option value="refuse">Budget spent: refuse</option>
+                        <option value="best-effort">Budget spent: best-effort</option>
+                        <option value="best-effort-all">Best-effort, also without a quota</option>
+                      </select>
                     )}
                     <button onClick={() => setEditing(m)}>Edit</button>
                     <button className="danger" disabled={action.busy} onClick={() => remove(m)}>

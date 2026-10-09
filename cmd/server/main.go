@@ -12,6 +12,7 @@ import (
 
 	"aigw-ui/internal/api"
 	"aigw-ui/internal/config"
+	"aigw-ui/internal/overage"
 	"aigw-ui/internal/secretbox"
 	"aigw-ui/internal/selftest"
 	"aigw-ui/internal/store"
@@ -67,10 +68,17 @@ func run() error {
 		}
 		usageService = usage.NewService(st, reader)
 	}
+	// Moving tenants to best-effort needs the counters, so it runs only
+	// with Redis. Without it a spent budget is refused, as before.
+	var overageService *overage.Service
+	if usageService != nil {
+		overageService = overage.New(st, usageService, sy, cfg.OverageEvery, cfg.OverageThreshold)
+		go overageService.Run(ctx)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService), cfg.AdminToken, cfg.UIDir).Handler(),
+		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService, overageService), cfg.AdminToken, cfg.UIDir).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

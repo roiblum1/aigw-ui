@@ -154,12 +154,23 @@ func (s *Store) UpsertQuota(ctx context.Context, tenantID, modelID string, limit
 	// time. The unique constraint refuses the second, which then picks again.
 	for range 5 {
 		_, err = s.db.Exec(ctx,
-			`INSERT INTO quotas (tenant_id, model_id, token_limit, window_size, shadow, slot)
-			 VALUES ($1, $2, $3, $4, COALESCE($5::boolean, false), (
-			     SELECT min(free) FROM generate_series(0, (SELECT count(*) FROM quotas WHERE model_id = $2)::int) free
-			     WHERE NOT EXISTS (SELECT 1 FROM quotas q WHERE q.model_id = $2 AND q.slot = free)))
-			 ON CONFLICT (tenant_id, model_id) DO UPDATE SET token_limit = EXCLUDED.token_limit, window_size = EXCLUDED.window_size,
-			     shadow = COALESCE($5::boolean, quotas.shadow)`,
+			`WITH before AS (
+			     SELECT token_limit, window_size, shadow FROM quotas WHERE tenant_id = $1 AND model_id = $2
+			 ), saved AS (
+			     INSERT INTO quotas (tenant_id, model_id, token_limit, window_size, shadow, slot)
+			     VALUES ($1, $2, $3, $4, COALESCE($5::boolean, false), (
+			         SELECT min(free) FROM generate_series(0, (SELECT count(*) FROM quotas WHERE model_id = $2)::int) free
+			         WHERE NOT EXISTS (SELECT 1 FROM quotas q WHERE q.model_id = $2 AND q.slot = free)))
+			     ON CONFLICT (tenant_id, model_id) DO UPDATE SET token_limit = EXCLUDED.token_limit, window_size = EXCLUDED.window_size,
+			         shadow = COALESCE($5::boolean, quotas.shadow)
+			     RETURNING token_limit, window_size, shadow
+			 )
+			 -- A quota that changed is a new budget: the tenant is judged
+			 -- against it from the start. Saving it unchanged moves nobody.
+			 UPDATE overage SET until = now()
+			 WHERE tenant_id = $1 AND model_id = $2 AND until > now()
+			   AND EXISTS (SELECT 1 FROM saved s, before b
+			               WHERE (s.token_limit, s.window_size, s.shadow) IS DISTINCT FROM (b.token_limit, b.window_size, b.shadow))`,
 			tenantID, modelID, limit, window, shadow)
 		var pg *pgconn.PgError
 		if !errors.As(err, &pg) || pg.ConstraintName != "quotas_model_slot" {
@@ -173,7 +184,14 @@ func (s *Store) UpsertQuota(ctx context.Context, tenantID, modelID string, limit
 func (s *Store) DeleteQuota(ctx context.Context, id string) (string, error) {
 	var label string
 	err := s.db.QueryRow(ctx,
-		`DELETE FROM quotas q USING tenants t, models m
-		 WHERE q.id = $1 AND t.id = q.tenant_id AND m.id = q.model_id RETURNING t.slug || ' on ' || m.name`, id).Scan(&label)
+		`WITH gone AS (
+		     DELETE FROM quotas q USING tenants t, models m
+		     WHERE q.id = $1 AND t.id = q.tenant_id AND m.id = q.model_id
+		     RETURNING q.tenant_id, q.model_id, t.slug || ' on ' || m.name AS label
+		 ), ended AS (
+		     UPDATE overage o SET until = now() FROM gone
+		     WHERE o.tenant_id = gone.tenant_id AND o.model_id = gone.model_id AND o.until > now()
+		 )
+		 SELECT label FROM gone`, id).Scan(&label)
 	return label, mapErr(err)
 }

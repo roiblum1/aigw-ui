@@ -21,6 +21,11 @@ config:
   # How often every cluster is synced again without a change, to retry failed
   # syncs and undo manual edits. "0" turns it off. Needs autoSync.
   syncInterval: 5m
+  # For models that serve a spent budget as best-effort: how often the usage
+  # counters are read, and the share of its budget a tenant has to have used
+  # to be moved (0.5 to 1). Needs redis.url.
+  overageInterval: 15s
+  overageThreshold: "0.9"
 
 # What every site's entry route has in common. Leave domain and peerSNI empty
 # if the hub should not render entry routes.

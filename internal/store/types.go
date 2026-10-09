@@ -108,9 +108,34 @@ type Model struct {
 	// Fleet is true when this tool renders the model's entry route on every
 	// fleet cluster.
 	Fleet bool `json:"fleet"`
+	// SpentMode says what happens to a tenant whose budget for the model is
+	// spent: SpentRefuse or SpentBestEffort.
+	SpentMode string `json:"spent_mode"`
+	// BestEffortUnlimited serves tenants without a quota of their own on the
+	// model as best-effort, in place of sharing its default pool.
+	BestEffortUnlimited bool `json:"best_effort_unlimited"`
 	// Warnings are differences between the sites that serve the model which
 	// an operator should look at.
 	Warnings []string `json:"warnings"`
+}
+
+// What happens to a tenant whose budget for a model is spent.
+const (
+	SpentRefuse     = "refuse"
+	SpentBestEffort = "best-effort"
+)
+
+// Overage is one period in which a tenant was served as best-effort on a
+// model: from when its budget was nearly spent until its window ended.
+type Overage struct {
+	ModelID    string    `json:"model_id"`
+	ModelName  string    `json:"model_name"`
+	TenantID   string    `json:"tenant_id"`
+	TenantSlug string    `json:"tenant_slug"`
+	Since      time.Time `json:"since"`
+	Until      time.Time `json:"until"`
+	// Active is true while the period has not ended.
+	Active bool `json:"active"`
 }
 
 type Tenant struct {

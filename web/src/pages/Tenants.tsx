@@ -303,7 +303,7 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
                   <td className="row-actions">
                     {usage.data?.can_reset && usageOf(q.model_id) && (
                       <button
-                        disabled={action.busy || usageOf(q.model_id)!.used === 0}
+                        disabled={action.busy || usageOf(q.model_id)!.used + usageOf(q.model_id)!.overage_used === 0}
                         onClick={() => {
                           const u = usageOf(q.model_id)!;
                           if (confirmReset(u))
