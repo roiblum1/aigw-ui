@@ -33,6 +33,9 @@ type Counter struct {
 	Backend  string   `json:"backend"`
 	Clusters []string `json:"clusters"`
 	Used     int64    `json:"used"`
+	// Overage marks the counter of the model's best-effort route: what was
+	// used after the budget was spent.
+	Overage bool `json:"overage,omitempty"`
 }
 
 // Quota is the usage of one tenant on one model in the current window.
@@ -45,9 +48,14 @@ type Quota struct {
 	Window     string `json:"window"`
 	Shadow     bool   `json:"shadow"`
 	// Used is the highest counter: each counter is held to the limit on its own.
-	Used     int64     `json:"used"`
-	ResetsAt time.Time `json:"resets_at"`
-	Counters []Counter `json:"counters"`
+	// It leaves out what was used as best-effort, which is OverageUsed.
+	Used        int64     `json:"used"`
+	OverageUsed int64     `json:"overage_used"`
+	ResetsAt    time.Time `json:"resets_at"`
+	Counters    []Counter `json:"counters"`
+	// BestEffortUntil is set while the tenant's requests for the model are
+	// served as best-effort.
+	BestEffortUntil *time.Time `json:"best_effort_until,omitempty"`
 }
 
 // Pool is the default bucket of a model: every request to the model is
@@ -79,6 +87,9 @@ type ResetResult struct {
 	ModelName  string `json:"-"`
 	Counters   int    `json:"counters"`
 	Deleted    int64  `json:"deleted"`
+	// EndedOverage is true when the tenant was being served as best-effort
+	// on the model and the reset put it back.
+	EndedOverage bool `json:"ended_overage"`
 }
 
 // Service turns the quotas stored in Postgres and the counters stored in
@@ -109,6 +120,7 @@ type bucket struct {
 type key struct {
 	backend, redis string
 	clusters       []string
+	overage        bool
 }
 
 // buckets works out, from the desired state of every cluster, which quotas
@@ -170,7 +182,7 @@ func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) (
 			redisKey := ct.RedisKey(s.rd.Prefix, now)
 			k := byRedisKey[redisKey]
 			if k == nil {
-				k = &key{backend: ct.Backend, redis: redisKey}
+				k = &key{backend: ct.Backend, redis: redisKey, overage: ct.Overage}
 				byRedisKey[redisKey] = k
 				b.keys = append(b.keys, k)
 			}
@@ -201,12 +213,20 @@ func (s *Service) Report(ctx context.Context, tenantID string) (Report, error) {
 		return rep, RedisError{err}
 	}
 
+	until, err := s.bestEffortUntil(ctx)
+	if err != nil {
+		return rep, err
+	}
 	for _, b := range buckets {
-		var used int64
+		var used, overage int64
 		counters := make([]Counter, 0, len(b.keys))
 		for _, k := range b.keys {
-			counters = append(counters, Counter{Backend: k.backend, Clusters: k.clusters, Used: values[k.redis]})
-			used = max(used, values[k.redis])
+			counters = append(counters, Counter{Backend: k.backend, Clusters: k.clusters, Used: values[k.redis], Overage: k.overage})
+			if k.overage {
+				overage = max(overage, values[k.redis])
+			} else {
+				used = max(used, values[k.redis])
+			}
 		}
 		resets := render.WindowEnd(b.window, now)
 		if b.tenantSlug == "" {
@@ -219,7 +239,8 @@ func (s *Service) Report(ctx context.Context, tenantID string) (Report, error) {
 		rep.Quotas = append(rep.Quotas, Quota{
 			TenantID: b.tenantID, TenantSlug: b.tenantSlug, ModelID: b.modelID, ModelName: b.modelName,
 			Limit: b.limit, Window: b.window, Shadow: b.shadow,
-			Used: used, ResetsAt: resets, Counters: counters,
+			Used: used, OverageUsed: overage, ResetsAt: resets, Counters: counters,
+			BestEffortUntil: until[[2]string{b.modelID, b.tenantID}],
 		})
 	}
 	sort.Slice(rep.Pools, func(i, j int) bool { return rep.Pools[i].ModelName < rep.Pools[j].ModelName })
@@ -235,6 +256,20 @@ func (s *Service) Report(ctx context.Context, tenantID string) (Report, error) {
 		rep.Hint = s.emptyHint(ctx, keys[0])
 	}
 	return rep, nil
+}
+
+// bestEffortUntil returns when each running overage period ends, by model
+// and tenant ID.
+func (s *Service) bestEffortUntil(ctx context.Context) (map[[2]string]*time.Time, error) {
+	active, err := s.st.ActiveOverage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[[2]string]*time.Time, len(active))
+	for _, o := range active {
+		out[[2]string{o.ModelID, o.TenantID}] = &o.Until
+	}
+	return out, nil
 }
 
 // emptyHint explains why no counter was found. That is either "no traffic in
@@ -276,7 +311,9 @@ func (s *Service) Reset(ctx context.Context, tenantID, modelID string) (ResetRes
 		if err != nil {
 			return res, RedisError{fmt.Errorf("reset usage: %w", err)}
 		}
-		return res, nil
+		// The budget is whole again, so the tenant is no longer past it.
+		res.EndedOverage, err = s.st.EndOverage(ctx, modelID, tenantID)
+		return res, err
 	}
 	return ResetResult{}, ErrNoQuota
 }

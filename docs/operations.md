@@ -65,6 +65,9 @@ sign-in or API call.
 | Self-test: "No counter appeared under the expected name" | The rate limit service writes to another Redis, or names its keys differently | The message shows a real key from Redis when there is one. Check the Redis address on both sides, then `redis.keyPrefix` |
 | Self-test: reset step fails, "still refused" | The rate limit service caches over-limit tenants (`LOCAL_CACHE_SIZE_IN_BYTES`) | Expected with that setting: a reset only helps once the window ends |
 | A tenant named `selftest-…` stays on the Tenants page | A self-test was cut short, for example by a restart | Delete it, or run a self-test: it removes leftovers first |
+| A new quota on a model is not counted or enforced | AI Gateway 1.1.0 does not pass a new quota rule to the proxy until the route changes. The hub forces that on the routes it renders. On a route the cluster's chart owns it cannot | Create or revoke any key, which makes the gateway rebuild its routes, or wait for the next change. To check: the rule's name appears in the proxy's `config_dump` once it is in |
+| A tenant past its budget still gets 429 on a best-effort model | The move takes up to one `config.overageInterval` plus a sync. Or: the quota's window is a second or a minute, the quota is a dry run, Redis is not configured, or more than 200 tenants are listed | See the warnings in the model's row and the Activity page for lines that start with "overage" |
+| Self-test: "did not show up on the best-effort route" | The route `fleet-<model>-be` is not accepted, or the model's entry route still takes the tenant's requests | `oc get aigatewayroute,envoypatchpolicy -n <namespace>`; both `fleet-<model>-be` objects must be accepted |
 | Requests are rejected with 429 for a tenant that has no quota | The model has quotas for other tenants, so this one only has the shared pool | Give the tenant a quota |
 
 ## Site maintenance

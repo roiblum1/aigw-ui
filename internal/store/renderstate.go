@@ -146,17 +146,22 @@ func (s *Store) addFleetModels(ctx context.Context, st *render.State, index map[
 		return err
 	}
 
+	bestEffort, err := s.BestEffortTenants(ctx)
+	if err != nil {
+		return err
+	}
+
 	rows, err = s.db.Query(ctx,
-		`SELECT id, name, slug, default_limit, default_window, cost_expression, fleet_zones FROM models WHERE fleet ORDER BY name`)
+		`SELECT id, name, slug, default_limit, default_window, cost_expression, fleet_zones, spent_mode FROM models WHERE fleet ORDER BY name`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id string
+		var id, mode string
 		var m render.Model
 		var zones []weights.Zone
-		if err := rows.Scan(&id, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &zones); err != nil {
+		if err := rows.Scan(&id, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &zones, &mode); err != nil {
 			return err
 		}
 		i, ok := index[id]
@@ -164,6 +169,10 @@ func (s *Store) addFleetModels(ctx context.Context, st *render.State, index map[
 			i = len(st.Models)
 			index[id] = i
 			st.Models = append(st.Models, m)
+		}
+		if mode == SpentBestEffort {
+			st.Models[i].BestEffort = true
+			st.Models[i].Overage = bestEffort[id]
 		}
 		if !s.FleetConfigured() {
 			st.Models[i].HeldReason = heldNoConfig

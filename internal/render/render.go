@@ -7,9 +7,13 @@
 package render
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"regexp"
 	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -89,6 +93,13 @@ type Model struct {
 	// are left as they are: removing the route would make the model
 	// unreachable. Its quotas are still rendered.
 	HeldReason string
+	// BestEffort is set for a model that serves a tenant whose budget is
+	// spent as the lowest class, on a second entry route, in place of
+	// refusing it. It needs the entry route.
+	BestEffort bool
+	// Overage is the slugs of the tenants whose requests take that second
+	// route right now. The route is rendered while there are any.
+	Overage []string
 }
 
 // Held reports whether the model's objects on the cluster are left alone.
@@ -116,6 +127,15 @@ func (m Model) targets() []Target {
 	return []Target{{Backend: m.Slug, Model: m.UpstreamModel}}
 }
 
+// overageTarget returns the backend of the model's best-effort route, which
+// has a QuotaPolicy of its own, and whether the model has one.
+func (m Model) overageTarget() (Target, bool) {
+	if !m.BestEffort || (len(m.Fleet) == 0 && !m.Held()) {
+		return Target{}, false
+	}
+	return Target{Backend: BestEffortName(m.Slug), Model: m.Name}, true
+}
+
 type Key struct {
 	ClientID string
 	Value    string
@@ -135,6 +155,11 @@ type State struct {
 }
 
 // Objects returns the desired objects in the order they should be applied.
+//
+// A model's routes come before its QuotaPolicy, and that order matters. The
+// gateway's controller takes a route's annotation over to the proxy only
+// when something makes it look at the route again, and a changed
+// QuotaPolicy is what does. See quotaRevision.
 func Objects(s State) []*unstructured.Unstructured {
 	models := append([]Model(nil), s.Models...)
 	sort.Slice(models, func(i, j int) bool { return models[i].Slug < models[j].Slug })
@@ -158,11 +183,52 @@ func Objects(s State) []*unstructured.Unstructured {
 		if len(m.Quotas) > 0 {
 			out = append(out, quotaPolicies(s, m)...)
 		}
+		if t, ok := m.overageTarget(); ok {
+			// Also without any tenant quota: the tenants that have none can
+			// be the ones on the best-effort route.
+			out = append(out, quotaPolicy(s.Namespace, m, []Target{t}, true))
+		}
 	}
 	if s.AuthEnabled {
 		out = append(out, authPolicy(s))
 	}
 	return out
+}
+
+// QuotaRevisionAnnotation is set on every AIGatewayRoute this tool renders.
+const QuotaRevisionAnnotation = "aigw-ui.io/quota-revision"
+
+// quotaRevision identifies the quota rules of a model. It goes on the
+// model's routes as an annotation, to work around this in AI Gateway 1.1.0:
+// a tenant's rule is enforced through an entry in the proxy's route, and
+// that entry is only written when Envoy Gateway builds the route again. A
+// changed QuotaPolicy alone does not make it do so: the controller looks at
+// the route, finds nothing to change, and the new tenant is not counted or
+// limited until something else changes, such as a key.
+//
+// The controller copies a route's annotations to the HTTPRoute it generates,
+// so an annotation that changes with the rules makes the HTTPRoute change,
+// and Envoy Gateway builds the route with the new rules.
+func quotaRevision(m Model) string {
+	limit, window := m.defaultBucket(false)
+	data, err := json.Marshal(struct {
+		Rules  []TenantQuota
+		Limit  int64
+		Window string
+		Cost   string
+	}{tenantRules(m), limit, window, m.CostExpression})
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:6])
+}
+
+// modelRoute returns an AIGatewayRoute of a model without its spec.
+func modelRoute(namespace, name string, m Model) *unstructured.Unstructured {
+	u := object(aigwAPI, "AIGatewayRoute", namespace, name)
+	u.SetAnnotations(map[string]string{QuotaRevisionAnnotation: quotaRevision(m)})
+	return u
 }
 
 func object(apiVersion, kind, namespace, name string) *unstructured.Unstructured {
@@ -199,7 +265,7 @@ func aiServiceBackend(s State, m Model) *unstructured.Unstructured {
 }
 
 func route(s State, m Model) *unstructured.Unstructured {
-	u := object(aigwAPI, "AIGatewayRoute", s.Namespace, m.Slug)
+	u := modelRoute(s.Namespace, m.Slug, m)
 	u.Object["spec"] = map[string]any{
 		"parentRefs": []any{
 			map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName},
@@ -240,12 +306,16 @@ func quotaPolicies(s State, m Model) []*unstructured.Unstructured {
 	sort.Strings(namespaces)
 	out := make([]*unstructured.Unstructured, 0, len(namespaces))
 	for _, ns := range namespaces {
-		out = append(out, quotaPolicy(ns, m, byNamespace[ns]))
+		out = append(out, quotaPolicy(ns, m, byNamespace[ns], false))
 	}
 	return out
 }
 
-func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unstructured {
+// quotaPolicy renders the policy of a model for the given backends. With
+// overage set it is the policy of the best-effort route: the same tenant
+// rules at the same positions, all of them counted and none refused, and a
+// default bucket that never runs out.
+func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *unstructured.Unstructured {
 	quotas := tenantRules(m)
 	rules := make([]any, 0, len(quotas))
 	for _, q := range quotas {
@@ -261,15 +331,12 @@ func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unst
 			},
 			"quota": map[string]any{"limit": q.Limit, "duration": q.Window},
 		}
-		if q.Shadow {
+		if q.Shadow || overage {
 			rule["shadowMode"] = true
 		}
 		rules = append(rules, rule)
 	}
-	defaultLimit, defaultWindow := m.DefaultLimit, m.DefaultWindow
-	if !validQuota(defaultLimit, defaultWindow) {
-		defaultLimit, defaultWindow = fallbackLimit, fallbackWindow
-	}
+	defaultLimit, defaultWindow := m.defaultBucket(overage)
 
 	// One target per backend and one quota entry per distinct model name.
 	var targetRefs, perModel []any
@@ -296,7 +363,11 @@ func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unst
 		}
 	}
 
-	u := object(aigwAPI, "QuotaPolicy", namespace, m.Slug)
+	name := m.Slug
+	if overage {
+		name = BestEffortName(m.Slug)
+	}
+	u := object(aigwAPI, "QuotaPolicy", namespace, name)
 	u.Object["spec"] = map[string]any{
 		"targetRefs":     targetRefs,
 		"perModelQuotas": perModel,
@@ -305,6 +376,20 @@ func quotaPolicy(namespace string, m Model, targets []Target) *unstructured.Unst
 		},
 	}
 	return u
+}
+
+// defaultBucket returns the limit and window of the model's default bucket.
+// On the best-effort route it is the largest limit there is: a tenant
+// without a rule of its own is counted there and must not be refused.
+func (m Model) defaultBucket(overage bool) (int64, string) {
+	limit, window := m.DefaultLimit, m.DefaultWindow
+	if !validQuota(limit, window) {
+		limit, window = fallbackLimit, fallbackWindow
+	}
+	if overage {
+		limit = serviceQuotaLimit
+	}
+	return limit, window
 }
 
 // tenantRules returns the bucket rules of a model in order: the rule at
@@ -409,6 +494,15 @@ func authPolicy(s State) *unstructured.Unstructured {
 // a tenant's keys draw from the same bucket.
 func TenantClientIDPattern(slug string) string {
 	return "^" + regexp.QuoteMeta(slug) + `\.[a-f0-9]+$`
+}
+
+// TenantsClientIDPattern matches the client IDs of all the given tenants.
+func TenantsClientIDPattern(slugs []string) string {
+	quoted := make([]string, 0, len(slugs))
+	for _, slug := range slugs {
+		quoted = append(quoted, regexp.QuoteMeta(slug))
+	}
+	return "^(" + strings.Join(quoted, "|") + `)\.[a-f0-9]+$`
 }
 
 // Redacted returns a copy with secret values masked, for display.

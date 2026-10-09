@@ -233,9 +233,73 @@ instance, which you declare on the `LLMInferenceService` with
 - *Never 0.* Envoy rejects a weight of 0, and Envoy Gateway then stops
   publishing every change to that gateway, key revocations included. A site
   with nothing ready stays at 1 and its health check keeps traffic off it.
+- *No weights for a single site.* There is nothing to weigh, and with
+  weights in place Envoy AI Gateway up to 1.2.0 attaches no quota to the
+  route. A model with one site therefore keeps its quotas on the entry
+  route. With a second site the weights are needed, the quota is not
+  enforced, and the model's row shows a warning. The fix is proposed
+  upstream in
+  [agent-router#2833](https://github.com/theagentrouter/agent-router/pull/2833).
 - *Once per round, for the whole fleet.* Working the weights out after each
   cluster would send the gateways several lists in a row, and every list
   moves conversations.
+
+### Best-effort when a budget is spent
+
+**What it does.** A model can be set to keep answering a tenant whose budget
+is spent. The tenant's requests are then sent as the class `best-effort`: a
+site serves them at once when it has room, queues them behind every other
+request when it has not, and drops them first. A site that has no room
+answers 429 and the request is tried at the next site. Tenants within their
+budget run as `standard`. When the quota's window ends, the tenant is back
+to `standard` by itself.
+
+**How.**
+
+1. Every 15 seconds the server reads the counters the Usage page reads. A
+   tenant that has used 90% of its quota on the model is recorded as "in
+   overage" until the end of its window.
+2. A sync then lists the tenant in a second entry route, `fleet-<model>-be`.
+   That route matches the model *and* the tenant's client ID, which makes it
+   more specific than the model's entry route, so it wins for this tenant.
+3. Its backend sets the header `x-llm-d-inference-objective: best-effort`.
+   The model's own entry route sets `standard`. Both replace whatever a
+   client sent.
+4. The route has a `QuotaPolicy` of its own. It counts every tenant under
+   the same rule as the model's policy and refuses nobody.
+
+**Why.**
+
+- *The hub chooses the route ahead of the request.* The gateway checks the
+  budget in a filter that answers 429 itself, before a route is chosen. A
+  fallback backend or a retry never sees that request, and a header set on a
+  backend is a fixed value that cannot depend on the budget.
+- *90%, not 100%.* The tenant should be moved before the gateway starts
+  refusing. A tenant that uses its last 10% within one interval still gets
+  429 until the move has reached the gateways, about 15 seconds.
+- *Until the window ends.* The counter's name contains the start of the
+  window, so the next window starts at 0 and the tenant is within budget
+  again without anybody doing anything.
+- *Nobody is moved when Redis cannot be read.* "Could not ask" is never
+  taken as "has used everything", or as "has used nothing".
+- *Only hourly and daily quotas.* A window of a second or a minute is over
+  before the loop and a sync can act. Dry-run quotas never refuse, so there
+  is nothing to move.
+- *Counted apart.* What a tenant uses as best-effort is shown on the Usage
+  page next to its budget, not added to it.
+- *The route is there only while a tenant is listed.* Its retry patch names
+  the route, and a patch for a route that does not exist is reported as not
+  programmed.
+- *At most 200 tenants per model.* The list is one regular expression in the
+  gateway's route table. Above 200, the first 200 by name are moved and the
+  model's row shows a warning.
+- *A changed quota or a reset ends it.* The tenant has a new budget, so it
+  is judged against that from the start.
+- *Every cluster gets the same list.* The fleet revision covers it, so the
+  Clusters page shows a cluster that is behind.
+- *The serving sites must know the class.* The header names an
+  `InferenceObjective` that the model's release defines on each serving
+  cluster. The hub does not create it.
 
 ### Drain and undrain
 
@@ -294,6 +358,22 @@ with the keys it should hold and removes any other entry.
 - *`data`, not `stringData`.* Server-side apply cannot remove an entry that
   came in through `stringData`, and the gateway trusts every entry: a
   revoked key would keep working.
+
+### Why a new quota needs the route to change
+
+**What it does.** Every route the server renders carries the annotation
+`aigw-ui.io/quota-revision`, which changes when the model's quota rules do.
+
+**Why.** In Envoy AI Gateway 1.1.0 a tenant's rule is enforced through an
+entry in the proxy's route, and that entry is only written when Envoy
+Gateway builds the route again. A changed `QuotaPolicy` alone does not make
+it do so. A quota added to a tenant whose key already existed was therefore
+neither counted nor enforced until something else changed. The controller
+copies a route's annotations to the `HTTPRoute` it generates, so the
+annotation makes that object change, and the route is built with the new
+rule. On a test gateway such a quota was enforced 12 seconds later; without
+the annotation, not at all. A route that a cluster's own chart renders has
+no such annotation: there a new quota takes effect with the next key change.
 
 ### Set a quota
 
