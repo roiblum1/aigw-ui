@@ -60,6 +60,34 @@ const (
 // fleetHostAttempts on one model's entry route.
 func RetryPatchName(slug string) string { return FleetName(slug) + "-retry" }
 
+// BestEffortName is the name of the objects of a model's best-effort route:
+// the entry route for the tenants whose budget is spent.
+func BestEffortName(slug string) string { return FleetName(slug) + "-be" }
+
+const (
+	// ObjectiveHeader names the class a serving site queues a request in.
+	// The value is the name of an InferenceObjective in the model's
+	// namespace there, which the model's release has to define.
+	ObjectiveHeader     = "x-llm-d-inference-objective"
+	ObjectiveStandard   = "standard"
+	ObjectiveBestEffort = "best-effort"
+
+	// MaxOverageTenants is how many tenants one best-effort route lists.
+	// The list is one regular expression in the gateway's route table.
+	MaxOverageTenants = 200
+)
+
+// OverageTenants returns the tenants the model's best-effort route lists:
+// the first MaxOverageTenants by slug.
+func (m Model) OverageTenants() []string {
+	tenants := append([]string(nil), m.Overage...)
+	sort.Strings(tenants)
+	if len(tenants) > MaxOverageTenants {
+		tenants = tenants[:MaxOverageTenants]
+	}
+	return tenants
+}
+
 // healthPath is where a site answers for one model. The slashes of a name
 // such as "zai-org/GLM-5.3" stay: they are part of the path. Anything else
 // that is not allowed in a path is escaped.
@@ -86,7 +114,22 @@ func (m Model) fleetSites() []FleetSite {
 // site's gateway take a request for the model and send it to a site that
 // serves it.
 func fleetObjects(s State, m Model) []*unstructured.Unstructured {
-	return []*unstructured.Unstructured{fleetBackend(s, m), fleetServiceBackend(s, m), fleetRoute(s, m), fleetTrafficPolicy(s, m), fleetRetryPatch(s, m)}
+	name := FleetName(m.Slug)
+	out := []*unstructured.Unstructured{
+		fleetBackend(s, m), fleetServiceBackend(s, m, name, ""), fleetRoute(s, m),
+		fleetTrafficPolicy(s, m, name, 503), fleetRetryPatch(s, name),
+	}
+	if !m.BestEffort {
+		return out
+	}
+	name = BestEffortName(m.Slug)
+	out = append(out, fleetServiceBackend(s, m, name, ObjectiveBestEffort))
+	if tenants := m.OverageTenants(); len(tenants) > 0 {
+		// A 429 from a serving site says it has no room for best-effort
+		// work right now, so the next site gets a chance.
+		out = append(out, fleetOverageRoute(s, m, tenants), fleetTrafficPolicy(s, m, name, 503, 429), fleetRetryPatch(s, name))
+	}
+	return out
 }
 
 // fleetBackend lists the sites that serve the model, one zone each. The
@@ -113,9 +156,11 @@ func fleetBackend(s State, m Model) *unstructured.Unstructured {
 	return u
 }
 
-func fleetServiceBackend(s State, m Model) *unstructured.Unstructured {
-	u := object(aigwAPI, "AIServiceBackend", s.Namespace, FleetName(m.Slug))
-	u.Object["spec"] = map[string]any{
+// fleetServiceBackend returns an AIServiceBackend for the model's sites.
+// objective, when not empty, is the class every request through it gets.
+func fleetServiceBackend(s State, m Model, name, objective string) *unstructured.Unstructured {
+	u := object(aigwAPI, "AIServiceBackend", s.Namespace, name)
+	spec := map[string]any{
 		"schema": map[string]any{"name": "OpenAI"},
 		"backendRef": map[string]any{
 			"group": "gateway.envoyproxy.io",
@@ -123,17 +168,37 @@ func fleetServiceBackend(s State, m Model) *unstructured.Unstructured {
 			"name":  FleetName(m.Slug),
 		},
 	}
+	if objective != "" {
+		spec["headerMutation"] = objectiveHeader(objective)
+	}
+	u.Object["spec"] = spec
 	return u
 }
 
-func fleetRoute(s State, m Model) *unstructured.Unstructured {
+// objectiveHeader sets the class of a request, replacing one a client sent.
+func objectiveHeader(objective string) map[string]any {
+	return map[string]any{"set": []any{map[string]any{"name": ObjectiveHeader, "value": objective}}}
+}
+
+func fleetParent(s State) map[string]any {
 	parent := map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName}
 	if s.ClientListener != "" {
 		parent["sectionName"] = s.ClientListener
 	}
+	return parent
+}
+
+func fleetRoute(s State, m Model) *unstructured.Unstructured {
+	// QuotaPolicy matches on modelNameOverride, so it is always set.
+	backendRef := map[string]any{"name": FleetName(m.Slug), "modelNameOverride": m.Name}
+	if m.BestEffort {
+		// The class is then always explicit: a tenant within its budget
+		// cannot be sent as another class by a header of its own.
+		backendRef["headerMutation"] = objectiveHeader(ObjectiveStandard)
+	}
 	u := object(aigwAPI, "AIGatewayRoute", s.Namespace, FleetName(m.Slug))
 	u.Object["spec"] = map[string]any{
-		"parentRefs": []any{parent},
+		"parentRefs": []any{fleetParent(s)},
 		"rules": []any{
 			map[string]any{
 				"name": "fleet",
@@ -142,9 +207,36 @@ func fleetRoute(s State, m Model) *unstructured.Unstructured {
 						map[string]any{"type": "Exact", "name": ModelHeader, "value": m.Name},
 					}},
 				},
+				"backendRefs": []any{backendRef},
+				"timeouts":    map[string]any{"request": fleetRequestTimeout},
+			},
+		},
+	}
+	return u
+}
+
+// fleetOverageRoute takes the requests of the listed tenants for the model.
+// It matches two headers where the model's entry route matches one, which
+// makes it the more specific route, so it wins for these tenants.
+//
+// The client ID is there to match on because the gateway checks the API key
+// before the AI gateway reads the model from the body and matches again.
+func fleetOverageRoute(s State, m Model, tenants []string) *unstructured.Unstructured {
+	name := BestEffortName(m.Slug)
+	u := object(aigwAPI, "AIGatewayRoute", s.Namespace, name)
+	u.Object["spec"] = map[string]any{
+		"parentRefs": []any{fleetParent(s)},
+		"rules": []any{
+			map[string]any{
+				"name": "overage",
+				"matches": []any{
+					map[string]any{"headers": []any{
+						map[string]any{"type": "Exact", "name": ModelHeader, "value": m.Name},
+						map[string]any{"type": "RegularExpression", "name": ClientIDHeader, "value": TenantsClientIDPattern(tenants)},
+					}},
+				},
 				"backendRefs": []any{
-					// QuotaPolicy matches on modelNameOverride, so it is always set.
-					map[string]any{"name": FleetName(m.Slug), "modelNameOverride": m.Name},
+					map[string]any{"name": name, "modelNameOverride": m.Name},
 				},
 				"timeouts": map[string]any{"request": fleetRequestTimeout},
 			},
@@ -154,17 +246,22 @@ func fleetRoute(s State, m Model) *unstructured.Unstructured {
 }
 
 // fleetTrafficPolicy attaches to the HTTPRoute the gateway generates from
-// the model's AIGatewayRoute, which has the same name.
-func fleetTrafficPolicy(s State, m Model) *unstructured.Unstructured {
+// the AIGatewayRoute called name, which has the same name. A request that
+// gets one of the retryOn statuses goes to the next site.
+func fleetTrafficPolicy(s State, m Model, name string, retryOn ...int64) *unstructured.Unstructured {
 	sites := m.fleetSites()
 	zones := make([]any, 0, len(sites))
 	for _, site := range sites {
 		zones = append(zones, map[string]any{"zone": site.Name, "weight": max(site.Weight, 1)})
 	}
-	u := object(egAPI, "BackendTrafficPolicy", s.Namespace, FleetName(m.Slug))
+	statuses := make([]any, 0, len(retryOn))
+	for _, code := range retryOn {
+		statuses = append(statuses, code)
+	}
+	u := object(egAPI, "BackendTrafficPolicy", s.Namespace, name)
 	u.Object["spec"] = map[string]any{
 		"targetRefs": []any{
-			map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": FleetName(m.Slug)},
+			map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": name},
 		},
 		"loadBalancer": map[string]any{
 			"type": "ConsistentHash",
@@ -182,7 +279,7 @@ func fleetTrafficPolicy(s State, m Model) *unstructured.Unstructured {
 			"numRetries": int64(len(sites) - 1),
 			"retryOn": map[string]any{
 				"triggers":        []any{"connect-failure", "reset", "retriable-status-codes"},
-				"httpStatusCodes": []any{int64(503)},
+				"httpStatusCodes": statuses,
 			},
 			"perRetry": map[string]any{
 				"backOff": map[string]any{"baseInterval": "100ms", "maxInterval": "1s"},
@@ -227,7 +324,7 @@ func sessionHeaders(f FleetConfig) []any {
 }
 
 // fleetRetryPatch changes two things in the route Envoy Gateway generates
-// for one model's entry route, which have no setting of their own. It needs
+// for the entry route called name, which have no setting of their own. It needs
 // enableEnvoyPatchPolicy in the Envoy Gateway configuration; without it the
 // policy is not programmed and a sync reports it.
 //
@@ -238,13 +335,13 @@ func sessionHeaders(f FleetConfig) []any {
 //     forwarded request, while the health check, which sets the name itself,
 //     keeps passing.
 //
-// Each model has a policy of its own: Envoy Gateway applies the patches of
-// one policy together, so in a shared policy one model whose route is not
-// there yet would take the settings away from every model.
-func fleetRetryPatch(s State, m Model) *unstructured.Unstructured {
-	// The route Envoy Gateway generates from the "fleet" rule, the first of
-	// the model's AIGatewayRoute.
-	route := "..routes[?(@.name == 'httproute/" + s.Namespace + "/" + FleetName(m.Slug) + "/rule/0/match/0/*')].route"
+// Each route has a policy of its own: Envoy Gateway applies the patches of
+// one policy together, so in a shared policy one route that is not there
+// yet would take the settings away from every other.
+func fleetRetryPatch(s State, name string) *unstructured.Unstructured {
+	// The route Envoy Gateway generates from the first rule of the
+	// AIGatewayRoute, which is its only one.
+	route := "..routes[?(@.name == 'httproute/" + s.Namespace + "/" + name + "/rule/0/match/0/*')].route"
 	patch := func(op, jsonPath, path string, value any) map[string]any {
 		operation := map[string]any{"op": op, "jsonPath": jsonPath, "path": path}
 		if value != nil {
@@ -257,7 +354,7 @@ func fleetRetryPatch(s State, m Model) *unstructured.Unstructured {
 			"operation": operation,
 		}
 	}
-	u := object(egAPI, "EnvoyPatchPolicy", s.Namespace, RetryPatchName(m.Slug))
+	u := object(egAPI, "EnvoyPatchPolicy", s.Namespace, name+"-retry")
 	u.Object["spec"] = map[string]any{
 		"targetRef": map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName},
 		"type":      "JSONPatch",
@@ -284,6 +381,8 @@ func HeldNames(s State) map[string]bool {
 		if m.Held() {
 			names[FleetName(m.Slug)] = true
 			names[RetryPatchName(m.Slug)] = true
+			names[BestEffortName(m.Slug)] = true
+			names[BestEffortName(m.Slug)+"-retry"] = true
 		}
 	}
 	return names
@@ -294,14 +393,18 @@ func HeldNames(s State) map[string]bool {
 // clusters with the same revision send a conversation to the same site. It
 // is empty when the state renders no entry route.
 func FleetRevision(s State) string {
+	// The best-effort fields are left out when unset, so a fleet without
+	// such a model keeps the revision it had before they existed.
 	type model struct {
-		Name  string
-		Sites []FleetSite
+		Name       string
+		Sites      []FleetSite
+		BestEffort bool     `json:",omitempty"`
+		Overage    []string `json:",omitempty"`
 	}
 	var models []model
 	for _, m := range s.Models {
 		if len(m.Fleet) > 0 {
-			models = append(models, model{m.Name, m.fleetSites()})
+			models = append(models, model{m.Name, m.fleetSites(), m.BestEffort, m.OverageTenants()})
 		}
 	}
 	if len(models) == 0 {

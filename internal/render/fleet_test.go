@@ -198,7 +198,8 @@ func TestHeldModelKeepsItsQuotas(t *testing.T) {
 		t.Errorf("limit = %d, want the new one", limit)
 	}
 	find(t, objs, "Backend", "local")
-	if held := HeldNames(s); !held["fleet-glm-5-3"] || !held["fleet-glm-5-3-retry"] || len(held) != 2 {
+	// The best-effort route's names are held too, whether it is there or not.
+	if held := HeldNames(s); !held["fleet-glm-5-3"] || !held["fleet-glm-5-3-retry"] || !held["fleet-glm-5-3-be"] || !held["fleet-glm-5-3-be-retry"] || len(held) != 4 {
 		t.Errorf("held = %v", held)
 	}
 }
