@@ -8,6 +8,7 @@ import {
   FormModal,
   PageHeader,
   WindowSelect,
+  formatTime,
   formatTokens,
   useAction,
   useLoad,
@@ -30,6 +31,16 @@ export default function Models() {
     if (!confirm(`Delete ${m.name}? Its quotas are removed from every cluster.${note}`)) return;
     action.run(async () => {
       await api.deleteModel(m.id);
+      await reload();
+    });
+  };
+
+  const drain = (m: Model, e: Endpoint) => {
+    const on = !e.capacity?.drained;
+    if (on && !confirm(`Drain ${m.name} on ${e.cluster_name}? Its conversations move to the other sites, step by step.`))
+      return;
+    action.run(async () => {
+      await api.drainSite(m.id, e.cluster_id, on);
       await reload();
     });
   };
@@ -108,8 +119,33 @@ export default function Models() {
                             </span>
                           </>
                         )}
+                        <SiteWeight model={m} endpoint={e} />
+                        {e.capacity && e.capacity.weight !== null && (
+                          <button
+                            className="link"
+                            disabled={action.busy}
+                            title={
+                              e.capacity.drained
+                                ? "Let the site take traffic again. Its weight comes back one instance per poll."
+                                : "Step the site's weight down to 0, one instance per poll, before maintenance."
+                            }
+                            onClick={() => drain(m, e)}
+                          >
+                            {e.capacity.drained ? "Undrain" : "Drain"}
+                          </button>
+                        )}
                       </div>
                     ))}
+                    {m.warnings.map((w) => (
+                      <div key={w} className="detail warn-text">
+                        {w}
+                      </div>
+                    ))}
+                    {m.site_weights_note && (
+                      <div className="detail" title="The gateways keep the weights they have.">
+                        Site weights not written: {m.site_weights_note}.
+                      </div>
+                    )}
                   </td>
                   <td>
                     {formatTokens(m.default_limit)} per {windowLabel[m.default_window]}
@@ -141,6 +177,28 @@ export default function Models() {
         />
       )}
     </>
+  );
+}
+
+/** A site's share of the model's traffic, and the ready capacity it comes from. */
+function SiteWeight({ model, endpoint }: { model: Model; endpoint: Endpoint }) {
+  const c = endpoint.capacity;
+  if (!c || c.weight === null) return null;
+  const total = model.site_weights.reduce((sum, z) => sum + z.weight, 0);
+  const mine = model.site_weights.find((z) => z.zone === endpoint.cluster_name);
+  const share = mine && total > 0 ? ` · ${Math.round((mine.weight / total) * 100)}% of traffic` : "";
+  const target = c.drained ? 0 : c.observed;
+  const moving = target !== null && target !== c.weight;
+  const title =
+    `${c.detail}\nLast read ${formatTime(c.observed_at)}, weight last changed ${formatTime(c.changed_at)}.` +
+    (moving ? "\nThe weight follows the ready capacity one step per poll, and drops only after two polls agree." : "");
+  return (
+    <span className={moving || c.drained ? "tag warn" : "tag manual"} title={title}>
+      {c.drained ? (moving ? "draining · " : "drained · ") : ""}
+      weight {c.weight}
+      {moving ? ` → ${target}` : ""}
+      {share}
+    </span>
   );
 }
 

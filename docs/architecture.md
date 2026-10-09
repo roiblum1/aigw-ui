@@ -132,6 +132,126 @@ is the same is not listed. After a change it waits two seconds and reads the
 status of the AI gateway objects, to record whether the gateway's controller
 accepted them. That reading is informational: it never fails a sync.
 
+## Site weights
+
+For each model, the gateways split conversations between the sites by zone
+weights in a `BackendTrafficPolicy`. This tool keeps those weights in line
+with what each site can serve.
+
+**The number.** A site's capacity for a model is
+
+```
+sum over the model's LLMInferenceServices on that cluster of
+    ready instances x capacity of one instance
+```
+
+- *Ready instances* is read from `status.workloads` of each
+  `LLMInferenceService`, which KServe 0.21 fills from the Deployment's
+  available replicas, or from the LeaderWorkerSet's ready groups for a
+  multi-node deployment. A multi-node instance therefore counts once, however
+  many nodes it spans.
+- With separate prefill and decode, an instance is a decode replica together
+  with its share of the prefill replicas, in the ratio the spec asks for. Four
+  decode and two prefill replicas are four instances; with one prefill replica
+  down there is prefill for two.
+- *Capacity of one instance* cannot be counted: a multi-node prefill/decode
+  instance is one instance and can be worth several single-node ones. It is
+  declared on the `LLMInferenceService` in the annotation
+  `aigw-ui.io/capacity-per-instance`, as any number in a unit that is the same
+  for that model everywhere, for example tokens per second from a benchmark.
+  Without the annotation an instance counts as 1. The older name
+  `aigw-ui.io/capacity-per-replica` is read when the newer one is not set.
+
+**Which sites.** The sites are the clusters marked *Part of the fleet*. A
+fleet cluster must enforce API keys. A cluster serves a model when it has an
+`LLMInferenceService` for it; `/v1/models` is not used for this, because a
+gateway can list a model that another site serves.
+
+Ready nodes, desired replicas, tokens served and live load are deliberately
+not used. Desired replicas would give full weight to a site whose pods crash.
+Tokens served measures demand, so a site that gets less traffic would get a
+lower weight and then even less. Live load changes every few seconds, and
+every weight change moves conversations away from their cache.
+
+**From capacity to weight.** The capacity is read on every discovery poll.
+The applied weight follows it by these rules (`internal/weights`):
+
+| Observed | What is applied |
+|---|---|
+| The first reading | The reading itself |
+| More than applied | At most one instance more per poll, so a site that comes back gets its conversations back gradually |
+| Less than applied | Nothing on the first poll; the lower value once a second poll in a row agrees |
+| The cluster no longer has a deployment of the model | The same as "less than applied", down to 0 |
+| An operator drains the site | At most one instance less per poll, down to 0, where it stays until the drain ends |
+| Unknown: cluster unreachable, or no status yet | The last weight is kept. Unknown is never zero |
+
+Whole capacities are written as they are (8 and 3). Others are multiplied by
+100 and rounded (2.6 becomes 260).
+
+**Writing them.** A sync looks on the cluster, in every namespace, for a
+`BackendTrafficPolicy` with the label `aigw-ui.io/zone-weights: "true"` and
+the annotation `aigw-ui.io/model: <model name>`, and sets
+`spec.loadBalancer.zoneAware.weightedZones` to one entry per fleet cluster,
+with weight 0 for a cluster that does not serve the model. Every fleet
+cluster is listed because the gateway gives a zone that is left out a weight
+of 1. The zone is the cluster's name here. Only fleet clusters are written
+to.
+
+- Only that one field is written, with server-side apply under the field
+  manager `aigw-ui-weights`. The policy stays the chart's: this tool never
+  creates, labels or deletes it.
+- When a weight changes, every cluster is synced, so all gateways hold the
+  same weights. Different weights would send one conversation to different
+  sites.
+- No weights are written for a model while a site that serves it has never
+  reported a capacity, because the gateway gives a zone that is left out a
+  weight of its own. None are written when all would be zero either: the last
+  ones stay, and the health checks take a dead site out.
+
+**What the fleet chart has to do**
+
+1. Put the label and the annotation on each model's `BackendTrafficPolicy`,
+   and not set `weightedZones` itself.
+2. Give each endpoint of the cross-site `Backend` a `zone` equal to the
+   cluster's name in this tool.
+3. Optionally set `aigw-ui.io/capacity-per-instance` on each
+   `LLMInferenceService`.
+4. Tell Argo CD to leave the field alone:
+
+```yaml
+spec:
+  ignoreDifferences:
+    - group: gateway.envoyproxy.io
+      kind: BackendTrafficPolicy
+      managedFieldsManagers: [aigw-ui-weights]
+  syncPolicy:
+    syncOptions: [RespectIgnoreDifferences=true]
+```
+
+A model is matched by its name here, or by the name the cluster's route sends
+to the backend (`modelNameOverride`), against `spec.model.name` of the
+`LLMInferenceService`, or the service's own name when that is empty.
+
+**Drain.** *Drain* on the Models page takes one site out for one model before
+maintenance: its weight steps down to 0 and stays there. *Undrain* brings it
+back one instance per poll. Draining the last site that has capacity is
+refused. Both are in the task log and the audit log.
+
+**Recipe check.** Each `LLMInferenceService` can declare
+`aigw-ui.io/model-revision` and `aigw-ui.io/max-model-len`. The Models page
+warns when the sites that serve a model declare different values: a different
+revision means one model name gives different answers, and a smaller
+`max-model-len` means a long request fails at that site. The tool only warns;
+the operator decides, and can drain a site.
+
+## API-key policy and the peer listener
+
+The `SecurityPolicy` attaches to the whole Gateway unless the cluster has a
+*Client listener* set; then it attaches to that listener alone
+(`sectionName`). A gateway that also has a listener for requests forwarded by
+other sites needs this: the entry gateway removes the key before forwarding,
+so a key check on that listener would refuse every cross-site request.
+
 ## Audit log
 
 A wrapper around the API records every request that is not a read: method,
@@ -202,6 +322,17 @@ The **Self-test** button on a cluster checks several of these with real
 requests: client ID forwarding and the tenant rule (a request with a new key
 is answered and counted), the counter names, the refusal over the limit, and
 the reset. Run it on one test cluster before a first sync to production.
+
+Not verified for site weights, which were tested against a real Kubernetes API
+server with cut-down CRDs but not against KServe or Envoy Gateway:
+
+- that a live KServe fills `status.workloads.primary.readyReplicas` and
+  `status.workloads.prefill.readyReplicas` as its 0.21 source says;
+- that `serving.kserve.io/stop: "true"` is how a stopped service is marked. It
+  is what makes a stopped service count as zero and not as unknown;
+- that Envoy Gateway accepts a zone weight of 0, and what it does with a zone
+  that has no endpoint;
+- that Argo CD leaves the weights alone with the setting above.
 
 Also not verified: that the gateway accepts the placeholder rule that keeps a
 removed quota's position, a rule with an `Exact` match on a client ID no key

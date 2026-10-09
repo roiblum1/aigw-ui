@@ -19,7 +19,11 @@ const status: { part: string; today: string; built: "yes" | "partly" | "no" }[] 
   { part: "Live usage", today: "Built, read from the quota counters in Redis.", built: "yes" },
   { part: "Config to every cluster", today: "Built. This tool applies it itself with each cluster's kubeconfig, not through ACM and Argo CD.", built: "partly" },
   { part: "API keys in Postgres", today: "Stored encrypted, not hashed: every sync has to write them to the clusters.", built: "partly" },
-  { part: "Site weights from ready nodes", today: "Not built. The model catalog knows which site serves a model, not how many nodes are ready.", built: "no" },
+  {
+    part: "Site weights",
+    today: "Built: ready instances of the model times the declared capacity of one instance. Written only to policies the cluster charts label for it. See the Models page.",
+    built: "partly",
+  },
   { part: "Priority class per key, budgets", today: "Not built.", built: "no" },
   { part: "Usage collector and past usage", today: "Not built. Usage is the current window only.", built: "no" },
   { part: "Site picker, site reporter, peer listener, EPP settings", today: "Not part of this tool. They belong to the cluster charts.", built: "no" },

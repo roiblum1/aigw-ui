@@ -1,12 +1,15 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
+	"aigw-ui/internal/weights"
 )
 
 // modelBody is the body of a model create or update. On an update every field
@@ -125,7 +128,108 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	fleet, err := s.st.ZoneWeights(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	for i := range out {
+		setSiteWeights(&out[i], fleet[out[i].Name])
+		out[i].Warnings = recipeWarnings(out[i])
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// drainBody is the body of a drain or undrain.
+type drainBody struct {
+	Drained bool `json:"drained"`
+}
+
+// drainSite starts or ends an operator drain of one model on one cluster. A
+// drained site's weight steps down to 0, one instance per poll, and comes
+// back the same way.
+func (s *Server) drainSite(w http.ResponseWriter, r *http.Request) {
+	var b drainBody
+	if err := decode(r, &b); err != nil {
+		fail(w, err)
+		return
+	}
+	model, cluster, err := s.st.SetDrained(r.Context(), r.PathValue("id"), r.PathValue("cluster_id"), b.Drained)
+	if errors.Is(err, store.ErrLastSite) {
+		writeError(w, http.StatusConflict, "No other site has capacity for "+model+", so draining "+cluster+" would leave the model unreachable.")
+		return
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	action, summary := "site.drain", "Started draining "+model+" on cluster "+cluster
+	if !b.Drained {
+		action, summary = "site.undrain", "Ended the drain of "+model+" on cluster "+cluster
+	}
+	// The weight moves on the next polls; each step is its own task.
+	s.record(r, action, summary, r.PathValue("cluster_id"))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// recipeWarnings reports differences between the sites that serve a model
+// which break sharing its traffic.
+func recipeWarnings(m store.Model) []string {
+	revisions, lengths := map[string][]string{}, map[string][]string{}
+	for _, e := range m.Endpoints {
+		if !e.Capacity.Serving {
+			continue
+		}
+		if v := e.Capacity.Revision; v != "" {
+			revisions[v] = append(revisions[v], e.ClusterName)
+		}
+		if v := e.Capacity.MaxModelLen; v != "" {
+			lengths[v] = append(lengths[v], e.ClusterName)
+		}
+	}
+	out := []string{}
+	if len(revisions) > 1 {
+		out = append(out, "The sites serve different revisions ("+valueList(revisions)+"), so the same model name gives different answers.")
+	}
+	if len(lengths) > 1 {
+		out = append(out, "The sites take different request lengths ("+valueList(lengths)+"), so a long request fails at the smaller site.")
+	}
+	return out
+}
+
+// valueList formats "value on site, site; value on site".
+func valueList(sites map[string][]string) string {
+	values := make([]string, 0, len(sites))
+	for v := range sites {
+		values = append(values, v)
+	}
+	sort.Strings(values)
+	for i, v := range values {
+		values[i] = v + " on " + strings.Join(sites[v], ", ")
+	}
+	return strings.Join(values, "; ")
+}
+
+// setSiteWeights works out the zone weights a sync writes for the model, the
+// same way the sync does, so the UI shows what the gateways get.
+//
+// sites is the model's entry from the fleet-wide zone weights; it is empty
+// when no fleet cluster serves the model.
+func setSiteWeights(m *store.Model, sites []weights.Site) {
+	m.SiteWeights = []store.SiteWeight{}
+	if len(sites) == 0 {
+		for _, e := range m.Endpoints {
+			if e.Capacity.Weight != nil {
+				m.SiteWeightsNote = "no cluster that serves the model is in the fleet"
+			}
+		}
+		return
+	}
+	zones, reason := weights.Zones(sites)
+	m.SiteWeightsNote = reason
+	for _, z := range zones {
+		m.SiteWeights = append(m.SiteWeights, store.SiteWeight{Zone: z.Zone, Weight: z.Weight})
+	}
 }
 
 func (s *Server) createModel(w http.ResponseWriter, r *http.Request) {

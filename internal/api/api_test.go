@@ -100,3 +100,50 @@ func TestValidCostExpression(t *testing.T) {
 		}
 	}
 }
+
+// A fleet cluster without key enforcement would let a client name its own
+// tenant, so the two settings cannot be combined either way round.
+func TestFleetClusterMustEnforceKeys(t *testing.T) {
+	enforcing := store.Cluster{ID: "c1", Name: "site1-a", Namespace: "ai-gateway", GatewayName: "llm", AuthEnabled: true}
+	open := with(enforcing, func(c *store.Cluster) { c.AuthEnabled = false })
+	fleet := with(enforcing, func(c *store.Cluster) { c.FleetEnabled = true })
+	for name, tc := range map[string]struct {
+		current store.Cluster
+		body    string
+		ok      bool
+	}{
+		"join the fleet with keys enforced": {enforcing, `{"fleet_enabled":true,"client_listener":"https"}`, true},
+		"join the fleet without":            {open, `{"fleet_enabled":true}`, false},
+		"join and enforce in one change":    {open, `{"fleet_enabled":true,"auth_enabled":true}`, true},
+		"stop enforcing while in the fleet": {fleet, `{"auth_enabled":false}`, false},
+		"leave the fleet and stop":          {fleet, `{"auth_enabled":false,"fleet_enabled":false}`, true},
+		"bad listener name":                 {enforcing, `{"client_listener":"HTTPS listener"}`, false},
+	} {
+		var b clusterBody
+		if err := json.Unmarshal([]byte(tc.body), &b); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.cluster(&tc.current); (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok = %v", name, err, tc.ok)
+		}
+	}
+}
+
+func TestRecipeWarnings(t *testing.T) {
+	site := func(name, revision, length string, serving bool) store.Endpoint {
+		return store.Endpoint{ClusterName: name, Capacity: store.EndpointCapacity{Serving: serving, Revision: revision, MaxModelLen: length}}
+	}
+	same := store.Model{Endpoints: []store.Endpoint{site("a", "r1", "262144", true), site("b", "r1", "262144", true), site("c", "", "", true)}}
+	if got := recipeWarnings(same); len(got) != 0 {
+		t.Errorf("same recipe: %v", got)
+	}
+	// A site that no longer serves the model does not count.
+	gone := store.Model{Endpoints: []store.Endpoint{site("a", "r1", "262144", true), site("b", "r0", "131072", false)}}
+	if got := recipeWarnings(gone); len(got) != 0 {
+		t.Errorf("site not serving: %v", got)
+	}
+	differ := store.Model{Endpoints: []store.Endpoint{site("a", "r1", "262144", true), site("b", "r2", "131072", true)}}
+	if got := recipeWarnings(differ); len(got) != 2 {
+		t.Errorf("different recipes: %v", got)
+	}
+}

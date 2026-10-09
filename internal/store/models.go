@@ -24,7 +24,7 @@ func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
 		return nil, err
 	}
 	models, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Model, error) {
-		m := Model{Endpoints: []Endpoint{}}
+		m := Model{Endpoints: []Endpoint{}, SiteWeights: []SiteWeight{}, Warnings: []string{}}
 		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt)
 		return m, err
 	})
@@ -36,7 +36,9 @@ func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
 		byID[models[i].ID] = &models[i]
 	}
 	rows, err = s.db.Query(ctx,
-		`SELECT e.model_id, e.cluster_id, c.name, e.host, e.port, e.upstream_model, e.source, e.backends
+		`SELECT e.model_id, e.cluster_id, c.name, e.host, e.port, e.upstream_model, e.source, e.backends,
+		        e.capacity_observed, e.capacity_observed_at, e.capacity_applied, e.capacity_changed_at, e.capacity_detail,
+		        e.serving, e.drained, e.revision, e.max_model_len
 		 FROM model_endpoints e JOIN clusters c ON c.id = e.cluster_id ORDER BY c.name`)
 	if err != nil {
 		return nil, err
@@ -45,7 +47,9 @@ func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
 	for rows.Next() {
 		var modelID string
 		var e Endpoint
-		if err := rows.Scan(&modelID, &e.ClusterID, &e.ClusterName, &e.Host, &e.Port, &e.UpstreamModel, &e.Source, &e.Backends); err != nil {
+		if err := rows.Scan(&modelID, &e.ClusterID, &e.ClusterName, &e.Host, &e.Port, &e.UpstreamModel, &e.Source, &e.Backends,
+			&e.Capacity.Observed, &e.Capacity.ObservedAt, &e.Capacity.Weight, &e.Capacity.ChangedAt, &e.Capacity.Detail,
+			&e.Capacity.Serving, &e.Capacity.Drained, &e.Capacity.Revision, &e.Capacity.MaxModelLen); err != nil {
 			return nil, err
 		}
 		if m := byID[modelID]; m != nil {

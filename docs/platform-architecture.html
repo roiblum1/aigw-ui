@@ -237,7 +237,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <rect x="888" y="60" width="528" height="112" rx="8" class="box "/>
 <text x="906" y="90" class="t-title">Postgres · source of truth</text>
 <text x="906" y="112" class="t-body">tenants · API keys (hashed) + priority class · quotas &amp; budgets</text>
-<text x="906" y="130" class="t-body">model → site catalog with ready nodes (the weights)</text>
+<text x="906" y="130" class="t-body">model → site catalog with ready capacity (the weights)</text>
 <text x="906" y="148" class="t-body">usage history from every site</text>
 <rect x="324" y="212" width="246" height="104" rx="8" class="box b-config"/>
 <text x="342" y="242" class="t-title">Config sync</text>
@@ -272,7 +272,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <rect x="308" y="428" width="1160" height="604" rx="14" class="panel-stack"/>
 <rect x="300" y="420" width="1160" height="604" rx="14" class="panel-cluster"/>
 <text x="1416" y="444" class="lbl lbl-cluster" text-anchor="end">LLM CLUSTER · SAME STACK AT EVERY SITE</text>
-<text x="1416" y="461" class="t-mono" text-anchor="end">e.g. site1-a · GLM-5.3 · 8 B200 nodes · weight 8</text>
+<text x="1416" y="461" class="t-mono" text-anchor="end">e.g. site1-a · GLM-5.3 · 8 ready instances × 1 · weight 8</text>
 <rect x="324" y="480" width="246" height="112" rx="8" class="box b-config"/>
 <text x="342" y="510" class="t-title">Gateway config</text>
 <text x="342" y="532" class="t-mono">AIGatewayRoute + API keys</text>
@@ -361,7 +361,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <text x="906" y="968" class="t-body">→ NVMe, never leaves the site.</text>
 <rect x="1170" y="880" width="246" height="118" rx="8" class="box b-report"/>
 <text x="1188" y="910" class="t-title">Site reporter</text>
-<text x="1188" y="932" class="t-body">Every 1 s: ready replicas,</text>
+<text x="1188" y="932" class="t-body">Every 1 s: ready instances,</text>
 <text x="1188" y="950" class="t-body">waiting, KV use, revision,</text>
 <text x="1188" y="968" class="t-body">max-model-len, spill fraction.</text>
 <rect x="1363.8" y="871" width="36.2" height="18" rx="9" class="tag"/><text x="1381.9" y="884" class="tag-t" text-anchor="middle">NEW</text>
@@ -386,12 +386,12 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <text x="342" y="1170" class="t-body">ranking and weights</text>
 <rect x="606" y="1100" width="246" height="106" rx="8" class="box b-peer"/>
 <text x="624" y="1130" class="t-site">site2-a</text>
-<text x="624" y="1152" class="t-body">GLM-5.3 · 3 B200 nodes</text>
+<text x="624" y="1152" class="t-body">GLM-5.3 · 3 ready instances</text>
 <text x="624" y="1170" class="t-body">weight 3</text>
 <rect x="888" y="1100" width="246" height="106" rx="8" class="box b-peer"/>
 <text x="906" y="1130" class="t-site">site3-a</text>
 <text x="906" y="1152" class="t-body">GLM-5.3</text>
-<text x="906" y="1170" class="t-body">weight = its ready nodes</text>
+<text x="906" y="1170" class="t-body">weight = instances × capacity</text>
 <rect x="1170" y="1100" width="246" height="106" rx="8" class="box b-peer"/>
 <text x="1188" y="1130" class="t-site">site4-a</text>
 <text x="1188" y="1152" class="t-body">[next model]</text>
@@ -426,7 +426,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
       <thead><tr><th scope="col"></th><th scope="col">Current design</th><th scope="col">v2</th></tr></thead>
       <tbody>
         <tr><th scope="row">Choosing a site</th><td>Least-request on each gateway replica’s own request counts</td><td>Weighted hash per conversation now; a site picker with spill fractions next</td></tr>
-        <tr><th scope="row">Capacity</th><td>Every site counts the same, so the 3-node site fills first</td><td>Sites weighted by ready nodes of the model (8 : 3)</td></tr>
+        <tr><th scope="row">Capacity</th><td>Every site counts the same, so the smaller site fills first</td><td>Sites weighted by ready instances of the model × the capacity of one instance (8 : 3)</td></tr>
         <tr><th scope="row">Stickiness</th><td>None: in simulation about 4 in 10 turns landed on a different site</td><td>A conversation stays on its home site and keeps its KV cache there</td></tr>
         <tr><th scope="row">Overload</th><td>503 and retry only</td><td>The busy site hands off the fewest conversations, chat first, each to its own second site</td></tr>
         <tr><th scope="row">Avi GSLB</th><td>Entry, and in practice where the request ran</td><td>Entry only; every entry gateway reaches the same site choice</td></tr>
@@ -512,7 +512,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
     <figcaption>site1-a is queueing, so its spill fraction is 0.30. The chat conversation’s position on site1-a falls inside the spill zone, so it moves to the next site in its own ranking. The Claude Code session sits in the right half of the bar, outside the zone, and stays home.</figcaption>
   </figure>
   <dl class="defs">
-    <div><dt>Home site</dt><dd>Weighted rendezvous hash over the sites that serve the model, weight = ready replicas. With 8 and 3 B200 nodes, 8 of every 11 conversations live at the bigger site. When a site gains or loses nodes, only the conversations that have to move, move.</dd></div>
+    <div><dt>Home site</dt><dd>Weighted rendezvous hash over the sites that serve the model, weight = ready instances of the model × the capacity of one instance. With 8 and 3 equal instances, 8 of every 11 conversations live at the bigger site. How the model is deployed sets the capacity: a multi-node or prefill/decode deployment is one instance, and it declares a higher capacity than a single-node one. When a site gains or loses instances, only the conversations that have to move, move.</dd></div>
     <div><dt>Spill fraction</dt><dd>Each site’s reporter updates it every second: up 0.03 while the site queues and another site serving the model has room, down 0.01 once it stops queueing and is under about 95% busy. Most of the time it is 0.</dd></div>
     <div><dt>Every site full</dt><dd>The conversation stays home. Moving it would add no capacity and would throw away its KV cache. The EPP’s flow control then serves by priority.</dd></div>
     <div><dt>Stale reports</dt><dd>A report older than a few seconds means “don’t spill to this site”, never “idle”. A site that comes back ramps its weight up over a few minutes.</dd></div>
@@ -570,9 +570,9 @@ spec:
         <li>Works on Envoy Gateway 1.8.5 today: zone weights become Maglev locality weights.</li>
         <li>Requests without the session header are spread by weight at random.</li>
         <li>A 503 retry goes to the conversation’s stable second site.</li>
-        <li>Limits: weights stay static until the hub re-renders them, chat without a session header isn’t sticky, and overload only moves through shed and retry.</li>
+        <li>Limits: weights change only as fast as the hub polls the clusters, chat without a session header isn’t sticky, and overload only moves through shed and retry.</li>
       </ul>
-      <pre><code><span class="c"># Backend fleet-all-sites: one zone per endpoint</span>
+      <pre><code><span class="c"># Backend fleet-all-sites: one zone per endpoint, zone = cluster name</span>
 spec:
   endpoints:
     - fqdn: {hostname: llm.site1-a.&lt;domain&gt;, port: 8443}
@@ -587,6 +587,9 @@ spec:
       zone: site4-a
 ---
 <span class="c"># BackendTrafficPolicy fleet-glm-5.3</span>
+metadata:
+  labels: {aigw-ui.io/zone-weights: "true"}
+  annotations: {aigw-ui.io/model: glm-5.3}
 spec:
   loadBalancer:
     type: ConsistentHash
@@ -595,7 +598,7 @@ spec:
       headers:
         - name: x-claude-code-session-id
     zoneAware:
-      weightedZones:      <span class="c"># ready nodes, from the hub</span>
+      weightedZones:      <span class="c"># instances × capacity, written by the hub</span>
         - {zone: site1-a, weight: 8}
         - {zone: site2-a, weight: 3}
         - {zone: site3-a, weight: &lt;n&gt;}
@@ -613,7 +616,7 @@ spec:
 key  = X-Claude-Code-Session-Id
        or hash(tenant, system, tools, messages[0])
 rank = sites serving the model, by w_s / -ln(H1(key, s))
-                                  <span class="c"># w_s = ready replicas</span>
+                                  <span class="c"># w_s = instances × capacity</span>
 rank = rank minus sites whose revision or
        max-model-len can't take the request
 for s in rank:
@@ -654,12 +657,12 @@ f_s -= 0.01  while not queueing and under ~95% busy</code></pre>
       <tbody>
         <tr><th scope="row">Normal load</th><td>Every conversation stays on its home site. Sites fill in proportion to their nodes, 8 : 3.</td></tr>
         <tr><th scope="row">One site runs hot</th><td>Its spill fraction rises. Chat conversations leave first, each to its own second-ranked site. Claude Code sessions leave last.</td></tr>
-        <tr><th scope="row">A site loses nodes</th><td>Phase 2: its weight follows ready replicas, and only the conversations that must move, move. Phase 1: weights stay until the hub re-renders them; shed and retry cover the gap.</td></tr>
+        <tr><th scope="row">A site loses instances</th><td>Phase 2: its weight follows ready instances, and only the conversations that must move, move. Phase 1: the hub lowers the weight once two polls in a row agree; shed and retry cover the gap.</td></tr>
         <tr><th scope="row">Every site full</th><td>Conversations stay home. Flow control serves by priority; a request that waits 5 s gets 429.</td></tr>
         <tr><th scope="row">A site or its gateway goes down</th><td>Health checks remove it from every model within about 15 s. Connect failures go to the next-ranked site at once.</td></tr>
         <tr><th scope="row">The picker is down</th><td>Requests fall back to the phase 1 rule, the weighted session hash.</td></tr>
         <tr><th scope="row">The hub is down</th><td>Budgets fail open and config stays as last delivered. Routing keeps working, because reports go site to site.</td></tr>
-        <tr><th scope="row">A site comes back</th><td>Its weight ramps up over a few minutes, so its conversations don’t all return to a cold cache at once.</td></tr>
+        <tr><th scope="row">A site comes back</th><td>Its weight rises one instance per hub poll, so its conversations don’t all return to a cold cache at once.</td></tr>
       </tbody>
     </table>
   </div>

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"aigw-ui/internal/kube"
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
+	"aigw-ui/internal/weights"
 )
 
 type Syncer struct {
@@ -165,7 +167,34 @@ func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, e
 	if err != nil {
 		return kube.SyncResult{}, err
 	}
-	return client.Sync(ctx, state.Namespace, render.Objects(state))
+	res, err := client.Sync(ctx, state.Namespace, render.Objects(state))
+	if err != nil {
+		return res, err
+	}
+	c, err := s.st.GetCluster(ctx, id)
+	if err != nil || !c.FleetEnabled {
+		return res, err // only the fleet's gateways share traffic between sites
+	}
+	changes, err := s.applyZoneWeights(ctx, client)
+	res.Changes = append(res.Changes, changes...)
+	return res, err
+}
+
+// applyZoneWeights writes each model's site weights to the cluster's
+// BackendTrafficPolicies that ask for them. A model whose weights cannot be
+// worked out safely is left alone.
+func (s *Syncer) applyZoneWeights(ctx context.Context, client *kube.Client) ([]kube.Change, error) {
+	sites, err := s.st.ZoneWeights(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byModel := make(map[string][]weights.Zone, len(sites))
+	for model, list := range sites {
+		if zones, reason := weights.Zones(list); reason == "" {
+			byModel[model] = zones
+		}
+	}
+	return client.ApplyZoneWeights(ctx, byModel)
 }
 
 func (s *Syncer) Probe(ctx context.Context, id string) (kube.Probe, error) {
@@ -256,7 +285,35 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 	if changed {
 		s.Changed(ctx, "discovery", "Models changed on cluster "+c.Name)
 	}
+	s.observeCapacity(ctx, c, client)
 	return len(models), nil
+}
+
+// observeCapacity reads how many instances of each model the cluster has
+// ready and moves the site weights towards it. It never fails discovery: a
+// cluster that cannot be asked keeps its last weights, because "unknown" must
+// not be taken for "nothing is running".
+func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, client *kube.Client) {
+	found, err := client.Capacity(ctx)
+	if err != nil {
+		slog.Warn("read model capacity", "cluster", c.Name, "err", err)
+		return
+	}
+	reported := make([]store.Capacity, 0, len(found))
+	for _, f := range found {
+		reported = append(reported, store.Capacity{Model: f.Model, Capacity: f.Capacity, Step: f.Step, Detail: f.Detail,
+			Revision: f.Revision, MaxModelLen: f.MaxModelLen, Known: f.Known})
+	}
+	moved, err := s.st.ApplyCapacity(ctx, c.ID, reported)
+	if err != nil {
+		slog.Error("store model capacity", "cluster", c.Name, "err", err)
+		return
+	}
+	if len(moved) > 0 {
+		// Every cluster gets the new weights: gateways with different
+		// weights would send one conversation to different sites.
+		s.Changed(ctx, "weights", "Site weight of "+strings.Join(moved, ", ")+" changed on cluster "+c.Name)
+	}
 }
 
 // discoverViaGateway takes the list of models from the gateway itself, which

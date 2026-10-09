@@ -24,6 +24,8 @@ const emptyCluster: ClusterInput = {
   kubeconfig: "",
   gateway_url: "",
   discovery_token: "",
+  fleet_enabled: false,
+  client_listener: "",
 };
 
 export default function Clusters() {
@@ -91,7 +93,15 @@ export default function Clusters() {
                   <td className="mono">
                     {c.namespace}/{c.gateway_name}
                   </td>
-                  <td>{c.auth_enabled ? "Enforced" : "Off"}</td>
+                  <td>
+                    {c.auth_enabled ? "Enforced" : "Off"}
+                    {c.auth_enabled && c.client_listener && <div className="detail">on listener {c.client_listener}</div>}
+                    {c.fleet_enabled && (
+                      <span className="tag manual" title="This cluster shares traffic with the other fleet clusters.">
+                        fleet
+                      </span>
+                    )}
+                  </td>
                   <td>
                     <StatusBadge status={c.sync_status} />
                     {c.sync_message && (
@@ -179,6 +189,8 @@ function ClusterForm(props: { cluster: Cluster | null; onClose: () => void; onSa
       kubeconfig: form.kubeconfig,
       gateway_url: form.gateway_url,
       discovery_token: form.discovery_token,
+      fleet_enabled: form.fleet_enabled,
+      client_listener: form.client_listener,
     };
     if (cluster) await api.updateCluster(cluster.id, body);
     else await api.createCluster(body);
@@ -260,6 +272,31 @@ function ClusterForm(props: { cluster: Cluster | null; onClose: () => void; onSa
           <small>
             Requests without a key issued here are rejected, for every route on the gateway. Per-tenant quotas need
             this.
+          </small>
+        </span>
+      </label>
+      <Field
+        label="Client listener"
+        hint="Optional. The Gateway listener clients come in on, for example https. The key check then applies to it alone, and not to a listener other sites forward to."
+      >
+        <input
+          placeholder="whole Gateway"
+          value={form.client_listener}
+          onChange={(e) => set({ client_listener: e.target.value })}
+        />
+      </Field>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.fleet_enabled}
+          disabled={!form.auth_enabled && !form.fleet_enabled}
+          onChange={(e) => set({ fleet_enabled: e.target.checked })}
+        />
+        <span>
+          Part of the fleet
+          <small>
+            This cluster shares each model's traffic with the other fleet clusters. It gets the site weights, under its
+            name as the zone, with weight 0 for a model it does not serve. Needs API keys enforced.
           </small>
         </span>
       </label>

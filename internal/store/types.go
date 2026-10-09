@@ -21,6 +21,13 @@ type Cluster struct {
 	// listed from its /v1/models endpoint.
 	GatewayURL        string `json:"gateway_url"`
 	HasDiscoveryToken bool   `json:"has_discovery_token"`
+
+	// FleetEnabled makes the cluster one of the sites that share traffic: it
+	// is a zone in every model's site weights and gets them written.
+	FleetEnabled bool `json:"fleet_enabled"`
+	// ClientListener is the Gateway listener clients come in on. The API-key
+	// policy attaches to it alone; empty attaches it to the whole Gateway.
+	ClientListener string `json:"client_listener"`
 }
 
 const (
@@ -50,6 +57,9 @@ type Endpoint struct {
 	// models found in a cluster's existing AIGatewayRoutes.
 	Source   string       `json:"source"`
 	Backends []BackendRef `json:"backends"`
+	// Capacity is what the cluster can serve of the model and the weight
+	// applied for it.
+	Capacity EndpointCapacity `json:"capacity"`
 }
 
 // DiscoveredModel is one model found on a cluster.
@@ -71,6 +81,14 @@ type Model struct {
 	Endpoints      []Endpoint `json:"endpoints"`
 	// QuotaCapable is false when no cluster has anything a quota can attach to.
 	QuotaCapable bool `json:"quota_capable"`
+	// SiteWeights is each site's share of the model's traffic as it is
+	// written to the gateways. It is empty, with SiteWeightsNote saying why,
+	// while the weights are not managed for this model.
+	SiteWeights     []SiteWeight `json:"site_weights"`
+	SiteWeightsNote string       `json:"site_weights_note"`
+	// Warnings are differences between the sites that serve the model which
+	// an operator should look at.
+	Warnings []string `json:"warnings"`
 }
 
 type Tenant struct {
@@ -111,4 +129,10 @@ type Overview struct {
 	Tenants       int `json:"tenants"`
 	ActiveKeys    int `json:"active_keys"`
 	Quotas        int `json:"quotas"`
+}
+
+// SiteWeight is one site's zone weight for a model.
+type SiteWeight struct {
+	Zone   string `json:"zone"`
+	Weight int64  `json:"weight"`
 }

@@ -287,3 +287,20 @@ func TestQuotaPolicyKeepsRulePositions(t *testing.T) {
 		t.Errorf("rules = %v\nwant %v", selectors, want)
 	}
 }
+
+// On the whole Gateway the key policy would also guard the listener other
+// sites forward to, and they strip the key first.
+func TestAuthPolicyTargetsClientListener(t *testing.T) {
+	target := func(s State) map[string]any {
+		refs, _, _ := unstructured.NestedSlice(authPolicy(s).Object, "spec", "targetRefs")
+		return refs[0].(map[string]any)
+	}
+	whole := target(State{Namespace: "ai-gateway", GatewayName: "ai-gateway"})
+	if _, set := whole["sectionName"]; set || whole["name"] != "ai-gateway" {
+		t.Errorf("no listener set: %v", whole)
+	}
+	one := target(State{Namespace: "ai-gateway", GatewayName: "ai-gateway", ClientListener: "https"})
+	if one["sectionName"] != "https" || one["kind"] != "Gateway" {
+		t.Errorf("listener set: %v", one)
+	}
+}

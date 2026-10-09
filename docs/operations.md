@@ -67,6 +67,28 @@ sign-in or API call.
 | A tenant named `selftest-…` stays on the Tenants page | A self-test was cut short, for example by a restart | Delete it, or run a self-test: it removes leftovers first |
 | Requests are rejected with 429 for a tenant that has no quota | The model has quotas for other tenants, so this one only has the shared pool | Give the tenant a quota |
 
+## Site maintenance
+
+Before taking nodes down or rolling out a model on one site:
+
+1. On the Models page, press **Drain** next to that cluster for each model
+   it serves. The weight goes down one instance per discovery poll (60
+   seconds by default).
+2. Wait until the tag reads "drained · weight 0", then do the work.
+3. Press **Undrain**. The weight comes back one instance per poll.
+
+Without a drain nothing breaks: lost instances lower the weight after two
+polls, and the health checks take a dead site out sooner.
+
+| What you see | Cause | What to do |
+|---|---|---|
+| "Site weights not written: no cluster that serves the model is in the fleet" | No cluster has **Part of the fleet** ticked | Edit each site's cluster and tick it |
+| "Site weights not written: the capacity of X is not known yet" | X has a deployment of the model that never reported a ready count | `oc get llminferenceservice -A -o jsonpath='{.items[*].status.workloads}'` on X |
+| A serving site shows weight 0 and "no deployment of the model on this cluster" | The `LLMInferenceService`'s `spec.model.name` differs from the model name here | Make the names equal on every site |
+| The weight on the Models page is right, the policy on the cluster is not | The policy lacks the label or annotation, or Argo CD reverts the field | See [architecture.md](architecture.md#site-weights) |
+| Cross-site requests get 401 at the serving site | The API-key policy covers the listener other sites forward to | Set the cluster's **Client listener** |
+| Saving a cluster fails with "a fleet cluster must enforce API keys" | **Part of the fleet** needs **Enforce API keys** | Tick both, or neither |
+
 ## Checking what is on a cluster
 
 ```sh

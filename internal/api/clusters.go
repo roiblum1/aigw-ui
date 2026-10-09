@@ -26,6 +26,11 @@ type clusterBody struct {
 	// write-only; empty keeps the stored one.
 	GatewayURL     *string `json:"gateway_url"`
 	DiscoveryToken string  `json:"discovery_token"`
+	// FleetEnabled makes the cluster one of the sites that share traffic.
+	FleetEnabled *bool `json:"fleet_enabled"`
+	// ClientListener is the Gateway listener the API-key policy attaches to;
+	// an empty string attaches it to the whole Gateway.
+	ClientListener *string `json:"client_listener"`
 }
 
 // cluster validates the body and returns the cluster to store. current is the
@@ -60,8 +65,20 @@ func (b *clusterBody) cluster(current *store.Cluster) (store.Cluster, error) {
 			c.GatewayURL = normalized
 		}
 	}
+	if b.FleetEnabled != nil {
+		c.FleetEnabled = *b.FleetEnabled
+	}
+	if b.ClientListener != nil {
+		c.ClientListener = strings.TrimSpace(*b.ClientListener)
+	}
 	b.DiscoveryToken = strings.TrimSpace(b.DiscoveryToken)
 	switch {
+	case c.ClientListener != "" && !dnsLabel.MatchString(c.ClientListener):
+		return c, invalid("client_listener is not a valid listener name")
+	case c.FleetEnabled && !c.AuthEnabled:
+		// Without key enforcement a client can send the client ID header
+		// itself and spend another tenant's quota at any site.
+		return c, invalid("a fleet cluster must enforce API keys: turn auth_enabled on, or fleet_enabled off")
 	case b.DiscoveryToken != "" && c.GatewayURL == "":
 		return c, invalid("discovery_token needs a gateway_url")
 	case !dnsLabel.MatchString(c.Name):

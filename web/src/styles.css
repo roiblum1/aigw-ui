@@ -455,6 +455,21 @@
     gap: 4px 8px;
     padding: 2px 0;
   }
+  .endpoint-line button.link {
+    padding: 0 4px;
+    border: 0;
+    background: none;
+    font-size: 12px;
+    color: var(--muted-foreground);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .endpoint-line button.link:hover:not(:disabled) {
+    color: var(--foreground);
+  }
+  .warn-text {
+    color: var(--warning);
+  }
 
   .banner {
     padding: 10px 14px;

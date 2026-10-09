@@ -94,9 +94,12 @@ type Key struct {
 type State struct {
 	Namespace   string
 	GatewayName string
-	AuthEnabled bool
-	Models      []Model
-	Keys        []Key
+	// ClientListener is the Gateway listener the API-key policy attaches
+	// to. Empty attaches it to the whole Gateway.
+	ClientListener string
+	AuthEnabled    bool
+	Models         []Model
+	Keys           []Key
 }
 
 // Objects returns the desired objects in the order they should be applied.
@@ -340,11 +343,16 @@ func keysSecret(s State) *unstructured.Unstructured {
 }
 
 func authPolicy(s State) *unstructured.Unstructured {
+	// On the whole Gateway the policy would also guard a listener that other
+	// gateways forward to. They strip the key before forwarding, so every
+	// such request would be refused.
+	target := map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName}
+	if s.ClientListener != "" {
+		target["sectionName"] = s.ClientListener
+	}
 	u := object(egAPI, "SecurityPolicy", s.Namespace, AuthPolicyName)
 	u.Object["spec"] = map[string]any{
-		"targetRefs": []any{
-			map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName},
-		},
+		"targetRefs": []any{target},
 		"apiKeyAuth": map[string]any{
 			"credentialRefs": []any{
 				map[string]any{"group": "", "kind": "Secret", "name": KeysSecretName},

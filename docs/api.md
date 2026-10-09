@@ -194,9 +194,16 @@ at `resets_at`. It returns 403 unless `redis.allowReset` is on (`can_reset` in
   "auth_enabled": false,
   "kubeconfig": "apiVersion: v1\nkind: Config\n...",
   "gateway_url": "http://192.168.1.9",
-  "discovery_token": ""
+  "discovery_token": "",
+  "fleet_enabled": false,
+  "client_listener": ""
 }
 ```
+
+`fleet_enabled` makes the cluster one of the sites that share traffic; it
+needs `auth_enabled`, and the request is refused with 400 otherwise.
+`client_listener` is the Gateway listener the API-key policy attaches to;
+empty attaches it to the whole Gateway.
 
 `gateway_url` and `discovery_token` are optional. The URL must be the address
 only; a path such as `/v1/models` is rejected. The kubeconfig and the token
@@ -259,6 +266,38 @@ by `GET` with `"source": "discovered"` and cannot be set. On update, leaving
 request charges to quotas, for example `input_tokens + output_tokens * 4u`.
 The counts are unsigned integers, so number literals need the `u` suffix.
 Empty charges `total_tokens`.
+
+Each endpoint of a model carries `capacity`, and the model `site_weights`:
+
+```json
+{
+  "name": "glm-5.3",
+  "endpoints": [
+    {"cluster_name": "ocp4-prod-llm-site1-a", "source": "discovered",
+     "capacity": {"observed": 8, "observed_at": "2026-10-09T09:30:00Z",
+                  "weight": 8, "changed_at": "2026-10-09T08:12:00Z",
+                  "detail": "894-llms/glm53: 8 of 8 ready",
+                  "serving": true, "drained": false,
+                  "revision": "glm-5.3-fp8-2026-09-14", "max_model_len": "262144"}}
+  ],
+  "warnings": [],
+  "site_weights": [{"zone": "ocp4-prod-llm-site1-a", "weight": 8},
+                   {"zone": "ocp4-prod-llm-site2-a", "weight": 3}],
+  "site_weights_note": ""
+}
+```
+
+`observed` and `weight` are `null` while the cluster has not reported a
+capacity. `site_weights` is what a sync writes to the gateways; when it is
+empty, `site_weights_note` says why. `warnings` lists differences in
+revision or request length between the sites. These fields are read-only.
+
+| Method | Path | Body | Result |
+|---|---|---|---|
+| PUT | `/models/{id}/sites/{cluster_id}/drain` | `{"drained": true}` or `false` | 204. 409 when no other site has capacity for the model |
+
+A drained site's weight steps down to 0, one instance per poll, and stays
+there until the drain ends.
 
 ## Tenants, keys and quotas
 

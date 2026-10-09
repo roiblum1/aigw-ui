@@ -14,6 +14,10 @@ export interface Cluster {
   discovered_at: string | null;
   gateway_url: string;
   has_discovery_token: boolean;
+  /** One of the sites that share traffic; it gets the site weights. */
+  fleet_enabled: boolean;
+  /** Gateway listener the API-key policy attaches to; empty is the whole Gateway. */
+  client_listener: string;
 }
 
 export interface ClusterInput {
@@ -25,6 +29,8 @@ export interface ClusterInput {
   kubeconfig: string;
   gateway_url: string;
   discovery_token: string;
+  fleet_enabled: boolean;
+  client_listener: string;
 }
 
 export interface Endpoint {
@@ -37,6 +43,22 @@ export interface Endpoint {
   source?: "manual" | "discovered";
   /** Empty when the cluster has nothing a quota can attach to for this model. */
   backends?: { name: string; namespace?: string; model: string; override: boolean }[];
+  /** What the cluster can serve of the model. Absent in a request body. */
+  capacity?: {
+    /** The cluster has a deployment of the model. */
+    serving: boolean;
+    /** An operator is draining the site: its weight goes to 0 and stays there. */
+    drained: boolean;
+    revision: string;
+    max_model_len: string;
+    /** Ready instances times the capacity of one. Null while the cluster has not reported it. */
+    observed: number | null;
+    observed_at: string | null;
+    /** The applied value, which follows observed slowly. */
+    weight: number | null;
+    changed_at: string | null;
+    detail: string;
+  };
 }
 
 export interface Model {
@@ -49,6 +71,12 @@ export interface Model {
   cost_expression: string;
   endpoints: Endpoint[];
   quota_capable: boolean;
+  /** Each site's share of the model's traffic, as written to the gateways. */
+  site_weights: { zone: string; weight: number }[];
+  /** Why the weights are not being written, when they are not. */
+  site_weights_note: string;
+  /** Differences between the sites that serve the model. */
+  warnings: string[];
 }
 
 export interface ModelInput {
@@ -302,6 +330,8 @@ export const api = {
   createModel: (m: ModelInput) => request<{ id: string }>("POST", "/models", m),
   updateModel: (id: string, m: ModelInput) => request<{ id: string }>("PUT", `/models/${id}`, m),
   deleteModel: (id: string) => request<void>("DELETE", `/models/${id}`),
+  drainSite: (modelId: string, clusterId: string, drained: boolean) =>
+    request<void>("PUT", `/models/${modelId}/sites/${clusterId}/drain`, { drained }),
 
   tenants: () => request<Tenant[]>("GET", "/tenants"),
   tenant: (id: string) => request<TenantDetail>("GET", `/tenants/${id}`),

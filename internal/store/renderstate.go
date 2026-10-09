@@ -23,7 +23,7 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 	if err != nil {
 		return render.State{}, err
 	}
-	st := render.State{Namespace: c.Namespace, GatewayName: c.GatewayName, AuthEnabled: c.AuthEnabled}
+	st := render.State{Namespace: c.Namespace, GatewayName: c.GatewayName, ClientListener: c.ClientListener, AuthEnabled: c.AuthEnabled}
 
 	rows, err := s.db.Query(ctx,
 		`SELECT m.id, m.name, m.slug, e.host, e.port, e.upstream_model, m.default_limit, m.default_window, m.cost_expression, e.source, e.backends

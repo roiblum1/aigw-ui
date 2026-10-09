@@ -24,6 +24,8 @@ A cluster is one LLM cluster the hub manages.
 | Gateway URL | Optional. The gateway's address without a path, for example `http://192.168.1.9`. Models are then listed from its `/v1/models` |
 | API key for /v1/models | Optional. Only needed when the gateway requires a key. Stored encrypted |
 | Enforce API keys | See below |
+| Client listener | Optional. The Gateway listener clients come in on, for example `https`. The key check then applies to it alone. Set it on a gateway that also has a listener for other sites |
+| Part of the fleet | The cluster shares each model's traffic with the other fleet clusters and gets the site weights. Needs Enforce API keys |
 
 The kubeconfig must contain the cluster's CA certificate
 (`certificate-authority-data`). Without it the connection fails with
@@ -117,6 +119,35 @@ suffix. Changing it does not reset what tenants have already used.
 
 Deleting a model removes its quotas from every cluster. A discovered model
 comes back on the next poll, without its quotas.
+
+**Site weights.** Next to each cluster a model is served from, a grey tag
+shows the site's weight and its share of the model's traffic, for example
+"weight 8 · 73% of traffic". The weight is the number of ready instances of
+the model on that cluster, times the capacity declared for one instance.
+Hover over the tag to see the deployments it was counted from and when.
+
+| You see | Meaning |
+|---|---|
+| weight 8 | The site has 8 units ready and the gateways are told so |
+| weight 5 → 8 (yellow) | The site has 8 ready; the weight is rising one instance per poll |
+| weight 8 → 6 (yellow) | The site reported less once. The weight drops if the next poll agrees |
+| draining · weight 5 → 0 (yellow) | An operator drained the site; the weight goes down one instance per poll |
+| drained · weight 0 (yellow) | The site gets no new conversations for this model until **Undrain** |
+| No tag | The cluster reports no instance count for this model, for example because it does not run KServe |
+| "Site weights not written: …" | The gateways keep the weights they have, and the line says why |
+
+The weights are written only to clusters with **Part of the fleet** ticked
+(Clusters page), and only where the cluster's chart marks a
+`BackendTrafficPolicy` for them; see
+[architecture.md](architecture.md#site-weights).
+
+**Drain a site.** Before maintenance on one site, press **Drain** next to the
+cluster in the model's row. The site's weight steps down to 0 and its
+conversations move to the other sites. Press **Undrain** afterwards. The last
+site with capacity cannot be drained.
+
+**Warnings.** A yellow line under the clusters says when the sites serve
+different revisions of the model, or take different request lengths.
 
 ## Tenants
 
