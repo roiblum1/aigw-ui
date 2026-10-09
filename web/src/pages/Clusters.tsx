@@ -99,8 +99,16 @@ export default function Clusters() {
                     {c.auth_enabled ? "Enforced" : "Off"}
                     {c.auth_enabled && c.client_listener && <div className="detail">on listener {c.client_listener}</div>}
                     {c.fleet_enabled && (
-                      <span className="tag manual" title="This cluster shares traffic with the other fleet clusters.">
-                        fleet
+                      <span
+                        className={c.fleet_outdated ? "tag warn" : "tag manual"}
+                        title={
+                          c.fleet_outdated
+                            ? "This cluster's entry routes are older than the fleet's. Until it is synced it can send a conversation to another site than the other clusters do."
+                            : "This cluster shares traffic with the other fleet clusters, and its entry routes are the fleet's current ones."
+                        }
+                      >
+                        {c.fleet_outdated ? "fleet · outdated" : "fleet"}
+                        {c.fleet_revision && ` · ${c.fleet_revision}`}
                       </span>
                     )}
                   </td>

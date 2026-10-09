@@ -147,6 +147,14 @@ func (s *Server) listClusters(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	// A fleet cluster on another revision than the fleet's sends some
+	// conversations to another site than the rest. A fleet that cannot be
+	// rendered right now has no revision to compare with.
+	if current, err := s.st.CurrentFleetRevision(r.Context()); err == nil {
+		for i := range out {
+			out[i].FleetOutdated = out[i].FleetEnabled && out[i].FleetRevision != current
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 

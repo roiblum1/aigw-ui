@@ -140,6 +140,12 @@ deployments it was counted from and when.
 | No tag | The cluster reports no instance count for this model, for example because it does not run KServe |
 | "Site weights not updated: …" | The gateways keep the sites and weights they have, and the line says why |
 
+**Fleet revision.** On the Clusters page a fleet cluster shows a tag such as
+"fleet · 9b7e129b7e9b". The code is the same on every cluster whose entry
+routes are the fleet's current ones. "fleet · outdated" means the cluster
+has not been synced since the sites or weights changed; press **Sync** or
+check its sync error.
+
 **Entry route.** The button **Entry route: off / on** in a model's row makes
 the hub render, on every fleet cluster, a route that takes requests for the
 model and sends each conversation to one of the sites that serve it, by the

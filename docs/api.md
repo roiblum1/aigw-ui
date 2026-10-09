@@ -206,6 +206,10 @@ at `resets_at`. It returns 403 unless `redis.allowReset` is on (`can_reset` in
 needs `auth_enabled`, `client_listener`, `peer_host` and the same `namespace`
 as the other fleet clusters; the request is refused with 400 otherwise.
 `peer_host` and `peer_port` are where the other sites reach this gateway.
+
+A cluster in a response also carries `fleet_revision`, which identifies the
+entry routes last applied to it, and `fleet_outdated`, true for a fleet
+cluster whose revision is not the fleet's current one. Both are read-only.
 `client_listener` is the Gateway listener the API-key policy attaches to;
 empty attaches it to the whole Gateway.
 

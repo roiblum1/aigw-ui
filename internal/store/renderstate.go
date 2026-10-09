@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/weights"
@@ -166,4 +169,23 @@ func (s *Store) addFleetModels(ctx context.Context, st *render.State, index map[
 		st.Models = append(st.Models, m)
 	}
 	return rows.Err()
+}
+
+// CurrentFleetRevision returns the revision a fleet cluster has once it is
+// synced: render.FleetRevision of the fleet as it is now. It is the same for
+// every fleet cluster, and empty when no model has an entry route.
+func (s *Store) CurrentFleetRevision(ctx context.Context) (string, error) {
+	var id string
+	err := s.db.QueryRow(ctx, `SELECT id FROM clusters WHERE fleet_enabled ORDER BY name LIMIT 1`).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	st, err := s.renderState(ctx, id, false)
+	if err != nil {
+		return "", err
+	}
+	return render.FleetRevision(st), nil
 }

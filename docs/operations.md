@@ -88,6 +88,7 @@ polls, and the health checks take a dead site out sooner.
 | Sync fails with "has an entry route and no site to send to" | The model's sites have no peer host any more | Set the peer host on the fleet clusters. Nothing was changed on the cluster |
 | Discovery fails with "read what the cluster serves" | The kubeconfig cannot list `llminferenceservices` | Use a kubeconfig that can. The poll changed nothing |
 | "Entry route" cannot be switched on: "no FLEET_DOMAIN" | The chart's `fleet.domain` is empty | Set it and upgrade |
+| A cluster shows "fleet · outdated" for more than a few minutes | Its last sync failed, or auto sync is off | Read the cluster's sync message and press **Sync**. Until then it can choose another site for a conversation than the rest |
 | A site in the fleet gets no traffic for a model | Its health check `GET /healthz/<model>` on the peer listener fails | Check the model's serving route on that site and the peer certificates |
 | Cross-site requests get 401 at the serving site | The API-key policy covers the listener other sites forward to | Set the cluster's **Client listener** |
 | Saving a cluster fails with "a fleet cluster …" | **Part of the fleet** needs **Enforce API keys**, a client listener, a peer host, and the gateway namespace the other fleet clusters use | Set them, or leave the fleet |

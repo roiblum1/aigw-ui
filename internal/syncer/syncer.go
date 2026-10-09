@@ -170,7 +170,12 @@ func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, e
 	if err != nil {
 		return kube.SyncResult{}, err
 	}
-	return client.Sync(ctx, state.Namespace, render.Objects(state))
+	res, err := client.Sync(ctx, state.Namespace, render.Objects(state))
+	if err != nil {
+		return res, err
+	}
+	// Only a sync that applied everything moves the cluster to the revision.
+	return res, s.st.SetFleetRevision(ctx, id, render.FleetRevision(state))
 }
 
 func (s *Syncer) Probe(ctx context.Context, id string) (kube.Probe, error) {

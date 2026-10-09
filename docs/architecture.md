@@ -238,6 +238,13 @@ next to the clusters' own backends are removed, so the model's quota
 counters restart once. A route a cluster already has for the model keeps the
 traffic until it is removed, because the older route wins the match.
 
+**Same fleet everywhere.** Everything that must be equal on every fleet
+cluster (each model's sites and weights, and the shared settings) is hashed
+into a *fleet revision*. A sync that applied everything stores it on the
+cluster. The Clusters page shows it, and marks a fleet cluster "outdated"
+while its revision is not the fleet's current one: until it is synced, it
+can send a conversation to another site than the other clusters do.
+
 **What each cluster must already have** (from the gateway chart): the client
 and peer listeners, the ConfigMap `llm-peer-ca` and the Secret
 `llm-peer-client` in the gateway namespace, DNS for the peer hosts, and on
