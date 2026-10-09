@@ -25,7 +25,8 @@ A cluster is one LLM cluster the hub manages.
 | API key for /v1/models | Optional. Only needed when the gateway requires a key. Stored encrypted |
 | Enforce API keys | See below |
 | Client listener | Optional. The Gateway listener clients come in on, for example `https`. The key check then applies to it alone. Set it on a gateway that also has a listener for other sites |
-| Part of the fleet | The cluster shares each model's traffic with the other fleet clusters and gets the site weights. Needs Enforce API keys |
+| Peer host, peer port | Optional. Where the other sites reach this gateway, for example `llm.site1-a.example.com` and 8443 |
+| Part of the fleet | The cluster shares each model's traffic with the other fleet clusters. Needs Enforce API keys, a client listener and a peer host, and the same gateway namespace as the other fleet clusters |
 
 The kubeconfig must contain the cluster's CA certificate
 (`certificate-authority-data`). Without it the connection fails with
@@ -121,29 +122,36 @@ Deleting a model removes its quotas from every cluster. A discovered model
 comes back on the next poll, without its quotas.
 
 **Site weights.** Next to each cluster a model is served from, a grey tag
-shows the site's weight and its share of the model's traffic, for example
-"weight 8 · 73% of traffic". The weight is the number of ready instances of
-the model on that cluster, times the capacity declared for one instance.
-Hover over the tag to see the deployments it was counted from and when.
+shows the site's zone weight and its share of the model's traffic, for
+example "weight 800 · 73% of traffic". The weight is the number of ready
+instances of the model on that cluster, times the capacity declared for one
+instance, times 100. It is never below 1. Hover over the tag to see the
+deployments it was counted from and when.
 
 | You see | Meaning |
 |---|---|
-| weight 8 | The site has 8 units ready and the gateways are told so |
-| weight 5 → 8 (yellow) | The site has 8 ready; the weight is rising one instance per poll |
-| weight 8 → 6 (yellow) | The site reported less once. The weight drops if the next poll agrees |
-| draining · weight 5 → 0 (yellow) | An operator drained the site; the weight goes down one instance per poll |
-| drained · weight 0 (yellow) | The site gets no new conversations for this model until **Undrain** |
+| weight 800 | The site has 8 units ready and the gateways are told so |
+| weight 500 → 800 (yellow) | The site has 8 ready; the weight is rising one instance per poll |
+| weight 800 → 600 (yellow) | The site reported less once. The weight drops if the next poll agrees |
+| weight 1 | The site serves the model and has nothing ready. Its health check keeps traffic off it |
+| draining · weight 500 → 1 (yellow) | An operator drained the site; the weight goes down one instance per poll |
+| drained · not listed (yellow) | The site is out of the model's sites until **Undrain** |
+| not listed | The cluster is not part of the fleet, or does not serve the model |
 | No tag | The cluster reports no instance count for this model, for example because it does not run KServe |
-| "Site weights not written: …" | The gateways keep the weights they have, and the line says why |
+| "Site weights not updated: …" | The gateways keep the sites and weights they have, and the line says why |
 
-The weights are written only to clusters with **Part of the fleet** ticked
-(Clusters page), and only where the cluster's chart marks a
-`BackendTrafficPolicy` for them; see
-[architecture.md](architecture.md#site-weights).
+**Entry route.** The button **Entry route: off / on** in a model's row makes
+the hub render, on every fleet cluster, a route that takes requests for the
+model and sends each conversation to one of the sites that serve it, by the
+weights above. It is off by default and appears once a fleet cluster serves
+the model. Switching it changes where the model's quotas attach, so the
+model's quota counters restart once. Do not switch it on before the clusters
+have their peer listeners and certificates; see
+[architecture.md](architecture.md#entry-route).
 
 **Drain a site.** Before maintenance on one site, press **Drain** next to the
-cluster in the model's row. The site's weight steps down to 0 and its
-conversations move to the other sites. Press **Undrain** afterwards. The last
+cluster in the model's row. The site's weight steps down to 1, then the site
+leaves the model's sites, and its conversations move to the other sites. Press **Undrain** afterwards. The last
 site with capacity cannot be drained.
 
 **Warnings.** A yellow line under the clusters says when the sites serve

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"aigw-ui/internal/render"
+	"aigw-ui/internal/weights"
 )
 
 // RenderState collects everything one cluster should be running.
@@ -23,7 +24,7 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 	if err != nil {
 		return render.State{}, err
 	}
-	st := render.State{Namespace: c.Namespace, GatewayName: c.GatewayName, ClientListener: c.ClientListener, AuthEnabled: c.AuthEnabled}
+	st := render.State{Namespace: c.Namespace, GatewayName: c.GatewayName, ClientListener: c.ClientListener, AuthEnabled: c.AuthEnabled, Fleet: s.fleet}
 
 	rows, err := s.db.Query(ctx,
 		`SELECT m.id, m.name, m.slug, e.host, e.port, e.upstream_model, m.default_limit, m.default_window, m.cost_expression, e.source, e.backends
@@ -52,6 +53,11 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 	}
 	if err := rows.Err(); err != nil {
 		return st, err
+	}
+	if c.FleetEnabled && s.FleetConfigured() {
+		if err := s.addFleetModels(ctx, &st, index); err != nil {
+			return st, err
+		}
 	}
 
 	rows, err = s.db.Query(ctx,
@@ -98,4 +104,66 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 		st.Keys = append(st.Keys, render.Key{ClientID: clientID, Value: string(plain)})
 	}
 	return st, rows.Err()
+}
+
+// addFleetModels gives every model with an entry route its sites, adding the
+// models this cluster does not serve itself: the entry route is on every
+// fleet cluster. index maps a model's ID to its position in st.Models.
+//
+// It fails when a model would be left without a site, so the sync stops and
+// the cluster keeps the objects it has.
+func (s *Store) addFleetModels(ctx context.Context, st *render.State, index map[string]int) error {
+	rows, err := s.db.Query(ctx, `SELECT name, peer_host, peer_port FROM clusters WHERE fleet_enabled AND peer_host <> ''`)
+	if err != nil {
+		return err
+	}
+	type peer struct {
+		host string
+		port int
+	}
+	peers := map[string]peer{}
+	for rows.Next() {
+		var name string
+		var p peer
+		if err := rows.Scan(&name, &p.host, &p.port); err != nil {
+			rows.Close()
+			return err
+		}
+		peers[name] = p
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	rows, err = s.db.Query(ctx,
+		`SELECT id, name, slug, default_limit, default_window, cost_expression, fleet_zones FROM models WHERE fleet ORDER BY name`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var m render.Model
+		var zones []weights.Zone
+		if err := rows.Scan(&id, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &zones); err != nil {
+			return err
+		}
+		var sites []render.FleetSite
+		for _, z := range zones {
+			if p, ok := peers[z.Zone]; ok {
+				sites = append(sites, render.FleetSite{Name: z.Zone, Host: p.host, Port: p.port, Weight: z.Weight})
+			}
+		}
+		if len(sites) == 0 {
+			return fmt.Errorf("model %s has an entry route and no site to send to; nothing was changed on the cluster", m.Name)
+		}
+		if i, ok := index[id]; ok {
+			st.Models[i].Fleet = sites
+			continue
+		}
+		m.Fleet = sites
+		index[id] = len(st.Models)
+		st.Models = append(st.Models, m)
+	}
+	return rows.Err()
 }

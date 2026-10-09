@@ -12,7 +12,7 @@ import (
 func TestClusterUpdateKeepsOmittedFields(t *testing.T) {
 	current := store.Cluster{
 		ID: "c1", Name: "site1-a", Site: "site1", Namespace: "ai-gateway", GatewayName: "llm",
-		AuthEnabled: true, GatewayURL: "https://gw.site1.example",
+		AuthEnabled: true, GatewayURL: "https://gw.site1.example", PeerPort: 8443,
 	}
 	for name, tc := range map[string]struct {
 		body string
@@ -104,7 +104,7 @@ func TestValidCostExpression(t *testing.T) {
 // A fleet cluster without key enforcement would let a client name its own
 // tenant, so the two settings cannot be combined either way round.
 func TestFleetClusterMustEnforceKeys(t *testing.T) {
-	enforcing := store.Cluster{ID: "c1", Name: "site1-a", Namespace: "ai-gateway", GatewayName: "llm", AuthEnabled: true}
+	enforcing := store.Cluster{ID: "c1", Name: "site1-a", Namespace: "ai-gateway", GatewayName: "llm", AuthEnabled: true, PeerHost: "llm.site1-a.example.com"}
 	open := with(enforcing, func(c *store.Cluster) { c.AuthEnabled = false })
 	fleet := with(enforcing, func(c *store.Cluster) { c.FleetEnabled, c.ClientListener = true, "https" })
 	for name, tc := range map[string]struct {
@@ -120,6 +120,9 @@ func TestFleetClusterMustEnforceKeys(t *testing.T) {
 		"stop enforcing while in the fleet": {fleet, `{"auth_enabled":false}`, false},
 		"leave the fleet and stop":          {fleet, `{"auth_enabled":false,"fleet_enabled":false}`, true},
 		"bad listener name":                 {enforcing, `{"client_listener":"HTTPS listener"}`, false},
+		"drop the peer host while in it":    {fleet, `{"peer_host":""}`, false},
+		"a peer host that is no DNS name":   {enforcing, `{"peer_host":"https://llm.site1-a"}`, false},
+		"a peer port out of range":          {enforcing, `{"peer_port":70000}`, false},
 	} {
 		var b clusterBody
 		if err := json.Unmarshal([]byte(tc.body), &b); err != nil {

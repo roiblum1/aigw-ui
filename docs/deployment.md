@@ -99,6 +99,11 @@ Back up the encryption key straight away. See
 | `redis.allowReset` | `false` | Allow resetting a tenant's usage. The server then deletes counters in Redis, so its Redis user needs `DEL` |
 | `redis.keyPrefix` | empty | The rate limit service's `CACHE_KEY_PREFIX`, if set |
 | `config.syncInterval` | `5m` | How often every cluster is synced again without a change. `0` turns it off. Needs `autoSync` |
+| `fleet.domain` | empty | The sites' listener for other sites answers as `peers.llm.<domain>`. Empty, with `fleet.peerSNI` empty too: no entry route can be turned on |
+| `fleet.peerSNI` | empty | That server name, when it is not `peers.llm.<domain>` |
+| `fleet.peerCAConfigMap` | `llm-peer-ca` | ConfigMap in each gateway namespace with the CA of the sites' peer certificates |
+| `fleet.peerClientSecret` | `llm-peer-client` | Secret in each gateway namespace with the certificate a gateway presents to another site |
+| `fleet.sessionHeader` | `x-claude-code-session-id` | Requests with the same value go to the same site |
 | `auth.existingSecret` | empty | Your own Secret with `admin-token` and `encryption-key` |
 | `postgresql.enabled` | `true` | `false` to use your own Postgres |
 | `postgresql.image.repository` / `.tag` | sclorg Postgres 16 | Postgres image |

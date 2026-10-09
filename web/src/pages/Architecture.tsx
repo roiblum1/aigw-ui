@@ -21,7 +21,7 @@ const status: { part: string; today: string; built: "yes" | "partly" | "no" }[] 
   { part: "API keys in Postgres", today: "Stored encrypted, not hashed: every sync has to write them to the clusters.", built: "partly" },
   {
     part: "Site weights",
-    today: "Built: ready instances of the model times the declared capacity of one instance. Written only to policies the cluster charts label for it. See the Models page.",
+    today: "Built: ready instances of the model times the declared capacity of one instance. The hub renders them into each model's entry route. See the Models page.",
     built: "partly",
   },
   { part: "Priority class per key, budgets", today: "Not built.", built: "no" },

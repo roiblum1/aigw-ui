@@ -163,79 +163,96 @@ sum over the model's LLMInferenceServices on that cluster of
   `aigw-ui.io/capacity-per-replica` is read when the newer one is not set.
 
 **Which sites.** The sites are the clusters marked *Part of the fleet*. A
-fleet cluster must enforce API keys. A cluster serves a model when it has an
-`LLMInferenceService` for it; `/v1/models` is not used for this, because a
-gateway can list a model that another site serves.
-
-Ready nodes, desired replicas, tokens served and live load are deliberately
-not used. Desired replicas would give full weight to a site whose pods crash.
-Tokens served measures demand, so a site that gets less traffic would get a
-lower weight and then even less. Live load changes every few seconds, and
-every weight change moves conversations away from their cache.
+cluster serves a model when it has an `LLMInferenceService` for it;
+`/v1/models` is not used for this, because once the entry route exists every
+gateway lists every fleet model. A model's sites are the fleet clusters that
+serve it and are not drained out.
 
 **From capacity to weight.** The capacity is read on every discovery poll.
-The applied weight follows it by these rules (`internal/weights`):
+The applied capacity follows it by these rules (`internal/weights`):
 
 | Observed | What is applied |
 |---|---|
 | The first reading | The reading itself |
 | More than applied | At most one instance more per poll, so a site that comes back gets its conversations back gradually |
 | Less than applied | Nothing on the first poll; the lower value once a second poll in a row agrees |
-| The cluster no longer has a deployment of the model | The same as "less than applied", down to 0 |
-| An operator drains the site | At most one instance less per poll, down to 0, where it stays until the drain ends |
-| Unknown: cluster unreachable, or no status yet | The last weight is kept. Unknown is never zero |
+| The cluster no longer has a deployment of the model | The same as "less than applied", down to 0. The site then leaves the model's sites |
+| Unknown: cluster unreachable, or no status yet | The last value is kept. Unknown is never zero |
+| An operator drains the site | At most one instance less per poll, down to 0 |
 
-Whole capacities are written as they are (8 and 3). Others are multiplied by
-100 and rounded (2.6 becomes 260).
+The zone weight is the applied capacity × 100, rounded, **and never below
+1**: 8 instances are 800, an instance declared 2.6 is 260.
 
-**Writing them.** A sync looks on the cluster, in every namespace, for a
-`BackendTrafficPolicy` with the label `aigw-ui.io/zone-weights: "true"` and
-the annotation `aigw-ui.io/model: <model name>`, and sets
-`spec.loadBalancer.zoneAware.weightedZones` to one entry per fleet cluster,
-with weight 0 for a cluster that does not serve the model. Every fleet
-cluster is listed because the gateway gives a zone that is left out a weight
-of 1. The zone is the cluster's name here. Only fleet clusters are written
-to.
+- Envoy rejects a locality weight of 0. Envoy Gateway checks everything it
+  generates and, on any error, publishes nothing, so one zero would freeze
+  that gateway's whole configuration, key revocations included.
+- A serving site with nothing ready therefore stays listed at weight 1. Its
+  health check keeps traffic off it, and it ramps up from 1 when it recovers.
+- A drained site steps down to 1 and leaves the model's sites on the poll
+  after that. Undrain lists it again at 1 at once.
+- A model that would be left with no site keeps the sites and weights it
+  has, and the Models page shows why.
 
-- Only that one field is written, with server-side apply under the field
-  manager `aigw-ui-weights`. The policy stays the chart's: this tool never
-  creates, labels or deletes it.
-- When a weight changes, every cluster is synced, so all gateways hold the
-  same weights. Different weights would send one conversation to different
-  sites.
-- No weights are written for a model while a site that serves it has never
-  reported a capacity, because the gateway gives a zone that is left out a
-  weight of its own. None are written when all would be zero either: the last
-  ones stay, and the health checks take a dead site out.
+The weights are worked out once per discovery round for the whole fleet and
+stored on the model (`models.fleet_zones`). Every cluster is rendered from
+that one list: gateways with different weights would send one conversation
+to different sites.
 
-**What the fleet chart has to do**
+## Entry route
 
-1. Put the label and the annotation on each model's `BackendTrafficPolicy`,
-   and not set `weightedZones` itself.
-2. Give each endpoint of the cross-site `Backend` a `zone` equal to the
-   cluster's name in this tool.
-3. Optionally set `aigw-ui.io/capacity-per-instance` on each
-   `LLMInferenceService`.
-4. Tell Argo CD to leave the field alone:
+With a model's **entry route** switched on, the hub renders four objects for
+it on every fleet cluster, in the gateway namespace, all named
+`fleet-<model slug>`:
 
-```yaml
-spec:
-  ignoreDifferences:
-    - group: gateway.envoyproxy.io
-      kind: BackendTrafficPolicy
-      managedFieldsManagers: [aigw-ui-weights]
-  syncPolicy:
-    syncOptions: [RespectIgnoreDifferences=true]
-```
+| Object | What it says |
+|---|---|
+| `Backend` | One endpoint per site of the model: the site's peer host and port, with the cluster name as `zone`, over mTLS with the fleet CA and the gateway's client certificate |
+| `AIServiceBackend` | Points at that `Backend`. The model's `QuotaPolicy` attaches here and nowhere else |
+| `AIGatewayRoute` | On the client listener: requests for the model go to that backend. Request timeout 3600s in place of the gateway's 60s |
+| `BackendTrafficPolicy` | On the `HTTPRoute` the gateway generates from the route, which has the same name |
+
+The policy holds the routing:
+
+- **Site choice:** a consistent hash on the session header
+  (`x-claude-code-session-id` by default), weighted by the zone weights. The
+  tenant and the key are not hashed: that would pin a customer to one site.
+- **Zones:** exactly the endpoints of the `Backend`, in the same order,
+  sorted by cluster name. A zone with an endpoint and no weight would get a
+  weight of 1 from the gateway, and the hash table is built from the list, so
+  the order has to be the same everywhere.
+- **Retry:** on connect failure, reset and 503, once per other site. A site
+  over its limit answers 503 at once and the request goes to the next one.
+- **Health check:** `GET /healthz/<model>` on each site's peer listener
+  every 5s, with `panicThreshold: 0`, so a site that fails is never used
+  however many fail.
+- **Circuit breaker:** as good as off (100000). Each site's own limit decides.
+
+Nothing is owned twice: the hub is the only writer of these objects, and the
+charts no longer ship an entry policy.
+
+**Switching it on** (Models page, per model, off by default) is refused
+while no fleet cluster serves the model, while the model has endpoints
+entered by hand, or while the server has no `FLEET_DOMAIN`. From then on the
+model's quotas attach to the entry backend alone; the `QuotaPolicy` objects
+next to the clusters' own backends are removed, so the model's quota
+counters restart once. A route a cluster already has for the model keeps the
+traffic until it is removed, because the older route wins the match.
+
+**What each cluster must already have** (from the gateway chart): the client
+and peer listeners, the ConfigMap `llm-peer-ca` and the Secret
+`llm-peer-client` in the gateway namespace, DNS for the peer hosts, and on
+each serving site a route on the peer listener that answers
+`/healthz/<model>` and serves the model.
 
 A model is matched by its name here, or by the name the cluster's route sends
 to the backend (`modelNameOverride`), against `spec.model.name` of the
 `LLMInferenceService`, or the service's own name when that is empty.
 
 **Drain.** *Drain* on the Models page takes one site out for one model before
-maintenance: its weight steps down to 0 and stays there. *Undrain* brings it
-back one instance per poll. Draining the last site that has capacity is
-refused. Both are in the task log and the audit log.
+maintenance: its weight steps down to 1 and it then leaves the model's sites.
+*Undrain* lists it again at 1 and it comes back one instance per poll.
+Draining the last site that has capacity is refused. Both are in the task
+log and the audit log.
 
 **Recipe check.** Each `LLMInferenceService` can declare
 `aigw-ui.io/model-revision` and `aigw-ui.io/max-model-len`. The Models page
@@ -246,8 +263,8 @@ the operator decides, and can drain a site.
 
 ## API-key policy and the peer listener
 
-The `SecurityPolicy` attaches to the whole Gateway unless the cluster has a
-*Client listener* set; then it attaches to that listener alone
+A fleet cluster must have a *Client listener* set. The `SecurityPolicy`
+attaches to the whole Gateway unless the cluster has one; then it attaches to that listener alone
 (`sectionName`). A gateway that also has a listener for requests forwarded by
 other sites needs this: the entry gateway removes the key before forwarding,
 so a key check on that listener would refuse every cross-site request.

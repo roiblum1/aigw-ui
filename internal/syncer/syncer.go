@@ -242,8 +242,17 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// What the cluster serves is read in the same poll. If it cannot be
+	// read the poll fails and nothing changes: "unknown" must not be taken
+	// for "nothing is running".
+	capacity, err := client.Capacity(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read what the cluster serves: %w", err)
+	}
 	models := make([]store.DiscoveredModel, 0, len(found))
+	exposed := map[string]bool{}
 	for _, f := range found {
+		exposed[f.Name] = true
 		m := store.DiscoveredModel{Name: f.Name}
 		for _, b := range f.Backends {
 			ns := b.Namespace
@@ -254,6 +263,13 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 		}
 		models = append(models, m)
 	}
+	// A cluster serves a model when it has a deployment of it, whether or
+	// not its own gateway still has a route for it.
+	for _, mc := range capacity {
+		if !exposed[mc.Model] {
+			models = append(models, store.DiscoveredModel{Name: mc.Model, OnlyIfKnown: true})
+		}
+	}
 	changed, err := s.st.ApplyDiscovery(ctx, id, models)
 	if err != nil {
 		return 0, err
@@ -261,20 +277,13 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 	if changed {
 		s.Changed(ctx, "discovery", "Models changed on cluster "+c.Name)
 	}
-	s.observeCapacity(ctx, c, client)
-	return len(models), nil
+	s.observeCapacity(ctx, c, capacity)
+	return len(found), nil
 }
 
-// observeCapacity reads how many instances of each model the cluster has
-// ready and moves the site weights towards it. It never fails discovery: a
-// cluster that cannot be asked keeps its last weights, because "unknown" must
-// not be taken for "nothing is running".
-func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, client *kube.Client) {
-	found, err := client.Capacity(ctx)
-	if err != nil {
-		slog.Warn("read model capacity", "cluster", c.Name, "err", err)
-		return
-	}
+// observeCapacity stores how many instances of each model the cluster has
+// ready and moves the site weights towards it.
+func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, found []kube.ModelCapacity) {
 	reported := make([]store.Capacity, 0, len(found))
 	for _, f := range found {
 		reported = append(reported, store.Capacity{Model: f.Model, Capacity: f.Capacity, Step: f.Step, Detail: f.Detail,

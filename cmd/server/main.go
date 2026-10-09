@@ -43,6 +43,7 @@ func run() error {
 		return err
 	}
 	defer st.Close()
+	st.SetFleet(cfg.Fleet)
 
 	sy := syncer.New(st, cfg.AutoSync, cfg.DiscoverEvery, cfg.SyncEvery)
 	go sy.Run(ctx)

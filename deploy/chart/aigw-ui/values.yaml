@@ -22,6 +22,20 @@ config:
   # syncs and undo manual edits. "0" turns it off. Needs autoSync.
   syncInterval: 5m
 
+# What every site's entry route has in common. Leave domain and peerSNI empty
+# if the hub should not render entry routes.
+fleet:
+  # The sites' listener for requests from other sites answers as
+  # peers.llm.<domain>. Set peerSNI to use another name.
+  domain: ""
+  peerSNI: ""
+  # In each cluster's gateway namespace: the CA that signed the sites' peer
+  # certificates, and the certificate a gateway presents to another site.
+  peerCAConfigMap: llm-peer-ca
+  peerClientSecret: llm-peer-client
+  # Requests with the same value in this header go to the same site.
+  sessionHeader: x-claude-code-session-id
+
 # The admin token and the encryption key.
 auth:
   # Name of a Secret you created with the keys "admin-token" and

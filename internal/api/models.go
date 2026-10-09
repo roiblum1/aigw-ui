@@ -133,6 +133,44 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// fleetBody is the body of turning a model's entry route on or off.
+type fleetBody struct {
+	Enabled bool `json:"enabled"`
+}
+
+// setModelFleet turns the entry route of a model on or off. When on, every
+// fleet cluster gets a route for the model that sends each conversation to
+// one of the sites that serve it.
+func (s *Server) setModelFleet(w http.ResponseWriter, r *http.Request) {
+	var b fleetBody
+	if err := decode(r, &b); err != nil {
+		fail(w, err)
+		return
+	}
+	if b.Enabled && !s.st.FleetConfigured() {
+		writeError(w, http.StatusConflict, "The server has no FLEET_DOMAIN or FLEET_PEER_SNI set, so it cannot render an entry route.")
+		return
+	}
+	name, err := s.st.SetModelFleet(r.Context(), r.PathValue("id"), b.Enabled)
+	switch {
+	case errors.Is(err, store.ErrFleetNoSite):
+		writeError(w, http.StatusConflict, "No fleet cluster serves "+name+" yet. Mark the clusters as part of the fleet and wait for a poll.")
+		return
+	case errors.Is(err, store.ErrFleetManual):
+		writeError(w, http.StatusConflict, name+" has endpoints entered by hand. Remove them first: the entry route replaces them.")
+		return
+	case err != nil:
+		fail(w, err)
+		return
+	}
+	if b.Enabled {
+		s.changed(r, "model.fleet-on", "Turned the entry route on for "+name+". Quotas now attach to it alone, so the model's quota counters restart once.")
+	} else {
+		s.changed(r, "model.fleet-off", "Turned the entry route off for "+name+". Its quota counters restart once.")
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // drainBody is the body of a drain or undrain.
 type drainBody struct {
 	Drained bool `json:"drained"`

@@ -35,6 +35,17 @@ export default function Models() {
     });
   };
 
+  const setFleet = (m: Model) => {
+    const question = m.fleet
+      ? `Remove the entry route of ${m.name} from every fleet cluster? The model is then only reachable through routes the clusters have themselves. Its quota counters restart once.`
+      : `Render an entry route for ${m.name} on every fleet cluster? Quotas then attach to that route alone, so the model's quota counters restart once.`;
+    if (!confirm(question)) return;
+    action.run(async () => {
+      await api.setModelFleet(m.id, !m.fleet);
+      await reload();
+    });
+  };
+
   const drain = (m: Model, e: Endpoint) => {
     const on = !e.capacity?.drained;
     if (on && !confirm(`Drain ${m.name} on ${e.cluster_name}? Its conversations move to the other sites, step by step.`))
@@ -156,6 +167,19 @@ export default function Models() {
                     )}
                   </td>
                   <td className="row-actions">
+                    {(m.fleet || m.site_weights.length > 0) && (
+                      <button
+                        disabled={action.busy}
+                        title={
+                          m.fleet
+                            ? "Remove the entry route this tool renders for the model on every fleet cluster."
+                            : "Render an entry route for the model on every fleet cluster. It sends each conversation to one of the sites that serve the model."
+                        }
+                        onClick={() => setFleet(m)}
+                      >
+                        {m.fleet ? "Entry route: on" : "Entry route: off"}
+                      </button>
+                    )}
                     <button onClick={() => setEditing(m)}>Edit</button>
                     <button className="danger" disabled={action.busy} onClick={() => remove(m)}>
                       Delete

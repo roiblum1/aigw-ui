@@ -32,6 +32,14 @@ type Cluster struct {
 	// ClientListener is the Gateway listener clients come in on. The API-key
 	// policy attaches to it alone; empty attaches it to the whole Gateway.
 	ClientListener string `json:"client_listener"`
+	// PeerHost and PeerPort are where the other sites reach this site's
+	// gateway. A fleet cluster needs them.
+	PeerHost string `json:"peer_host"`
+	PeerPort int    `json:"peer_port"`
+	// FleetRevision identifies the entry routes last applied to the
+	// cluster. FleetOutdated is true when the fleet has moved on since.
+	FleetRevision string `json:"fleet_revision"`
+	FleetOutdated bool   `json:"fleet_outdated"`
 }
 
 const (
@@ -70,6 +78,10 @@ type Endpoint struct {
 type DiscoveredModel struct {
 	Name     string
 	Backends []BackendRef
+	// OnlyIfKnown is set for a model the cluster has a deployment of but
+	// does not expose itself. It is recorded for a model that is already
+	// in the catalog and never adds one.
+	OnlyIfKnown bool
 }
 
 type Model struct {
@@ -90,6 +102,9 @@ type Model struct {
 	// replaced on the last discovery round, when they were not.
 	SiteWeights     []weights.Zone `json:"site_weights"`
 	SiteWeightsNote string         `json:"site_weights_note"`
+	// Fleet is true when this tool renders the model's entry route on every
+	// fleet cluster.
+	Fleet bool `json:"fleet"`
 	// Warnings are differences between the sites that serve the model which
 	// an operator should look at.
 	Warnings []string `json:"warnings"`

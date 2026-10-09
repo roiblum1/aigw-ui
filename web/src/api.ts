@@ -18,6 +18,12 @@ export interface Cluster {
   fleet_enabled: boolean;
   /** Gateway listener the API-key policy attaches to; empty is the whole Gateway. */
   client_listener: string;
+  /** Where the other sites reach this site's gateway. */
+  peer_host: string;
+  peer_port: number;
+  /** Identifies the entry routes last applied; outdated when the fleet has moved on. */
+  fleet_revision: string;
+  fleet_outdated: boolean;
 }
 
 export interface ClusterInput {
@@ -31,6 +37,8 @@ export interface ClusterInput {
   discovery_token: string;
   fleet_enabled: boolean;
   client_listener: string;
+  peer_host: string;
+  peer_port: number;
 }
 
 export interface Endpoint {
@@ -75,6 +83,8 @@ export interface Model {
   site_weights: { zone: string; weight: number }[];
   /** Why the weights are not being written, when they are not. */
   site_weights_note: string;
+  /** The hub renders the model's entry route on every fleet cluster. */
+  fleet: boolean;
   /** Differences between the sites that serve the model. */
   warnings: string[];
 }
@@ -330,6 +340,7 @@ export const api = {
   createModel: (m: ModelInput) => request<{ id: string }>("POST", "/models", m),
   updateModel: (id: string, m: ModelInput) => request<{ id: string }>("PUT", `/models/${id}`, m),
   deleteModel: (id: string) => request<void>("DELETE", `/models/${id}`),
+  setModelFleet: (id: string, enabled: boolean) => request<void>("PUT", `/models/${id}/fleet`, { enabled }),
   drainSite: (modelId: string, clusterId: string, drained: boolean) =>
     request<void>("PUT", `/models/${modelId}/sites/${clusterId}/drain`, { drained }),
 

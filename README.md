@@ -24,7 +24,7 @@ cluster.
 - **Models**: discovered automatically every minute from each gateway's `/v1/models` and its `AIGatewayRoute` objects. Models can also be added by hand.
 - **Tenants**: one tenant per team, with API keys that can be issued and revoked.
 - **Quotas**: a token budget per tenant per model, per minute, hour or day, rendered as `QuotaPolicy` on every cluster, with an optional dry-run mode and a per-model cost expression.
-- **Site weights**: reads how many instances of each model are ready on each cluster and keeps the gateways' zone weights in line, so each site gets traffic in proportion to what it can serve.
+- **Entry route and site weights**: per model, renders on every fleet cluster the route that sends each conversation to one of the sites that serve the model, weighted by how many instances each site has ready.
 - **Usage**: live tokens used per tenant and model in the current window, read from the quota counters in Redis.
 - **Activity**: a task log of every change, showing per cluster which objects were created, updated or deleted and whether the gateway accepted them, and an audit log of who asked for what.
 - **Self-test**: checks on a real gateway, with a temporary tenant, that a key works, usage is counted, a quota refuses and a reset frees.

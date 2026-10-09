@@ -77,9 +77,16 @@ type Model struct {
 	// backends are already there and owned by someone else, so only the
 	// QuotaPolicy is rendered and it is attached to these backends.
 	Existing []Target
+	// Fleet is set for a model whose entry route this tool renders: the
+	// sites that serve it. The route replaces whatever else exposes the
+	// model, and quotas attach to it alone.
+	Fleet []FleetSite
 }
 
 func (m Model) targets() []Target {
+	if len(m.Fleet) > 0 {
+		return []Target{{Backend: FleetName(m.Slug), Model: m.Name}}
+	}
 	if m.Existing != nil {
 		return m.Existing
 	}
@@ -98,8 +105,10 @@ type State struct {
 	// to. Empty attaches it to the whole Gateway.
 	ClientListener string
 	AuthEnabled    bool
-	Models         []Model
-	Keys           []Key
+	// Fleet is used by the models that have Fleet sites.
+	Fleet  FleetConfig
+	Models []Model
+	Keys   []Key
 }
 
 // Objects returns the desired objects in the order they should be applied.
@@ -112,7 +121,10 @@ func Objects(s State) []*unstructured.Unstructured {
 		out = append(out, keysSecret(s))
 	}
 	for _, m := range models {
-		if m.Existing == nil {
+		switch {
+		case len(m.Fleet) > 0:
+			out = append(out, fleetObjects(s, m)...)
+		case m.Existing == nil:
 			out = append(out, backend(s, m), aiServiceBackend(s, m), route(s, m))
 		}
 		if len(m.Quotas) > 0 {

@@ -196,12 +196,16 @@ at `resets_at`. It returns 403 unless `redis.allowReset` is on (`can_reset` in
   "gateway_url": "http://192.168.1.9",
   "discovery_token": "",
   "fleet_enabled": false,
-  "client_listener": ""
+  "client_listener": "",
+  "peer_host": "",
+  "peer_port": 8443
 }
 ```
 
-`fleet_enabled` makes the cluster one of the sites that share traffic; it
-needs `auth_enabled`, and the request is refused with 400 otherwise.
+`fleet_enabled` makes the cluster one of the sites that share traffic. It
+needs `auth_enabled`, `client_listener`, `peer_host` and the same `namespace`
+as the other fleet clusters; the request is refused with 400 otherwise.
+`peer_host` and `peer_port` are where the other sites reach this gateway.
 `client_listener` is the Gateway listener the API-key policy attaches to;
 empty attaches it to the whole Gateway.
 
@@ -281,8 +285,9 @@ Each endpoint of a model carries `capacity`, and the model `site_weights`:
                   "revision": "glm-5.3-fp8-2026-09-14", "max_model_len": "262144"}}
   ],
   "warnings": [],
-  "site_weights": [{"zone": "ocp4-prod-llm-site1-a", "weight": 8},
-                   {"zone": "ocp4-prod-llm-site2-a", "weight": 3}],
+  "fleet": false,
+  "site_weights": [{"zone": "ocp4-prod-llm-site1-a", "weight": 800},
+                   {"zone": "ocp4-prod-llm-site2-a", "weight": 300}],
   "site_weights_note": ""
 }
 ```
@@ -295,9 +300,11 @@ revision or request length between the sites. These fields are read-only.
 | Method | Path | Body | Result |
 |---|---|---|---|
 | PUT | `/models/{id}/sites/{cluster_id}/drain` | `{"drained": true}` or `false` | 204. 409 when no other site has capacity for the model |
+| PUT | `/models/{id}/fleet` | `{"enabled": true}` or `false` | 204. 409 when no fleet cluster serves the model, the model has manual endpoints, or the server has no `FLEET_DOMAIN` |
 
-A drained site's weight steps down to 0, one instance per poll, and stays
-there until the drain ends.
+A drained site's weight steps down to 1, one instance per poll, and the site
+then leaves `site_weights`. `fleet` on a model says whether the hub renders
+its entry route on every fleet cluster.
 
 ## Tenants, keys and quotas
 

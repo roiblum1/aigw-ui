@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
 
@@ -19,13 +20,13 @@ type ModelInput struct {
 }
 
 func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error FROM models ORDER BY name`)
+	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet FROM models ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	models, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Model, error) {
 		m := Model{Endpoints: []Endpoint{}, Warnings: []string{}}
-		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote)
+		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet)
 		return m, err
 	})
 	if err != nil {
@@ -125,4 +126,38 @@ func (s *Store) GetModel(ctx context.Context, id string) (Model, error) {
 
 func (s *Store) DeleteModel(ctx context.Context, id string) error {
 	return affected(s.db.Exec(ctx, `DELETE FROM models WHERE id = $1`, id))
+}
+
+var (
+	// ErrFleetNoSite is returned when an entry route is asked for a model
+	// that no fleet cluster serves.
+	ErrFleetNoSite = errors.New("no fleet cluster serves the model")
+	// ErrFleetManual is returned when an entry route is asked for a model
+	// that also has endpoints entered by hand.
+	ErrFleetManual = errors.New("the model has manual endpoints")
+)
+
+// SetModelFleet turns the entry route of a model on or off and returns the
+// model's name.
+func (s *Store) SetModelFleet(ctx context.Context, id string, on bool) (string, error) {
+	var name string
+	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		var sites, manual int
+		err := tx.QueryRow(ctx,
+			`SELECT m.name, jsonb_array_length(m.fleet_zones),
+			        (SELECT count(*) FROM model_endpoints e WHERE e.model_id = m.id AND e.source = 'manual')
+			 FROM models m WHERE m.id = $1 FOR UPDATE`, id).Scan(&name, &sites, &manual)
+		if err != nil {
+			return err
+		}
+		switch {
+		case on && manual > 0:
+			return ErrFleetManual
+		case on && sites == 0:
+			return ErrFleetNoSite
+		}
+		_, err = tx.Exec(ctx, `UPDATE models SET fleet = $2 WHERE id = $1`, id, on)
+		return err
+	})
+	return name, mapErr(err)
 }

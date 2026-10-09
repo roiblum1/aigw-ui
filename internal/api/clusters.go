@@ -31,6 +31,10 @@ type clusterBody struct {
 	// ClientListener is the Gateway listener the API-key policy attaches to;
 	// an empty string attaches it to the whole Gateway.
 	ClientListener *string `json:"client_listener"`
+	// PeerHost and PeerPort are where the other sites reach this site's
+	// gateway. A fleet cluster needs the host; the port defaults to 8443.
+	PeerHost *string `json:"peer_host"`
+	PeerPort *int    `json:"peer_port"`
 }
 
 // cluster validates the body and returns the cluster to store. current is the
@@ -71,8 +75,23 @@ func (b *clusterBody) cluster(current *store.Cluster) (store.Cluster, error) {
 	if b.ClientListener != nil {
 		c.ClientListener = strings.TrimSpace(*b.ClientListener)
 	}
+	if b.PeerHost != nil {
+		c.PeerHost = strings.ToLower(strings.TrimSpace(*b.PeerHost))
+	}
+	if b.PeerPort != nil {
+		c.PeerPort = *b.PeerPort
+	}
+	if c.PeerPort == 0 {
+		c.PeerPort = 8443
+	}
 	b.DiscoveryToken = strings.TrimSpace(b.DiscoveryToken)
 	switch {
+	case c.PeerHost != "" && !hostname.MatchString(c.PeerHost):
+		return c, invalid("peer_host must be a DNS name such as llm.site1-a.example.com")
+	case c.PeerPort < 1 || c.PeerPort > 65535:
+		return c, invalid("peer_port must be between 1 and 65535")
+	case c.FleetEnabled && c.PeerHost == "":
+		return c, invalid("a fleet cluster needs peer_host, the name the other sites reach its gateway under")
 	case c.ClientListener != "" && !dnsLabel.MatchString(c.ClientListener):
 		return c, invalid("client_listener is not a valid listener name")
 	case c.FleetEnabled && !c.AuthEnabled:
