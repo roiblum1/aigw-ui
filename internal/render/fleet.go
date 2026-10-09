@@ -226,35 +226,51 @@ func sessionHeaders(f FleetConfig) []any {
 	return out
 }
 
-// fleetRetryPatch raises the number of sites the gateway picks from on a
-// retry, on the route of one model's entry route. Envoy Gateway has no
-// setting for it, so the generated route is patched. It needs
+// fleetRetryPatch changes two things in the route Envoy Gateway generates
+// for one model's entry route, which have no setting of their own. It needs
 // enableEnvoyPatchPolicy in the Envoy Gateway configuration; without it the
 // policy is not programmed and a sync reports it.
 //
+//   - The gateway picks from fleetHostAttempts sites on a retry, not 5.
+//   - A forwarded request carries the peer server name as its Host. Envoy
+//     Gateway sets the Host to the site's peer host instead. A peer listener
+//     answers for the peer server name, so it would return 404 to every
+//     forwarded request, while the health check, which sets the name itself,
+//     keeps passing.
+//
 // Each model has a policy of its own: Envoy Gateway applies the patches of
 // one policy together, so in a shared policy one model whose route is not
-// there yet would take the setting away from every model.
+// there yet would take the settings away from every model.
 func fleetRetryPatch(s State, m Model) *unstructured.Unstructured {
+	// The route Envoy Gateway generates from the "fleet" rule, the first of
+	// the model's AIGatewayRoute.
+	route := "..routes[?(@.name == 'httproute/" + s.Namespace + "/" + FleetName(m.Slug) + "/rule/0/match/0/*')].route"
+	patch := func(op, jsonPath, path string, value any) map[string]any {
+		operation := map[string]any{"op": op, "jsonPath": jsonPath, "path": path}
+		if value != nil {
+			operation["value"] = value
+		}
+		return map[string]any{
+			"type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
+			// The route configuration of the listener the entry route is on.
+			"name":      s.Namespace + "/" + s.GatewayName + "/" + s.ClientListener,
+			"operation": operation,
+		}
+	}
 	u := object(egAPI, "EnvoyPatchPolicy", s.Namespace, RetryPatchName(m.Slug))
 	u.Object["spec"] = map[string]any{
 		"targetRef": map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName},
 		"type":      "JSONPatch",
-		"jsonPatches": []any{map[string]any{
-			"type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
-			// The route configuration of the listener the entry route is on.
-			"name": s.Namespace + "/" + s.GatewayName + "/" + s.ClientListener,
-			"operation": map[string]any{
-				// "add" also replaces a value that is there, so the patch
-				// still works if Envoy Gateway stops setting its own.
-				"op": "add",
-				// The route Envoy Gateway generates from the "fleet" rule,
-				// the first of the model's AIGatewayRoute.
-				"jsonPath": "..routes[?(@.name == 'httproute/" + s.Namespace + "/" + FleetName(m.Slug) + "/rule/0/match/0/*')].route.retry_policy",
-				"path":     "host_selection_retry_max_attempts",
-				"value":    fleetHostAttempts,
-			},
-		}},
+		"jsonPatches": []any{
+			// "add" also replaces a value that is there, so the patch still
+			// works if Envoy Gateway stops setting its own.
+			patch("add", route+".retry_policy", "host_selection_retry_max_attempts", fleetHostAttempts),
+			// Only one way of setting the Host is allowed on a route, so the
+			// automatic one goes first. Setting it to false does not remove
+			// it for Envoy.
+			patch("remove", route, "auto_host_rewrite", nil),
+			patch("add", route, "host_rewrite_literal", s.Fleet.PeerSNI),
+		},
 	}
 	return u
 }

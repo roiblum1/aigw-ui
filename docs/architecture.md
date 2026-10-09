@@ -222,8 +222,8 @@ it on every fleet cluster, in the gateway namespace, all named
 | `AIGatewayRoute` | On the client listener: requests for the model go to that backend. Request timeout 3600s in place of the gateway's 60s |
 | `BackendTrafficPolicy` | On the `HTTPRoute` the gateway generates from the route, which has the same name |
 
-One more object, `EnvoyPatchPolicy/aigw-ui-fleet-retry`, is rendered once per
-fleet cluster for all entry routes together. See "Retry" below.
+A fifth object, `EnvoyPatchPolicy/fleet-<model slug>-retry`, changes two
+things in the route the gateway generates. See "Retry" and "Host" below.
 
 The policy holds the routing:
 
@@ -248,14 +248,26 @@ The policy holds the routing:
   with one site holding 800 of 1100 all five land on it for one conversation
   in seven. Those got the failing site's 503 however many retries were
   allowed: 31 of 200 requests on the test gateway. Envoy Gateway has no
-  setting for the number, so the hub renders one `EnvoyPatchPolicy`,
-  `aigw-ui-fleet-retry`, per fleet cluster that sets it to 20 on the route
-  of every entry route. With it, 0 of 400 requests got the 503.
+  setting for the number
+  ([envoyproxy/gateway#5690](https://github.com/envoyproxy/gateway/issues/5690)),
+  so the patch sets it to 20. With it, 0 of 400 requests got the 503.
+- **Host:** a forwarded request carries the peer server name
+  (`peers.llm.<domain>`) as its `Host`. Envoy Gateway would set it to the
+  site's peer host. A peer listener that answers for the peer server name
+  then returns 404 to every forwarded request, while the health check,
+  which sets the name itself, keeps passing. The patch sets the `Host`.
+- **About the patch:**
+  - Each model has a policy of its own. Envoy Gateway applies the patches
+    of one policy together, so in a shared policy one model whose route is
+    not there yet would take the settings away from every model.
   - It needs `extensionApis.enableEnvoyPatchPolicy: true` in the Envoy
-    Gateway configuration.
+    Gateway configuration. A cluster without the `EnvoyPatchPolicy` kind
+    cannot join the fleet.
   - A patch that is not in effect does not stop the gateway. The sync
     reports it in the task log, and the self-test fails on it.
-  - It can go when Envoy Gateway makes the number a setting.
+  - It names the route as Envoy Gateway and the AI Gateway generate it
+    today. Run the self-test on one cluster after every upgrade of either.
+  - The retry part can go when Envoy Gateway makes the number a setting.
 - **Circuit breaker:** as good as off (100000). Each site's own limit decides.
 
 Nothing is owned twice: the hub is the only writer of these objects, and the
@@ -283,11 +295,17 @@ counter. Attach the route to the peer listener alone to end that.
 
 **An entry route that cannot be rendered is held.** When the server has no
 `FLEET_DOMAIN`, or none of a model's sites is a fleet cluster with a peer
-host any more, the hub renders nothing for that model and removes nothing
-of it: the four objects and the `QuotaPolicy` stay on the clusters as they
-are. Keys, quotas and every other model are still synced. The cluster's
-sync message and the Models page say which model is held and why. A missing
+host any more, the hub leaves the model's five entry objects on the clusters
+as they are. Everything else is still synced, the model's quotas included:
+they are rendered on the entry backend that is there, so a lowered limit or
+a tenant that left does not wait for the hold to end. The cluster's sync
+message and the Models page say which model is held and why. A missing
 setting is never read as "switched off".
+
+**A fleet cluster cannot be deleted.** Its gateway would keep its entry
+routes with today's sites and weights, and its keys, with nobody to update
+or revoke them. Take it out of the fleet first: that sync removes the entry
+routes. Then delete it.
 
 **A fleet cluster cannot be renamed.** Its name is its zone on every
 gateway, and a new zone deals every model's conversations out again. Take
@@ -302,6 +320,10 @@ can send a conversation to another site than the other clusters do.
 
 **What the entry route does not do.** These are limits of this version:
 
+- **Quotas are not enforced on an entry route yet.** See "Known problem"
+  at the top of the 0.8.0 release note.
+- A request with both session headers is hashed on both, so it lands
+  elsewhere than one with either alone. A client should send one.
 - A request without a session header has nothing to hash and goes to a
   site picked at random each time, so only clients that send the header get
   cache reuse. A client that sends it also chooses its site by choosing the

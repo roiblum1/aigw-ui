@@ -134,6 +134,21 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
 | Browsers and the self-service portal | The Route | 443 |
 | Rate limit service on every LLM cluster | Redis on the hub (deployed separately) | your Redis port |
 
+## Before the first entry route on a cluster
+
+1. In the cluster's Envoy Gateway configuration, set
+   `extensionApis.enableEnvoyPatchPolicy: true`.
+2. Let only the hub create `EnvoyPatchPolicy` objects. A patch can change
+   anything in a gateway's configuration, so no other account should have
+   `create`, `update` or `patch` on `envoypatchpolicies.gateway.envoyproxy.io`
+   in the gateway namespace. With a cluster-admin kubeconfig for the hub
+   this means: give that right to nobody else.
+3. After the first entry route is on, run **Self-test** on the cluster. It
+   fails while a patch is not in effect. Do not send clients to the entry
+   route before it passes.
+4. Run the self-test again after every upgrade of Envoy Gateway or the AI
+   Gateway. The patch names the generated route, and that name can change.
+
 ## Upgrade
 
 ```sh

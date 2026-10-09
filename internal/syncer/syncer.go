@@ -374,13 +374,22 @@ func (s *Syncer) discoverViaGateway(ctx context.Context, c store.Cluster, client
 	if err != nil {
 		return nil, err
 	}
-	names, err := gateway.ListModels(ctx, c.GatewayURL, token)
-	if err != nil {
-		return nil, fmt.Errorf("list models from the gateway: %w", err)
-	}
 	routes, err := client.DiscoverAttached(ctx, gatewayOf(c))
 	if err != nil {
 		return nil, fmt.Errorf("read routes for the backends: %w", err)
+	}
+	names, err := gateway.ListModels(ctx, c.GatewayURL, token)
+	if err != nil && c.FleetEnabled {
+		// A fleet cluster's client listener can have no route at all until
+		// the first entry route is on, and /v1/models then answers 404. What
+		// the cluster serves is read from its deployments, so the routes
+		// alone are enough here, and they carry every backend a quota can
+		// attach to.
+		slog.Warn("the gateway did not list its models; using the routes alone", "cluster", c.Name, "err", err)
+		return routes, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list models from the gateway: %w", err)
 	}
 	byName := make(map[string]kube.DiscoveredModel, len(routes))
 	for _, r := range routes {

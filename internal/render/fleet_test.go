@@ -225,16 +225,20 @@ func TestFleetRetryPatch(t *testing.T) {
 	find(t, objs, "EnvoyPatchPolicy", "fleet-qwen-retry")
 	patch := find(t, objs, "EnvoyPatchPolicy", "fleet-glm-5-3-retry")
 	patches, _, _ := unstructured.NestedSlice(patch.Object, "spec", "jsonPatches")
-	want := []any{map[string]any{
-		"type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
-		"name": "ai-gateway/ai-gateway/https",
-		"operation": map[string]any{
-			"op":       "add",
-			"jsonPath": "..routes[?(@.name == 'httproute/ai-gateway/fleet-glm-5-3/rule/0/match/0/*')].route.retry_policy",
-			"path":     "host_selection_retry_max_attempts",
-			"value":    int64(20),
-		},
-	}}
+	const route = "..routes[?(@.name == 'httproute/ai-gateway/fleet-glm-5-3/rule/0/match/0/*')].route"
+	op := func(operation map[string]any) map[string]any {
+		return map[string]any{
+			"type":      "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
+			"name":      "ai-gateway/ai-gateway/https",
+			"operation": operation,
+		}
+	}
+	want := []any{
+		op(map[string]any{"op": "add", "jsonPath": route + ".retry_policy", "path": "host_selection_retry_max_attempts", "value": int64(20)}),
+		// The Host a forwarded request carries is the peer server name.
+		op(map[string]any{"op": "remove", "jsonPath": route, "path": "auto_host_rewrite"}),
+		op(map[string]any{"op": "add", "jsonPath": route, "path": "host_rewrite_literal", "value": "peers.llm.example.com"}),
+	}
 	if !reflect.DeepEqual(patches, want) {
 		t.Errorf("patches = %v\nwant      %v", patches, want)
 	}

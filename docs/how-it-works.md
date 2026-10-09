@@ -171,8 +171,8 @@ model and sends the conversation to one of the sites that serve it.
 **How.** The server writes four objects named `fleet-<model>` on every fleet
 cluster: a `Backend` with one endpoint per site, an `AIServiceBackend`, an
 `AIGatewayRoute` on the client listener, and a `BackendTrafficPolicy` with
-the routing rules. One `EnvoyPatchPolicy` per cluster changes one number in
-the routes the gateway generates.
+the routing rules. A fifth, an `EnvoyPatchPolicy` named `fleet-<model>-retry`,
+changes two things in the route the gateway generates.
 
 **Why.**
 
@@ -189,6 +189,14 @@ the routes the gateway generates.
   client got its 503. Envoy Gateway has no setting for the number, so the
   server patches it to 20. On a test gateway that took the errors from 31
   of 200 requests to 0 of 400.
+- *The patch also sets the Host.* Envoy Gateway forwards a request with the
+  site's peer host as its `Host`. A peer listener answers for the peer
+  server name, so it would return 404, while the health check keeps
+  passing. The patch makes the forwarded request carry the peer server
+  name.
+- *One patch per model.* Envoy Gateway applies the patches of one policy
+  together. In a shared policy, one model whose route is not there yet
+  would undo the patch for every model.
 - *The same sites, weights and order on every cluster.* Two gateways with
   different lists would send one conversation to two sites. The *fleet
   revision* on the Clusters page shows which cluster is behind.
@@ -197,7 +205,10 @@ the routes the gateway generates.
   model as the clusters are moved over.
 - *A route that cannot be rendered is left as it is.* If the server has no
   `FLEET_DOMAIN`, or a model has no site left, the server removes nothing.
-  A missing setting must not look like "switched off".
+  A missing setting must not look like "switched off". The model's quotas
+  are still applied meanwhile.
+- *A fleet cluster cannot be deleted.* Its gateway would keep routes and
+  keys that nobody updates or revokes. Leaving the fleet removes them.
 
 ### Site weights
 
