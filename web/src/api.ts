@@ -85,8 +85,25 @@ export interface Model {
   site_weights_note: string;
   /** The hub renders the model's entry route on every fleet cluster. */
   fleet: boolean;
+  /** What happens to a tenant whose budget for the model is spent. */
+  spent_mode: SpentMode;
+  /** Tenants without a quota on the model are served as best-effort too. */
+  best_effort_unlimited: boolean;
   /** Differences between the sites that serve the model. */
   warnings: string[];
+}
+
+export type SpentMode = "refuse" | "best-effort";
+
+/** A period in which a tenant was served as best-effort on a model. */
+export interface OverageEntry {
+  model_id: string;
+  model_name: string;
+  tenant_id: string;
+  tenant_slug: string;
+  since: string;
+  until: string;
+  active: boolean;
 }
 
 export interface ModelInput {
@@ -210,8 +227,12 @@ export interface UsageQuota {
   shadow: boolean;
   /** Highest counter; each counter is held to the limit on its own. */
   used: number;
+  /** Tokens used as best-effort, after the budget was spent. */
+  overage_used: number;
   resets_at: string;
-  counters: { backend: string; clusters: string[]; used: number }[];
+  counters: { backend: string; clusters: string[]; used: number; overage?: boolean }[];
+  /** Set while the tenant's requests for the model are served as best-effort. */
+  best_effort_until?: string;
 }
 
 /** A model's default bucket: every request to the model is charged to it. */
@@ -351,6 +372,9 @@ export const api = {
   updateModel: (id: string, m: ModelInput) => request<{ id: string }>("PUT", `/models/${id}`, m),
   deleteModel: (id: string) => request<void>("DELETE", `/models/${id}`),
   setModelFleet: (id: string, enabled: boolean) => request<void>("PUT", `/models/${id}/fleet`, { enabled }),
+  setModelSpent: (id: string, mode: SpentMode, unlimited: boolean) =>
+    request<void>("PUT", `/models/${id}/spent`, { mode, best_effort_unlimited: unlimited }),
+  overage: () => request<OverageEntry[]>("GET", "/overage"),
   drainSite: (modelId: string, clusterId: string, drained: boolean) =>
     request<void>("PUT", `/models/${modelId}/sites/${clusterId}/drain`, { drained }),
 

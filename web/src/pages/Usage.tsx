@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Activity } from "lucide-react";
 import { api, type UsageQuota } from "../api";
-import { Empty, ErrorBanner, PageHeader, useAction, useLoad, usePolling, windowLabel } from "../components";
+import { Empty, ErrorBanner, PageHeader, formatTime, useAction, useLoad, usePolling, windowLabel } from "../components";
 
 export const REFRESH_MS = 5000;
 
@@ -10,6 +10,13 @@ function resetsIn(iso: string, now: number): string {
   if (s >= 3600) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
   if (s >= 60) return `${Math.floor(s / 60)}m ${s % 60}s`;
   return `${s}s`;
+}
+
+/** The time of day, with the date when it is not today. */
+function untilTime(iso: string): string {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString()} ${time}`;
 }
 
 export function UsageMeter({ q }: { q: UsageQuota }) {
@@ -31,6 +38,17 @@ export function UsageMeter({ q }: { q: UsageQuota }) {
       <div className="detail">
         {q.used.toLocaleString("en-US")} of {q.limit.toLocaleString("en-US")} tokens ({percent}%)
       </div>
+      {q.best_effort_until && (
+        <span
+          className="tag warn"
+          title="The budget is spent. Requests are answered as best-effort: queued behind all others and dropped first when a site is full."
+        >
+          best-effort until {untilTime(q.best_effort_until)}
+        </span>
+      )}
+      {q.overage_used > 0 && (
+        <div className="detail">{q.overage_used.toLocaleString("en-US")} tokens used as best-effort</div>
+      )}
     </div>
   );
 }
@@ -45,12 +63,13 @@ export function confirmReset(q: UsageQuota): boolean {
 }
 
 function Counters({ q }: { q: UsageQuota }) {
-  if (q.counters.length < 2) return null;
+  if (q.counters.filter((c) => !c.overage).length < 2) return null;
   return (
     <div className="detail">
       {q.counters.map((c) => (
         <div key={c.backend} title={`Clusters: ${c.clusters.join(", ")}`}>
           <span className="mono">{c.backend}</span>: {c.used.toLocaleString("en-US")}
+          {c.overage && " (best-effort)"}
         </div>
       ))}
     </div>
@@ -60,6 +79,8 @@ function Counters({ q }: { q: UsageQuota }) {
 export default function Usage() {
   const { data, error, reload } = useLoad(() => api.usage());
   usePolling(reload, REFRESH_MS);
+  const history = useLoad(() => api.overage());
+  usePolling(history.reload, 6 * REFRESH_MS);
   const action = useAction();
   const [filter, setFilter] = useState("");
   const reset = (q: UsageQuota) => {
@@ -75,7 +96,8 @@ export default function Usage() {
     const f = filter.trim().toLowerCase();
     return !f || q.tenant_slug.includes(f) || q.model_name.toLowerCase().includes(f);
   });
-  const split = (data?.quotas ?? []).some((q) => q.counters.length > 1);
+  // The counter of the best-effort route is a second one by design.
+  const split = (data?.quotas ?? []).some((q) => q.counters.filter((c) => !c.overage).length > 1);
 
   return (
     <>
@@ -151,7 +173,7 @@ export default function Usage() {
                   <td className="mono">{resetsIn(q.resets_at, now)}</td>
                   {data.can_reset && (
                     <td className="row-actions">
-                      <button disabled={action.busy || q.used === 0} onClick={() => reset(q)}>
+                      <button disabled={action.busy || q.used + q.overage_used === 0} onClick={() => reset(q)}>
                         Reset usage
                       </button>
                     </td>
@@ -168,6 +190,41 @@ export default function Usage() {
             </tbody>
           </table>
         </div>
+      )}
+      {data?.enabled && (history.data?.length ?? 0) > 0 && (
+        <>
+          <h2>Best-effort periods</h2>
+          <p className="hint">
+            When a tenant's budget on a model was nearly spent and its requests were served as best-effort, for
+            the models set to do that. A period ends with the quota's window.
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Tenant</th>
+                  <th>Model</th>
+                  <th>From</th>
+                  <th>Until</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.data!.map((o) => (
+                  <tr key={o.tenant_id + o.model_id + o.since}>
+                    <td className="strong">{o.tenant_slug}</td>
+                    <td>{o.model_name}</td>
+                    <td>{formatTime(o.since)}</td>
+                    <td>
+                      {formatTime(o.until)}
+                      {o.active && " "}
+                      {o.active && <span className="tag warn">now</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </>
   );
