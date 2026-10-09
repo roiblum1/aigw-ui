@@ -76,8 +76,9 @@ func TestRealAPIServerEntryRoute(t *testing.T) {
 	if _, err := c.Sync(ctx, ns, render.Objects(fleetTestState(ns, site1)), nil); err != nil {
 		t.Fatal(err)
 	}
-	if zones := zonesOf(t, c, ns); len(zones) != 1 || zones[0].(map[string]any)["zone"] != "site1-a" {
-		t.Errorf("zones after a site left = %v", zones)
+	// One site is left, and a single site gets no zone weights.
+	if zones := zonesOf(t, c, ns); len(zones) != 0 {
+		t.Errorf("zones after a site left = %v, want none for a single site", zones)
 	}
 	backendGVR, _ := gvrFor("Backend")
 	backend, err := c.dyn.Resource(backendGVR).Namespace(ns).Get(ctx, "fleet-glm-5-3", metav1.GetOptions{})

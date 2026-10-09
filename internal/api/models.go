@@ -135,8 +135,11 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fleet := map[string]bool{}
+	// peers holds the names of the clusters an entry route can send to.
+	peers := map[string]bool{}
 	for _, c := range clusters {
 		fleet[c.ID] = c.FleetEnabled
+		peers[c.Name] = c.FleetEnabled && c.PeerHost != ""
 	}
 	bestEffort, err := s.st.BestEffortTenants(r.Context())
 	if err != nil {
@@ -148,6 +151,9 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		if n := len(bestEffort[out[i].ID]) - render.MaxOverageTenants; n > 0 {
 			out[i].Warnings = append(out[i].Warnings, fmt.Sprintf("%d tenants should be served as best-effort and are not: the best-effort route lists at most %d tenants, the first by name. The others are refused once their budget is spent.", n, render.MaxOverageTenants))
 		}
+		if out[i].Fleet && fleetSites(out[i], peers) > 1 {
+			out[i].Warnings = append(out[i].Warnings, "Quotas are not enforced on this model's entry route: it has more than one site, and Envoy AI Gateway up to 1.2.0 attaches no quota to a route with site weights. Every tenant is answered without a limit until the gateways run a version with the fix.")
+		}
 		if out[i].SpentMode == store.SpentBestEffort && s.usage == nil {
 			out[i].Warnings = append(out[i].Warnings, "The server has no Redis configured, so it cannot see that a budget is spent. A tenant past its budget is refused.")
 		}
@@ -156,6 +162,17 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// fleetSites counts the sites the model's entry route is rendered with.
+func fleetSites(m store.Model, peers map[string]bool) int {
+	n := 0
+	for _, z := range m.SiteWeights {
+		if peers[z.Zone] {
+			n++
+		}
+	}
+	return n
 }
 
 // fleetBody is the body of turning a model's entry route on or off.

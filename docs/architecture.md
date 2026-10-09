@@ -320,8 +320,9 @@ can send a conversation to another site than the other clusters do.
 
 **What the entry route does not do.** These are limits of this version:
 
-- **Quotas are not enforced on an entry route yet.** See "Known problem"
-  at the top of the 0.8.0 release note.
+- **Quotas are not enforced on an entry route with more than one site.**
+  See "Known problem" at the top of the 0.8.0 release note. A model with
+  one site gets no zone weights and keeps its quotas.
 - A request with both session headers is hashed on both, so it lands
   elsewhere than one with either alone. A client should send one.
 - A request without a session header has nothing to hash and goes to a

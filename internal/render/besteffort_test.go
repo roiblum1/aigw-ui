@@ -263,3 +263,24 @@ func TestQuotaRevisionOnRoutes(t *testing.T) {
 		}
 	}
 }
+
+// A model with one site gets no zone weights: there is nothing to weigh, and
+// with them the gateway enforces no quota on the route.
+func TestOneSiteHasNoZoneWeights(t *testing.T) {
+	s := bestEffortState("team-a")
+	s.Models[0].Fleet = s.Models[0].Fleet[:1]
+	objs := Objects(s)
+	for _, name := range []string{"fleet-glm-5-3", "fleet-glm-5-3-be"} {
+		policy := find(t, objs, "BackendTrafficPolicy", name)
+		if _, found, _ := unstructured.NestedMap(policy.Object, "spec", "loadBalancer", "zoneAware"); found {
+			t.Errorf("%s has zone weights for a single site", name)
+		}
+		if kind, _, _ := unstructured.NestedString(policy.Object, "spec", "loadBalancer", "type"); kind != "ConsistentHash" {
+			t.Errorf("%s: load balancer type %q", name, kind)
+		}
+	}
+	two := find(t, Objects(bestEffortState("team-a")), "BackendTrafficPolicy", "fleet-glm-5-3")
+	if zones, _, _ := unstructured.NestedSlice(two.Object, "spec", "loadBalancer", "zoneAware", "weightedZones"); len(zones) != 2 {
+		t.Errorf("zones for two sites = %v", zones)
+	}
+}

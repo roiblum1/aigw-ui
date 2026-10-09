@@ -259,20 +259,27 @@ func fleetTrafficPolicy(s State, m Model, name string, retryOn ...int64) *unstru
 		statuses = append(statuses, code)
 	}
 	u := object(egAPI, "BackendTrafficPolicy", s.Namespace, name)
+	loadBalancer := map[string]any{
+		"type": "ConsistentHash",
+		"consistentHash": map[string]any{
+			"type": "Headers",
+			// Only the conversation key. Hashing the tenant or the key
+			// too would pin a customer to one site.
+			"headers": sessionHeaders(s.Fleet),
+		},
+	}
+	// With one site there is nothing to weigh, and the weights have a
+	// price: with them Envoy Gateway names the route's upstream per
+	// backend, and Envoy AI Gateway up to 1.2.0 then attaches no quota to
+	// the route. So a model with a single site keeps its quotas.
+	if len(sites) > 1 {
+		loadBalancer["zoneAware"] = map[string]any{"weightedZones": zones}
+	}
 	u.Object["spec"] = map[string]any{
 		"targetRefs": []any{
 			map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": name},
 		},
-		"loadBalancer": map[string]any{
-			"type": "ConsistentHash",
-			"consistentHash": map[string]any{
-				"type": "Headers",
-				// Only the conversation key. Hashing the tenant or the key
-				// too would pin a customer to one site.
-				"headers": sessionHeaders(s.Fleet),
-			},
-			"zoneAware": map[string]any{"weightedZones": zones},
-		},
+		"loadBalancer": loadBalancer,
 		// A site over its limit answers 503 at once; the request then goes
 		// to the next site.
 		"retry": map[string]any{

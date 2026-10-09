@@ -233,6 +233,11 @@ instance, which you declare on the `LLMInferenceService` with
 - *Never 0.* Envoy rejects a weight of 0, and Envoy Gateway then stops
   publishing every change to that gateway, key revocations included. A site
   with nothing ready stays at 1 and its health check keeps traffic off it.
+- *No weights for a single site.* There is nothing to weigh, and with
+  weights in place Envoy AI Gateway up to 1.2.0 attaches no quota to the
+  route. A model with one site therefore keeps its quotas on the entry
+  route. With a second site the weights are needed, the quota is not
+  enforced, and the model's row shows a warning.
 - *Once per round, for the whole fleet.* Working the weights out after each
   cluster would send the gateways several lists in a row, and every list
   moves conversations.
