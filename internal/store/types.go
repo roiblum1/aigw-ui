@@ -57,6 +57,9 @@ type BackendRef struct {
 	// Override reports whether the route sets modelNameOverride for this
 	// backend. The gateway documents quota matching only for that case.
 	Override bool `json:"override"`
+	// PeerOnly is true when clients cannot reach the backend through the
+	// cluster's own routes, only other sites' gateways can.
+	PeerOnly bool `json:"peer_only,omitempty"`
 }
 
 type Endpoint struct {

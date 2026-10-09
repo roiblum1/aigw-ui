@@ -127,8 +127,17 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	clusters, err := s.st.ListClusters(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	fleet := map[string]bool{}
+	for _, c := range clusters {
+		fleet[c.ID] = c.FleetEnabled
+	}
 	for i := range out {
-		out[i].Warnings = recipeWarnings(out[i])
+		out[i].Warnings = append(recipeWarnings(out[i]), ownRouteWarnings(out[i], fleet)...)
 		if out[i].Fleet && !s.st.FleetConfigured() {
 			out[i].Warnings = append(out[i].Warnings, "The server has no FLEET_DOMAIN or FLEET_PEER_SNI set, so the entry route is left as it is on the clusters and gets no weight changes.")
 		}
@@ -167,7 +176,7 @@ func (s *Server) setModelFleet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if b.Enabled {
-		s.changed(r, "model.fleet-on", "Turned the entry route on for "+name+". Quotas now attach to it alone, so the model's quota counters restart once.")
+		s.changed(r, "model.fleet-on", "Turned the entry route on for "+name+". Requests through it are counted on the entry route, so the model's quota counters restart once.")
 	} else {
 		s.changed(r, "model.fleet-off", "Turned the entry route off for "+name+". Its quota counters restart once.")
 	}
@@ -230,6 +239,32 @@ func recipeWarnings(m store.Model) []string {
 		out = append(out, "The sites take different request lengths ("+valueList(lengths)+"), so a long request fails at the smaller site.")
 	}
 	return out
+}
+
+// ownRouteWarnings names the fleet clusters whose own route for a model with
+// an entry route is still reachable by clients. fleet says which clusters
+// are in the fleet, by ID.
+func ownRouteWarnings(m store.Model, fleet map[string]bool) []string {
+	if !m.Fleet {
+		return nil
+	}
+	var clusters []string
+	for _, e := range m.Endpoints {
+		if !fleet[e.ClusterID] {
+			continue
+		}
+		for _, b := range e.Backends {
+			if !b.PeerOnly {
+				clusters = append(clusters, e.ClusterName)
+				break
+			}
+		}
+	}
+	if len(clusters) == 0 {
+		return nil
+	}
+	return []string{"On " + strings.Join(clusters, ", ") + " the cluster's own route for the model is still attached to the client listener or the whole Gateway. " +
+		"It is older than the entry route and wins, so clients there do not use the entry route. Its backends keep the quota. Attach that route to the peer listener alone."}
 }
 
 // valueList formats "value on site, site; value on site".

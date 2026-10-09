@@ -257,7 +257,7 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 	if c.GatewayURL != "" {
 		found, err = s.discoverViaGateway(ctx, c, client)
 	} else {
-		found, err = client.Discover(ctx, c.Namespace)
+		found, err = client.Discover(ctx, gatewayOf(c))
 	}
 	if err != nil {
 		return 0, err
@@ -279,7 +279,7 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 			if ns == c.Namespace {
 				ns = "" // stored as "the gateway namespace" so it follows a change of that setting
 			}
-			m.Backends = append(m.Backends, store.BackendRef{Name: b.Name, Namespace: ns, Model: b.Model, Override: b.Override})
+			m.Backends = append(m.Backends, store.BackendRef{Name: b.Name, Namespace: ns, Model: b.Model, Override: b.Override, PeerOnly: b.PeerOnly})
 		}
 		models = append(models, m)
 	}
@@ -325,6 +325,10 @@ func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, found []k
 	}
 }
 
+func gatewayOf(c store.Cluster) kube.Gateway {
+	return kube.Gateway{Namespace: c.Namespace, Name: c.GatewayName, ClientListener: c.ClientListener}
+}
+
 // discoverViaGateway takes the list of models from the gateway itself, which
 // knows every route attached to it whatever its namespace or backend type, and
 // looks up each model's backends from the routes so quotas can be attached.
@@ -339,7 +343,7 @@ func (s *Syncer) discoverViaGateway(ctx context.Context, c store.Cluster, client
 	if err != nil {
 		return nil, fmt.Errorf("list models from the gateway: %w", err)
 	}
-	routes, err := client.DiscoverAttached(ctx, c.Namespace, c.GatewayName)
+	routes, err := client.DiscoverAttached(ctx, gatewayOf(c))
 	if err != nil {
 		return nil, fmt.Errorf("read routes for the backends: %w", err)
 	}

@@ -31,7 +31,8 @@ func chargedTwice(counted, request int64, costExpression string) (bool, string) 
 		return false, ""
 	}
 	return true, fmt.Sprintf("%d tokens were counted for one request that used %d. The request is charged more than once: "+
-		"check that only the entry gateway has a QuotaPolicy for the model, and none on the serving site's route.", counted, request)
+		"the serving site's own route for the model is still attached to the client listener or to the whole Gateway, so its backend keeps a quota. "+
+		"Attach that route to the peer listener alone.", counted, request)
 }
 
 // stickiness judges where the requests of one conversation were served.

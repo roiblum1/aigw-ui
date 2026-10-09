@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"aigw-ui/internal/store"
@@ -175,5 +176,21 @@ func TestRecipeWarnings(t *testing.T) {
 	differ := store.Model{Endpoints: []store.Endpoint{site("a", "r1", "262144", true), site("b", "r2", "131072", true)}}
 	if got := recipeWarnings(differ); len(got) != 2 {
 		t.Errorf("different recipes: %v", got)
+	}
+}
+
+func TestOwnRouteWarnings(t *testing.T) {
+	endpoint := func(id string, peerOnly bool) store.Endpoint {
+		return store.Endpoint{ClusterID: id, ClusterName: id, Backends: []store.BackendRef{{Name: "glm", PeerOnly: peerOnly}}}
+	}
+	fleet := map[string]bool{"site1": true, "site2": true}
+	m := store.Model{Fleet: true, Endpoints: []store.Endpoint{endpoint("site1", true), endpoint("site2", false), endpoint("other", false)}}
+	got := ownRouteWarnings(m, fleet)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "On site2 the cluster's own route") {
+		t.Errorf("warnings = %q", got)
+	}
+	m.Fleet = false
+	if got := ownRouteWarnings(m, fleet); got != nil {
+		t.Errorf("a model without an entry route got %q", got)
 	}
 }

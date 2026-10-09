@@ -59,6 +59,9 @@ type Target struct {
 	Namespace string
 	Backend   string
 	Model     string
+	// PeerOnly is set for a backend clients cannot reach through the
+	// cluster's own routes: only other sites' gateways send to it.
+	PeerOnly bool
 }
 
 type Model struct {
@@ -78,8 +81,8 @@ type Model struct {
 	// QuotaPolicy is rendered and it is attached to these backends.
 	Existing []Target
 	// Fleet is set for a model whose entry route this tool renders: the
-	// sites that serve it. The route replaces whatever else exposes the
-	// model, and quotas attach to it alone.
+	// sites that serve it. Quotas attach to it, and to the Existing backends
+	// that clients can still reach through a route of the cluster's own.
 	Fleet []FleetSite
 	// HeldReason is set for a model that has an entry route which cannot be
 	// rendered right now, with the reason. Nothing is rendered for it and
@@ -93,7 +96,19 @@ func (m Model) Held() bool { return m.HeldReason != "" }
 
 func (m Model) targets() []Target {
 	if len(m.Fleet) > 0 || m.Held() {
-		return []Target{{Backend: FleetName(m.Slug), Model: m.Name}}
+		out := []Target{{Backend: FleetName(m.Slug), Model: m.Name}}
+		// A route the cluster already has for the model on the client
+		// listener is older than the entry route and wins the match, so
+		// clients still reach its backends. Without a quota there, turning
+		// the entry route on would lift every tenant's limit. A backend
+		// that only other sites reach gets none: the entry gateway has
+		// charged the request already.
+		for _, t := range m.Existing {
+			if !t.PeerOnly {
+				out = append(out, t)
+			}
+		}
+		return out
 	}
 	if m.Existing != nil {
 		return m.Existing

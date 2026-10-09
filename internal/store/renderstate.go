@@ -48,7 +48,7 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 		if source == SourceDiscovered {
 			m.Existing = make([]render.Target, 0, len(backends))
 			for _, b := range backends {
-				m.Existing = append(m.Existing, render.Target{Namespace: b.Namespace, Backend: b.Name, Model: b.Model})
+				m.Existing = append(m.Existing, render.Target{Namespace: b.Namespace, Backend: b.Name, Model: b.Model, PeerOnly: b.PeerOnly})
 			}
 		}
 		index[id] = len(st.Models)

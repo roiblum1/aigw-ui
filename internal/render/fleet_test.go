@@ -14,12 +14,13 @@ func fleetState() State {
 		Models: []Model{
 			{
 				Name: "glm-5.3", Slug: "glm-5-3", DefaultLimit: 1000, DefaultWindow: "1d",
-				// Given out of order, and with the backends the model had before.
+				// Given out of order, and with the backend the model had
+				// before, which only other sites reach now.
 				Fleet: []FleetSite{
 					{Name: "site2-a", Host: "llm.site2-a.example.com", Port: 8443, Weight: 300},
 					{Name: "site1-a", Host: "llm.site1-a.example.com", Port: 8443, Weight: 800},
 				},
-				Existing: []Target{{Namespace: "llms", Backend: "glm", Model: "glm-5.3"}},
+				Existing: []Target{{Namespace: "llms", Backend: "glm", Model: "glm-5.3", PeerOnly: true}},
 				Quotas:   []TenantQuota{{TenantSlug: "team-a", Slot: 0, Limit: 500, Window: "1d"}},
 			},
 			{Name: "local", Slug: "local", Host: "vllm.llms.svc", Port: 8000, UpstreamModel: "local"},
@@ -193,5 +194,30 @@ func TestHeldModelRendersNothing(t *testing.T) {
 		if c.ModelSlug == "glm-5-3" && c.Backend != "ai-gateway/fleet-glm-5-3" {
 			t.Errorf("counter on %s", c.Backend)
 		}
+	}
+}
+
+// While a cluster still has a route of its own for the model that clients
+// reach, that route wins over the entry route. Its backend keeps the quota,
+// or turning the entry route on would lift every tenant's limit.
+func TestQuotaStaysOnBackendsClientsReach(t *testing.T) {
+	s := fleetState()
+	s.Models[0].Existing = []Target{
+		{Namespace: "llms", Backend: "glm", Model: "glm-5.3"},
+		{Namespace: "llms", Backend: "glm-peers", Model: "glm-5.3", PeerOnly: true},
+	}
+	targets := map[string][]string{}
+	for _, o := range Objects(s) {
+		if o.GetKind() != "QuotaPolicy" {
+			continue
+		}
+		refs, _, _ := unstructured.NestedSlice(o.Object, "spec", "targetRefs")
+		for _, r := range refs {
+			targets[o.GetNamespace()] = append(targets[o.GetNamespace()], r.(map[string]any)["name"].(string))
+		}
+	}
+	want := map[string][]string{"ai-gateway": {"fleet-glm-5-3"}, "llms": {"glm"}}
+	if !reflect.DeepEqual(targets, want) {
+		t.Errorf("quota targets = %v, want %v", targets, want)
 	}
 }
