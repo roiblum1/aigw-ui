@@ -34,12 +34,20 @@ func New(st *store.Store, auto bool, discoverEvery, syncEvery time.Duration) *Sy
 // saying what changed. Clusters are marked pending and, when auto sync is on,
 // a background sync is queued.
 func (s *Syncer) Changed(ctx context.Context, action, summary string) {
-	s.Record(ctx, action, summary, "")
 	// A change to the clusters can change which sites a model has.
 	if _, err := s.st.RefreshFleetZones(context.WithoutCancel(ctx)); err != nil {
 		slog.Error("store zone weights", "err", err)
 	}
-	if err := s.st.MarkPending(ctx); err != nil {
+	s.queue(ctx, action, summary)
+}
+
+// queue records a task, marks the clusters pending and, when auto sync is
+// on, queues a background sync.
+func (s *Syncer) queue(ctx context.Context, action, summary string) {
+	s.Record(ctx, action, summary, "")
+	// The change is saved already, so the clusters are marked even if the
+	// request that made it has gone away.
+	if err := s.st.MarkPending(context.WithoutCancel(ctx)); err != nil {
 		slog.Error("mark clusters pending", "err", err)
 	}
 	if !s.auto {
@@ -213,7 +221,10 @@ func (s *Syncer) client(ctx context.Context, id string) (*kube.Client, error) {
 	return kube.New(kubeconfig)
 }
 
-// DiscoverAll polls every cluster for the models it exposes.
+// DiscoverAll polls every cluster for the models it exposes and what it
+// serves, and then works out the site weights once for the whole round.
+// Doing that after each cluster would send the gateways several sets of
+// weights in a row, and every set moves conversations.
 func (s *Syncer) DiscoverAll(ctx context.Context) {
 	clusters, err := s.st.ListClusters(ctx)
 	if err != nil {
@@ -223,18 +234,29 @@ func (s *Syncer) DiscoverAll(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, c := range clusters {
 		wg.Go(func() {
-			if _, err := s.DiscoverCluster(ctx, c.ID); err != nil {
+			if _, err := s.pollCluster(ctx, c.ID); err != nil {
 				slog.Warn("discovery failed", "cluster", c.Name, "err", err)
 			}
 		})
 	}
 	wg.Wait()
+	s.refreshWeights(ctx, "a poll of all clusters")
 }
 
 // DiscoverCluster reads the models one cluster exposes and stores them. A
 // failed poll changes nothing: models are only removed when the cluster
 // answered and no longer lists them.
 func (s *Syncer) DiscoverCluster(ctx context.Context, id string) (int, error) {
+	n, err := s.pollCluster(ctx, id)
+	if err == nil {
+		s.refreshWeights(ctx, "a poll of one cluster")
+	}
+	return n, err
+}
+
+// pollCluster is DiscoverCluster without the site weights, which the caller
+// works out when it has polled every cluster it meant to.
+func (s *Syncer) pollCluster(ctx context.Context, id string) (int, error) {
 	n, err := s.discoverCluster(ctx, id)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		if serr := s.st.SetDiscoveryError(context.WithoutCancel(ctx), id, err.Error()); serr != nil {
@@ -295,14 +317,14 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 		return 0, err
 	}
 	if changed {
-		s.Changed(ctx, "discovery", "Models changed on cluster "+c.Name)
+		s.queue(ctx, "discovery", "Models changed on cluster "+c.Name)
 	}
 	s.observeCapacity(ctx, c, capacity)
 	return len(found), nil
 }
 
 // observeCapacity stores how many instances of each model the cluster has
-// ready and moves the site weights towards it.
+// ready and moves its applied capacities one step towards it.
 func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, found []kube.ModelCapacity) {
 	reported := make([]store.Capacity, 0, len(found))
 	for _, f := range found {
@@ -311,9 +333,13 @@ func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, found []k
 	}
 	if err := s.st.ApplyCapacity(ctx, c.ID, reported); err != nil {
 		slog.Error("store model capacity", "cluster", c.Name, "err", err)
-		return
 	}
-	moved, err := s.st.RefreshFleetZones(ctx)
+}
+
+// refreshWeights turns the applied capacities into zone weights and queues a
+// sync when a model's weights moved.
+func (s *Syncer) refreshWeights(ctx context.Context, after string) {
+	moved, err := s.st.RefreshFleetZones(context.WithoutCancel(ctx))
 	if err != nil {
 		slog.Error("store zone weights", "err", err)
 		return
@@ -321,7 +347,7 @@ func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, found []k
 	if len(moved) > 0 {
 		// Every cluster gets the new weights: gateways with different
 		// weights would send one conversation to different sites.
-		s.Changed(ctx, "weights", "Site weights of "+strings.Join(moved, ", ")+" changed after a poll of cluster "+c.Name)
+		s.queue(ctx, "weights", "Site weights of "+strings.Join(moved, ", ")+" changed after "+after)
 	}
 }
 
