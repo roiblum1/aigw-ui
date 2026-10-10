@@ -189,14 +189,16 @@ A tenant is a team.
 
 1. **Add tenant**. The ID cannot be changed later.
 2. **Create key**. The key is shown once. Copy it then.
-3. **Set quota**. Pick a model, a number of tokens and a window (minute, hour or day).
+3. **Add quota**. Pick a model, a number of tokens and a window (minute, hour or day).
    Tick **Dry run** to count usage against the quota without rejecting
-   requests, and press **Enforce** on the quota when you are ready.
+   requests, and press **Enforce** on the quota when you are ready. The
+   list only offers models the tenant has no quota on yet.
 
 Clients send the key as `Authorization: Bearer sk-...`.
 
 | Action | Effect |
 |---|---|
+| Edit a quota | Change the tokens or the window in the quota's own row, then **Save**. What the tenant has used in the current window stays counted against the new limit; a new window starts a new count |
 | Revoke a key | The key stops working after the next sync |
 | Disable a tenant | All its keys and quotas are removed from the clusters until it is enabled again |
 | Delete a tenant | Removes the tenant, its keys and its quotas |

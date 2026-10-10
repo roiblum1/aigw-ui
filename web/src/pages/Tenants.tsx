@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { ArrowLeft, Copy, Plus, Users } from "lucide-react";
-import { api, type Tenant, type Window } from "../api";
+import { api, type Tenant } from "../api";
 import {
   Empty,
   ErrorBanner,
@@ -8,15 +8,13 @@ import {
   FormModal,
   Modal,
   PageHeader,
-  WindowSelect,
   formatTime,
-  formatTokens,
   useAction,
   useLoad,
   usePolling,
-  windowLabel,
 } from "../components";
-import { REFRESH_MS, UsageMeter, confirmReset } from "./Usage";
+import TenantQuotas from "./TenantQuotas";
+import { REFRESH_MS } from "./Usage";
 
 export default function Tenants() {
   const { data: tenants, error, reload } = useLoad(api.tenants);
@@ -121,16 +119,9 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   // Usage is loaded on its own so that Redis being down never hides the tenant.
   const usage = useLoad(() => api.usage(props.id));
   usePolling(usage.reload, REFRESH_MS);
-  const usageOf = (modelId: string) => usage.data?.quotas.find((u) => u.model_id === modelId);
   const action = useAction();
   const [newKey, setNewKey] = useState<string | null>(null);
   const [keyName, setKeyName] = useState("");
-  const [quota, setQuota] = useState<{ model_id: string; limit: string; window: Window; shadow: boolean }>({
-    model_id: "",
-    limit: "",
-    window: "1d",
-    shadow: false,
-  });
 
   if (!data) {
     return (
@@ -151,14 +142,6 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
     act(async () => {
       setNewKey((await api.createKey(tenant.id, keyName)).secret);
       setKeyName("");
-    });
-  };
-
-  const saveQuota = (e: FormEvent) => {
-    e.preventDefault();
-    act(async () => {
-      await api.setQuota(tenant.id, quota.model_id, Number(quota.limit), quota.window, quota.shadow);
-      setQuota({ model_id: "", limit: "", window: quota.window, shadow: false });
     });
   };
 
@@ -240,95 +223,17 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
         )}
       </section>
 
-      <section className="card">
-        <h2>Token quotas</h2>
-        <p className="hint">One budget per model, counted across every site.</p>
-        <form className="inline-form" onSubmit={saveQuota}>
-          <select required value={quota.model_id} onChange={(e) => setQuota({ ...quota, model_id: e.target.value })}>
-            <option value="">Select a model…</option>
-            {data.models.map((m) => (
-              <option key={m.id} value={m.id} disabled={!m.quota_capable}>
-                {m.name}
-                {m.quota_capable ? "" : " (no quota possible)"}
-              </option>
-            ))}
-          </select>
-          <input
-            required
-            type="number"
-            min={1}
-            placeholder="Tokens"
-            value={quota.limit}
-            onChange={(e) => setQuota({ ...quota, limit: e.target.value })}
-          />
-          <WindowSelect value={quota.window} onChange={(w) => setQuota({ ...quota, window: w })} />
-          <label className="check" title="Usage is counted against this quota, but it never rejects a request.">
-            <input
-              type="checkbox"
-              checked={quota.shadow}
-              onChange={(e) => setQuota({ ...quota, shadow: e.target.checked })}
-            />
-            <span>Dry run</span>
-          </label>
-          <button type="submit" className="primary" disabled={action.busy}>
-            Set quota
-          </button>
-        </form>
-        {quotas.length === 0 ? (
-          <p className="hint">No quotas yet.</p>
-        ) : (
-          <table className="plain">
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Limit</th>
-                {usage.data?.enabled && <th>Used now</th>}
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {quotas.map((q) => (
-                <tr key={q.id}>
-                  <td className="strong">{q.model_name}</td>
-                  <td>
-                    {formatTokens(q.token_limit)} per {windowLabel[q.window]}
-                    {q.shadow && " "}
-                    {q.shadow && (
-                      <span className="tag warn" title="Counted, but requests are not rejected by this quota.">
-                        dry run
-                      </span>
-                    )}
-                  </td>
-                  {usage.data?.enabled && <td>{usageOf(q.model_id) ? <UsageMeter q={usageOf(q.model_id)!} /> : "—"}</td>}
-                  <td className="row-actions">
-                    {usage.data?.can_reset && usageOf(q.model_id) && (
-                      <button
-                        disabled={action.busy || usageOf(q.model_id)!.used + usageOf(q.model_id)!.overage_used === 0}
-                        onClick={() => {
-                          const u = usageOf(q.model_id)!;
-                          if (confirmReset(u))
-                            action.run(async () => void (await api.resetUsage(tenant.id, q.model_id), await usage.reload()));
-                        }}
-                      >
-                        Reset usage
-                      </button>
-                    )}
-                    <button
-                      disabled={action.busy}
-                      onClick={() => act(() => api.setQuota(tenant.id, q.model_id, q.token_limit, q.window, !q.shadow))}
-                    >
-                      {q.shadow ? "Enforce" : "Dry run"}
-                    </button>
-                    <button className="danger" disabled={action.busy} onClick={() => act(() => api.deleteQuota(q.id))}>
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <TenantQuotas
+        tenant={tenant}
+        quotas={quotas}
+        models={data.models}
+        usage={usage.data ?? null}
+        busy={action.busy}
+        act={act}
+        resetUsage={(modelId) =>
+          action.run(async () => void (await api.resetUsage(tenant.id, modelId), await usage.reload()))
+        }
+      />
 
       {newKey && (
         <Modal title="Key created" onClose={() => setNewKey(null)}>
