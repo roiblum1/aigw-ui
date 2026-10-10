@@ -47,6 +47,12 @@ type Quota struct {
 	Limit      int64  `json:"limit"`
 	Window     string `json:"window"`
 	Shadow     bool   `json:"shadow"`
+	// Unit is what Limit, Used and OverageUsed are counted in: "tokens", or
+	// "credits" for a model with prices. A credit is 0.00001 dollars.
+	Unit string `json:"unit"`
+	// DryRun is set while the model's prices are tried out: the tenant is
+	// counted and not refused.
+	DryRun bool `json:"dry_run,omitempty"`
 	// Used is the highest counter: each counter is held to the limit on its own.
 	// It leaves out what was used as best-effort, which is OverageUsed.
 	Used        int64     `json:"used"`
@@ -69,6 +75,10 @@ type Pool struct {
 	Used      int64     `json:"used"`
 	ResetsAt  time.Time `json:"resets_at"`
 	Counters  []Counter `json:"counters"`
+	Unit      string    `json:"unit"`
+	// DryRun is set while the model's prices are tried out. Limit is then
+	// the largest there is and not the model's pool.
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
 type Report struct {
@@ -144,13 +154,13 @@ func (s *Service) Report(ctx context.Context, tenantID string) (Report, error) {
 		if b.tenantSlug == "" {
 			rep.Pools = append(rep.Pools, Pool{
 				ModelID: b.modelID, ModelName: b.modelName, Limit: b.limit, Window: b.window,
-				Used: used, ResetsAt: resets, Counters: counters,
+				Used: used, ResetsAt: resets, Counters: counters, Unit: b.unit, DryRun: b.dryRun,
 			})
 			continue
 		}
 		rep.Quotas = append(rep.Quotas, Quota{
 			TenantID: b.tenantID, TenantSlug: b.tenantSlug, ModelID: b.modelID, ModelName: b.modelName,
-			Limit: b.limit, Window: b.window, Shadow: b.shadow,
+			Limit: b.limit, Window: b.window, Shadow: b.shadow, Unit: b.unit, DryRun: b.dryRun,
 			Used: used, OverageUsed: overage, ResetsAt: resets, Counters: counters,
 			BestEffortUntil: until[[2]string{b.modelID, b.tenantID}],
 		})

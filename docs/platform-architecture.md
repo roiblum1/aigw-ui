@@ -24,11 +24,13 @@ UI and API server, does of it today:
 | Part of the design | Today |
 |---|---|
 | Tenants, API keys, model catalog, quotas | Built |
+| The path of a request | As designed: client, gateway, model. No request passes through this tool. It writes objects to the clusters and reads the counters |
+| Prices and budgets in money | Built: prices per model for input, cached input and output. The gateway computes each request's cost, and quotas and usage are in dollars, per minute, hour or day. See [pricing.md](pricing.md). Monthly budgets are not built: the gateway's longest window is a day |
 | Live usage | Built, read from the quota counters in Redis |
 | Config delivered to every cluster | Built, but differently: this tool applies it itself with each cluster's kubeconfig, not through ACM and Argo CD |
 | API keys in Postgres | Stored encrypted, not hashed, because every sync has to write them to the clusters |
 | Site weights | Built: the weight is ready instances of the model times the declared capacity of one instance, times 100 and never below 1. Rendered by the hub into each model's entry route. See [architecture.md](architecture.md#site-weights) |
-| Priority class per key, budgets | Not built |
+| Priority class | Built per model, not per key: a tenant whose budget is spent is served as best-effort, or tenants share a pool. See [optimization.md](optimization.md) |
 | Usage collector and past usage | Not built. Usage is the current window only |
 | Site picker, site reporter, peer listener, EPP settings | Not part of this tool. They belong to the cluster charts |
 

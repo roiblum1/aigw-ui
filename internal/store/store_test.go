@@ -364,3 +364,137 @@ func TestPoolsOfABestEffortModel(t *testing.T) {
 		t.Error("the pool is still rendered after the cluster stopped serving the model")
 	}
 }
+
+// A model's prices wait for their day. When it comes, the model is counted
+// in credits: its limits are converted once and it starts in dry-run.
+func TestPricesStartOnTheirDay(t *testing.T) {
+	s, ctx := open(t)
+	cluster, err := s.CreateCluster(ctx, Cluster{Name: "site1-a", Namespace: "ai-gateway", GatewayName: "gw", PeerPort: 8443}, []byte("kubeconfig"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	glm, err := s.CreateModel(ctx, ModelInput{Name: "glm", DefaultLimit: 50_000_000, DefaultWindow: "1d",
+		Endpoints: []Endpoint{{ClusterID: cluster.ID, Host: "glm.glm.svc", Port: 8000}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	team := tenant(t, s, ctx, "team-a")
+	small := tenant(t, s, ctx, "small")
+	for tn, limit := range map[string]int64{team.ID: 2_000_000, small.ID: 10} {
+		if err := s.UpsertQuota(ctx, tn, glm, limit, "1d", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := func() Model {
+		t.Helper()
+		m, err := s.GetModel(ctx, glm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	rendered := func() (string, bool) {
+		t.Helper()
+		st, err := s.RenderStateWithoutKeys(ctx, cluster.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Models[0].CostExpression, st.Models[0].DryRun
+	}
+
+	if _, err := s.SetPriceDryRun(ctx, glm, true); !errors.Is(err, ErrNotPriced) {
+		t.Errorf("dry-run on a model without prices: %v, want ErrNotPriced", err)
+	}
+	prices := Price{Input: 11574, Cached: 1157, Output: 46296, EffectiveAt: time.Now().Add(time.Hour)}
+	if _, err := s.SetPendingPrice(ctx, glm, prices, true); !errors.Is(err, ErrHasQuotas) {
+		t.Errorf("prices at once on a model with tenant quotas: %v, want ErrHasQuotas", err)
+	}
+	if _, err := s.SetPendingPrice(ctx, glm, Price{Input: 1, EffectiveAt: prices.EffectiveAt}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetPendingPrice(ctx, glm, prices, false); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := s.ApplyDuePrices(ctx)
+	if err != nil || len(applied) != 0 {
+		t.Fatalf("applied %v, %v before the day", applied, err)
+	}
+	m := get()
+	if m.Unit != UnitTokens || m.Prices != nil || m.PendingPrices == nil || m.PendingPrices.Input != 11574 || m.PendingPrices.Version != 1 {
+		t.Errorf("before the day: unit %s, prices %+v, pending %+v", m.Unit, m.Prices, m.PendingPrices)
+	}
+	if cost, dry := rendered(); cost != "" || dry {
+		t.Errorf("rendered %q, dry-run %v before the day", cost, dry)
+	}
+
+	if _, err := s.db.Exec(ctx, `UPDATE model_prices SET effective_at = now() - interval '1 second' WHERE model_id = $1`, glm); err != nil {
+		t.Fatal(err)
+	}
+	applied, err = s.ApplyDuePrices(ctx)
+	if err != nil || len(applied) != 1 || !applied[0].First || applied[0].ModelName != "glm" {
+		t.Fatalf("applied %+v, %v", applied, err)
+	}
+	if again, err := s.ApplyDuePrices(ctx); err != nil || len(again) != 0 {
+		t.Errorf("applied twice: %v, %v", again, err)
+	}
+	m = get()
+	if m.Unit != UnitCredits || m.Prices == nil || m.PendingPrices != nil || !m.PriceDryRun || m.Cost() != prices.Render().Expression() {
+		t.Errorf("after the day: %+v", m)
+	}
+	// 50,000,000 tokens at 11574 credits a million.
+	if m.DefaultLimit != 578_700 {
+		t.Errorf("pool = %d credits", m.DefaultLimit)
+	}
+	limits := map[string]int64{}
+	for _, tn := range []Tenant{team, small} {
+		quotas, err := s.ListQuotas(ctx, tn.ID)
+		if err != nil || len(quotas) != 1 {
+			t.Fatal(quotas, err)
+		}
+		limits[tn.Slug] = quotas[0].TokenLimit
+	}
+	// A limit never becomes 0: the gateway refuses to store that.
+	if limits["team-a"] != 23_148 || limits["small"] != 1 {
+		t.Errorf("limits in credits = %v", limits)
+	}
+	if cost, dry := rendered(); cost != prices.Render().Expression() || !dry {
+		t.Errorf("rendered %q, dry-run %v", cost, dry)
+	}
+
+	// New prices later change no limit and leave dry-run as it is.
+	if _, err := s.SetPriceDryRun(ctx, glm, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetPendingPrice(ctx, glm, Price{Input: 20000, Cached: 2000, Output: 80000, EffectiveAt: time.Now().Add(-time.Second)}, false); err != nil {
+		t.Fatal(err)
+	}
+	applied, err = s.ApplyDuePrices(ctx)
+	if err != nil || len(applied) != 1 || applied[0].First {
+		t.Fatalf("applied %+v, %v", applied, err)
+	}
+	m = get()
+	if m.Prices.Input != 20000 || m.PriceDryRun || m.DefaultLimit != 578_700 {
+		t.Errorf("after new prices: %+v, prices %+v", m, m.Prices)
+	}
+	history, err := s.ListPrices(ctx, glm)
+	if err != nil || len(history) != 2 || history[0].Input != 20000 {
+		t.Errorf("history = %+v, %v", history, err)
+	}
+}
+
+// Without tenant quotas there is no counter that could hold two prices, so
+// prices may start at once.
+func TestPricesAtOnceWithoutQuotas(t *testing.T) {
+	s, ctx := open(t)
+	glm := model(t, s, ctx, "glm", false)
+	if _, err := s.SetPendingPrice(ctx, glm, Price{Input: 100, Cached: 10, Output: 400}, true); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := s.ApplyDuePrices(ctx)
+	if err != nil || len(applied) != 1 {
+		t.Fatalf("applied %+v, %v", applied, err)
+	}
+	if name, err := s.DeletePendingPrice(ctx, glm); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleting prices that are in use: %q, %v", name, err)
+	}
+}

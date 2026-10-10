@@ -41,8 +41,8 @@ func (b *modelBody) input(name string, current *store.Model) (store.ModelInput, 
 		return store.ModelInput{}, invalid("name must start with a letter or digit and use only letters, digits and . _ : / -")
 	case render.Slug(name) == "":
 		return store.ModelInput{}, invalid("name must contain a letter or digit")
-	case in.DefaultLimit < 1:
-		return store.ModelInput{}, invalid("default_limit must be at least 1")
+	case in.DefaultLimit < 1 || in.DefaultLimit > render.MaxLimit:
+		return store.ModelInput{}, invalid("default_limit must be between 1 and %d, the most the gateway can count in one window", render.MaxLimit)
 	case !validWindow(in.DefaultWindow):
 		return store.ModelInput{}, invalid("default_window must be 1m, 1h or 1d")
 	}

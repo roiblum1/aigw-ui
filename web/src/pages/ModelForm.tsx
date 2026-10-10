@@ -1,7 +1,7 @@
 import { useState } from "react";
 import BackendList from "./BackendList";
 import { api, type Cluster, type Model, type Window } from "../api";
-import { Field, FormModal, WindowSelect } from "../components";
+import { Field, FormModal, LimitInput, WindowSelect, limitText, limitValue } from "../components";
 
 interface EndpointRow {
   enabled: boolean;
@@ -18,7 +18,8 @@ export default function ModelForm(props: {
 }) {
   const { model, clusters } = props;
   const [name, setName] = useState(model?.name ?? "");
-  const [limit, setLimit] = useState(String(model?.default_limit ?? 1));
+  const unit = model?.unit ?? "tokens";
+  const [limit, setLimit] = useState(limitText(model?.default_limit ?? 1, unit));
   const [window, setWindow] = useState<Window>(model?.default_window ?? "1d");
   const [cost, setCost] = useState(model?.cost_expression ?? "");
   const [rows, setRows] = useState<Record<string, EndpointRow>>(() =>
@@ -38,7 +39,7 @@ export default function ModelForm(props: {
   const save = async () => {
     const body = {
       name,
-      default_limit: Number(limit),
+      default_limit: limitValue(limit, unit),
       default_window: window,
       cost_expression: cost.trim(),
       endpoints: clusters
@@ -131,31 +132,37 @@ export default function ModelForm(props: {
       <h3>Shared pool</h3>
       <p className="hint">
         Applies once at least one tenant has a quota on this model. Every request draws from this pool as well as
-        from the tenant's own quota, and is let through while either has tokens left. Keep it at 1 to hold every
-        tenant strictly to its quota. Set it to what the model can serve to let tenants borrow what others leave
-        unused.
+        from the tenant's own quota, and is let through while either has room left. Keep it at the smallest value
+        to hold every tenant strictly to its quota. Set it to what the model can serve to let tenants borrow what
+        others leave unused.
       </p>
       <div className="grid-2">
-        <Field label="Tokens">
-          <input required type="number" min={1} value={limit} onChange={(e) => setLimit(e.target.value)} />
+        <Field label={unit === "credits" ? "Dollars" : "Tokens"}>
+          <LimitInput unit={unit} value={limit} onChange={setLimit} />
         </Field>
         <Field label="Window">
           <WindowSelect value={window} onChange={setWindow} />
         </Field>
       </div>
 
-      <h3>What a request costs</h3>
-      <Field
-        label="Cost expression"
-        hint="Optional. Leave empty to charge every token the same. Counts are whole numbers and literals need a u, e.g. input_tokens + output_tokens * 4u. input_tokens includes the cached part."
-      >
-        <input
-          value={cost}
-          spellCheck={false}
-          placeholder="total_tokens"
-          onChange={(e) => setCost(e.target.value)}
-        />
-      </Field>
+      {unit === "credits" ? (
+        <p className="hint">What a request costs comes from the model's prices. Change them with Prices in the model's row.</p>
+      ) : (
+        <>
+        <h3>What a request costs</h3>
+        <Field
+          label="Cost expression"
+          hint="Optional. Leave empty to charge every token the same. Counts are whole numbers and literals need a u, e.g. input_tokens + output_tokens * 4u. input_tokens includes the cached part."
+        >
+          <input
+            value={cost}
+            spellCheck={false}
+            placeholder="total_tokens"
+            onChange={(e) => setCost(e.target.value)}
+          />
+        </Field>
+        </>
+      )}
     </FormModal>
   );
 }

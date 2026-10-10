@@ -20,20 +20,25 @@ type ModelInput struct {
 }
 
 func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet, spent_mode, best_effort_unlimited FROM models ORDER BY name`)
+	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet, spent_mode, best_effort_unlimited, price_dry_run FROM models ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	models, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Model, error) {
 		m := Model{Endpoints: []Endpoint{}, Warnings: []string{}}
-		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet, &m.SpentMode, &m.BestEffortUnlimited)
+		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet, &m.SpentMode, &m.BestEffortUnlimited, &m.PriceDryRun)
 		return m, err
 	})
 	if err != nil {
 		return nil, err
 	}
+	prices, err := s.modelPrices(ctx)
+	if err != nil {
+		return nil, err
+	}
 	byID := make(map[string]*Model, len(models))
 	for i := range models {
+		prices.priced(&models[i])
 		byID[models[i].ID] = &models[i]
 	}
 	rows, err = s.db.Query(ctx,
@@ -119,9 +124,14 @@ func replaceEndpoints(ctx context.Context, tx pgx.Tx, modelID string, in ModelIn
 // GetModel returns a model's own settings, without its endpoints.
 func (s *Store) GetModel(ctx context.Context, id string) (Model, error) {
 	var m Model
-	err := s.db.QueryRow(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at FROM models WHERE id = $1`, id).
-		Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt)
-	return m, mapErr(err)
+	err := s.db.QueryRow(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, price_dry_run FROM models WHERE id = $1`, id).
+		Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.PriceDryRun)
+	if err != nil {
+		return m, mapErr(err)
+	}
+	prices, err := s.modelPrices(ctx)
+	prices.priced(&m)
+	return m, err
 }
 
 func (s *Store) DeleteModel(ctx context.Context, id string) error {

@@ -117,6 +117,24 @@ type Model struct {
 	// Warnings are differences between the sites that serve the model which
 	// an operator should look at.
 	Warnings []string `json:"warnings"`
+	// Unit is what the model's limits and usage are counted in: UnitTokens,
+	// or UnitCredits once it has prices.
+	Unit string `json:"unit"`
+	// Prices are the prices in use, PendingPrices the ones that wait for
+	// their day. Both are nil when there are none.
+	Prices        *Price `json:"prices"`
+	PendingPrices *Price `json:"pending_prices"`
+	// PriceDryRun counts every tenant of a priced model and refuses nobody.
+	PriceDryRun bool `json:"price_dry_run"`
+}
+
+// Cost returns the cost expression that is rendered for the model: the one
+// of its prices, or the one that was typed in.
+func (m Model) Cost() string {
+	if m.Prices != nil {
+		return m.Prices.Render().Expression()
+	}
+	return m.CostExpression
 }
 
 // What happens to a tenant whose budget for a model is spent.
@@ -167,6 +185,10 @@ type Quota struct {
 	Window     string `json:"window"`
 	// Shadow quotas are counted but never reject a request.
 	Shadow bool `json:"shadow"`
+	// Unit is what TokenLimit is counted in: UnitTokens, or UnitCredits for
+	// a model with prices. The field keeps its name for callers that
+	// already use it.
+	Unit string `json:"unit"`
 }
 
 type Overview struct {

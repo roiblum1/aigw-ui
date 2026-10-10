@@ -72,9 +72,13 @@ type Model struct {
 	DefaultLimit  int64
 	DefaultWindow string
 	// CostExpression is CEL over the request's token counts. Empty leaves the
-	// gateway's default, total_tokens.
+	// gateway's default, total_tokens. For a priced model it is the
+	// expression of its prices.
 	CostExpression string
-	Quotas         []TenantQuota
+	// DryRun counts every tenant of the model and refuses nobody. It is how
+	// a model's prices are tried out before its quotas are enforced in money.
+	DryRun bool
+	Quotas []TenantQuota
 	// Existing is set for a model discovered on the cluster: its route and
 	// backends are already there and owned by someone else, so only the
 	// QuotaPolicy is rendered and it is attached to these backends.

@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"strings"
 
+	"aigw-ui/internal/render"
 	"aigw-ui/internal/selftest"
 	"aigw-ui/internal/store"
+	"aigw-ui/internal/syncer"
 )
 
 func (s *Server) listTenants(w http.ResponseWriter, r *http.Request) {
@@ -147,8 +149,8 @@ func (s *Server) upsertQuota(w http.ResponseWriter, r *http.Request) {
 	case b.ModelID == "":
 		fail(w, invalid("model_id is required"))
 		return
-	case b.TokenLimit < 1:
-		fail(w, invalid("token_limit must be at least 1"))
+	case b.TokenLimit < 1 || b.TokenLimit > render.MaxLimit:
+		fail(w, invalid("token_limit must be between 1 and %d, the most the gateway can count in one window", render.MaxLimit))
 		return
 	case !validWindow(b.Window):
 		fail(w, invalid("window must be 1m, 1h or 1d"))
@@ -200,11 +202,19 @@ func (s *Server) quotaSummary(ctx context.Context, tenantID, modelID string, quo
 		if q.ModelID != modelID {
 			continue
 		}
-		summary := fmt.Sprintf("Set quota of %s on %s to %d tokens per %s", t.Slug, q.ModelName, q.TokenLimit, windowNames[q.Window])
+		summary := fmt.Sprintf("Set quota of %s on %s to %s per %s", t.Slug, q.ModelName, amount(q.TokenLimit, q.Unit), windowNames[q.Window])
 		if q.Shadow {
 			summary += " (dry run)"
 		}
 		return summary
 	}
 	return "Set a quota for " + t.Slug
+}
+
+// amount writes a limit in its unit: "2000000 tokens" or "$12.50".
+func amount(n int64, unit string) string {
+	if unit == store.UnitCredits {
+		return syncer.Dollars(n)
+	}
+	return fmt.Sprintf("%d tokens", n)
 }

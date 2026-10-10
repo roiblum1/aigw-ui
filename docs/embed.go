@@ -28,7 +28,7 @@ type Doc struct {
 }
 
 // guides is the order of the guides: what a new operator reads first.
-var guides = []string{"how-it-works", "user-guide", "optimization", "architecture", "operations", "deployment", "security", "api", "platform-architecture"}
+var guides = []string{"how-it-works", "user-guide", "optimization", "pricing", "architecture", "operations", "deployment", "security", "api", "platform-architecture"}
 
 // List returns every document: the guides in reading order, then the release
 // notes, newest first.

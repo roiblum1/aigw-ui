@@ -36,7 +36,9 @@ func quotaRevision(m Model) string {
 		Limit  int64
 		Window string
 		Cost   string
-	}{tenantRules(m), limit, window, m.CostExpression})
+		// Left out when unset, so a model keeps the revision it had.
+		DryRun bool `json:",omitempty"`
+	}{tenantRules(m), limit, window, m.CostExpression, m.DryRun})
 	if err != nil {
 		return ""
 	}
@@ -88,7 +90,7 @@ func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *uns
 			},
 			"quota": map[string]any{"limit": q.Limit, "duration": q.Window},
 		}
-		if q.Shadow || overage {
+		if q.Shadow || overage || m.DryRun {
 			rule["shadowMode"] = true
 		}
 		rules = append(rules, rule)
@@ -137,13 +139,14 @@ func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *uns
 
 // defaultBucket returns the limit and window of the model's default bucket.
 // On the best-effort route it is the largest limit there is: a tenant
-// without a rule of its own is counted there and must not be refused.
+// without a rule of its own is counted there and must not be refused. The
+// same goes for a model in dry-run.
 func (m Model) defaultBucket(overage bool) (int64, string) {
 	limit, window := m.DefaultLimit, m.DefaultWindow
 	if !validQuota(limit, window) {
 		limit, window = fallbackLimit, fallbackWindow
 	}
-	if overage {
+	if overage || m.DryRun {
 		limit = serviceQuotaLimit
 	}
 	return limit, window

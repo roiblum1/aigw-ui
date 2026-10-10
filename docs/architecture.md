@@ -408,6 +408,26 @@ adds the same action and summary it writes to the task log. The task log
 answers "did it reach the clusters"; the audit log answers "who asked, and
 what did the server say". Bodies are not stored.
 
+## Prices
+
+`model_prices` holds every set of prices of a model, in credits for a
+million tokens, with the day it starts and when the server began using it.
+The newest applied row is the one in use.
+
+- `syncer.RunPrices` wakes at every 00:00 UTC and once at start. It applies
+  the rows whose day has come in one transaction and queues one sync. For a
+  model's first prices the same transaction converts `default_limit` and
+  every `token_limit` and sets `price_dry_run`.
+- `render.Prices.Expression` returns the cost expression. `store` puts it
+  in `render.Model.CostExpression` in place of a typed one, so the renderer
+  itself knows nothing about prices.
+- In dry-run every tenant rule is rendered with `shadowMode` and the
+  default bucket with the largest limit. The usage report marks those
+  quotas, and the overage loop skips them as it skips any shadow quota.
+- `internal/costcel` evaluates the rendered expression in the tests, with
+  the gateway's CEL environment, so a change to it that the gateway would
+  refuse fails a test.
+
 ## Self-test
 
 The self-test runs in the background in the server. It creates a tenant
@@ -468,24 +488,37 @@ Two things follow from that name:
 
 ## Not verified on a real gateway
 
-The rendered objects follow the published API, but these points have not been
-run against a live Envoy AI Gateway:
+**Run on a gateway.** On OpenShift 4.22 with Envoy Gateway 1.9.1 and Envoy
+AI Gateway 1.1.0, one site, a model added by hand:
 
-- the `forwardClientIDHeader` field of the API key `SecurityPolicy`;
-- that a `RegularExpression` client selector puts all matching keys in one bucket;
+- the `forwardClientIDHeader` field of the API key `SecurityPolicy`, and
+  that the gateway replaces an `x-aigw-client-id` a client sends;
+- that a `RegularExpression` client selector counts a tenant's keys in one
+  bucket, and that two tenants are counted apart;
+- that the counter names computed for the Usage page are the ones the rate
+  limit service writes;
+- that a tenant over its limit gets 429, and that a reset frees it;
+- that the counter grows by a request's cost plus 1;
+- that the gateway uses the cost expression of a priced model, for plain
+  and for streamed answers;
+- that a model in dry-run (`shadowMode` on every rule, the largest default
+  bucket) refuses nobody;
+- that the gateway removes `kv_transfer_params` from a request;
+- that `/v1/models` answers 401 without a key once "Enforce API keys" is
+  on. Set the cluster's API key for `/v1/models`.
+
+**Not run:**
+
 - that counters are shared when two clusters use the same Redis;
 - that a quota takes effect on a backend whose route sets no `modelNameOverride`. The gateway documents that a quota "only applies when its `modelName` matches the `modelNameOverride`" and says nothing about routes without one. The UI marks these backends "quota unverified";
-- how a dry-run quota (`shadowMode`) behaves next to the default bucket. The gateway documents that a shadowed rule never rejects; whether the tenant is then still held to the pool for tenants without a quota is not stated;
-- that the gateway accepts every cost expression the API lets through. The API only checks the names and characters used;
-- that the gateway's controller sets a condition within two seconds, and that its first condition is `Accepted` or `NotAccepted`. If it is slower, the task log shows the object without a gateway verdict, or with the verdict on the previous version;
-- that the counter names computed for the Usage page match what a live rate limit service writes. They follow the gateway's and the rate limit service's source. If they do not match, the page says what it found in Redis instead;
-- that a reset frees a tenant that was already rejected. Deleting the counter was tested; the rate limit service's own over-limit cache was not;
-- that `/v1/models` still answers once "Enforce API keys" is on. If it needs a key, set the cluster's API key for `/v1/models`.
+- how one dry-run quota (`shadowMode`) behaves next to a small default bucket. The gateway documents that a shadowed rule never rejects; whether the tenant is then still held to the pool for tenants without a quota is not stated;
+- a real vLLM reporting cached tokens. The run used a stand-in that reports them the way vLLM documents it;
+- that the gateway's controller sets a condition within two seconds in every case. If it is slower, the task log shows the object without a gateway verdict, or with the verdict on the previous version;
+- that a reset frees a tenant when the rate limit service keeps its own over-limit cache (`LOCAL_CACHE_SIZE_IN_BYTES`).
 
-The **Self-test** button on a cluster checks several of these with real
-requests: client ID forwarding and the tenant rule (a request with a new key
-is answered and counted), the counter names, the refusal over the limit, and
-the reset. Run it on one test cluster before a first sync to production.
+The **Self-test** button on a cluster checks most of the first list with
+real requests on your own gateway. Run it on one test cluster before a first
+sync to production, and after every upgrade of the gateway.
 
 Not verified for site weights, which were tested against a real Kubernetes API
 server with cut-down CRDs but not against KServe or Envoy Gateway:

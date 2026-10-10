@@ -2,7 +2,8 @@
 # publishes a GitHub release for a version tag.
 #
 #   pull request     tests only
-#   push to main     tests, then image tags "main" and "sha-<commit>"
+#   push to main     tests, then image tags "main" and "sha-<commit>", then an
+#                    upgrade of the hub to that image when HUB_DEPLOY is "true"
 #   tag v1.2.3       tests, then image tags "1.2.3" and "latest", and a GitHub
 #                    release whose text is docs/release-notes/v1.2.3.md
 #
@@ -80,10 +81,11 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Build the UI
+      - name: Test and build the UI
         working-directory: web
         run: |
           npm ci
+          npm test
           npx tsc --noEmit
           npm run build
 
@@ -129,6 +131,31 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Upgrades one hub to the image that was just pushed. It runs only when
+  # the repository variable HUB_DEPLOY is "true". The account it uses is in
+  # the secrets of the environment "hub": see docs/operations.md.
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.HUB_DEPLOY == 'true'
+    needs: image
+    runs-on: ubuntu-latest
+    environment: hub
+    # One upgrade at a time, in the order of the commits. A running upgrade
+    # is never cut off halfway.
+    concurrency:
+      group: deploy-hub
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upgrade the hub
+        env:
+          HUB_SERVER: ${{ secrets.HUB_SERVER }}
+          HUB_TOKEN: ${{ secrets.HUB_TOKEN }}
+          HUB_CA: ${{ secrets.HUB_CA }}
+          HUB_NAMESPACE: ${{ vars.HUB_NAMESPACE }}
+          HUB_RELEASE: ${{ vars.HUB_RELEASE }}
+        run: IMAGE_TAG="sha-${GITHUB_SHA::12}" hack/deploy-hub.sh
 
   release:
     if: github.ref_type == 'tag'

@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { X, type LucideIcon } from "lucide-react";
-import { Unauthorized, type Window } from "./api";
+import { Unauthorized, type Unit, type Window } from "./api";
+
+export * from "./money";
 
 export const UNAUTHORIZED_EVENT = "aigw-unauthorized";
 
@@ -174,8 +176,32 @@ export function WindowSelect(props: { value: Window; onChange: (w: Window) => vo
 
 export const windowLabel: Record<Window, string> = { "1m": "minute", "1h": "hour", "1d": "day" };
 
-export function formatTokens(n: number): string {
-  return `${n.toLocaleString("en-US")} ${n === 1 ? "token" : "tokens"}`;
+
+/** A field for a limit: whole tokens, or dollars and cents. */
+export function LimitInput(props: {
+  unit: Unit;
+  value: string;
+  onChange: (value: string) => void;
+  label?: string;
+  autoFocus?: boolean;
+  onKeyDown?: (e: KeyboardEvent<HTMLInputElement>) => void;
+}) {
+  const money = props.unit === "credits";
+  return (
+    <input
+      required
+      type="number"
+      min={money ? 0.00001 : 1}
+      max={money ? 42949.67 : 4294967295}
+      step={money ? "any" : 1}
+      autoFocus={props.autoFocus}
+      placeholder={money ? "Dollars" : "Tokens"}
+      aria-label={props.label}
+      value={props.value}
+      onChange={(e) => props.onChange(e.target.value)}
+      onKeyDown={props.onKeyDown}
+    />
+  );
 }
 
 export function formatTime(iso: string | null): string {

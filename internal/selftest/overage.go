@@ -44,6 +44,8 @@ func (t *test) overage() (string, string) {
 	switch {
 	case t.model.SpentMode != store.SpentBestEffort:
 		return Skipped, "The model refuses a tenant past its budget. That is the step before this one."
+	case t.model.PriceDryRun:
+		return Skipped, "The model's prices are in dry-run, and nobody is moved to best-effort during it."
 	case !t.hasBestEffortRoute():
 		return Skipped, "This cluster has no entry route for the model, so it has no best-effort route either. It refuses a tenant past its budget, which the step before this one checks."
 	case t.r.overage == nil || t.r.usage == nil:

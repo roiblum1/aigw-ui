@@ -92,6 +92,34 @@ back it up.
 - No Kubernetes service account token is mounted. The server has no rights on the hub cluster itself.
 - A NetworkPolicy allows only the server pod to reach Postgres.
 
+## What a client cannot do
+
+- **Name another tenant.** The gateway checks the API key and then writes
+  the tenant into the header `x-aigw-client-id`, replacing whatever the
+  client sent. Quotas and usage follow that header. The self-test step "A
+  client cannot choose its tenant" checks it on a real gateway. A cluster
+  in the fleet must enforce API keys for this reason.
+- **Set the cached token count of its own answer.** A priced model charges
+  the cached part of a prompt less, by the count the model server reports.
+  vLLM 0.31 lets a request set that count through `kv_transfer_params`.
+  The hub's backends remove the field, and the price expression charges a
+  cached count above the prompt as not cached. Backends the cluster's own
+  chart brings need the same line: see
+  [deployment](deployment.md#before-cached-prompts-are-charged-less).
+
+What a client can do: leave a streamed answer before its end. The model
+server reports the token counts at the end, so that request is not charged.
+
+## The account CI upgrades the hub with
+
+When [upgrades from CI](operations.md#upgrading-a-hub-from-ci) are set up,
+GitHub holds the token of a service account that is admin of the hub's
+namespace. It can read that namespace's Secrets, among them the admin token
+and the encryption key, and through the release it decides which image
+runs. It has no rights elsewhere on the cluster and none on the LLM
+clusters. Whoever can change the workflow on `main` or the environment's
+secrets has what the account has.
+
 ## What the tool can change on an LLM cluster
 
 It applies and deletes only objects labelled

@@ -53,6 +53,7 @@ func run() error {
 
 	sy := syncer.New(st, cfg.AutoSync, cfg.DiscoverEvery, cfg.SyncEvery)
 	go sy.Run(ctx)
+	go sy.RunPrices(ctx)
 
 	// Usage monitoring is optional and must not keep the server from starting:
 	// Redis being down only makes the usage page report an error.

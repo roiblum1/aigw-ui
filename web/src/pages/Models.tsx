@@ -1,14 +1,15 @@
 import { useState } from "react";
 import BackendList from "./BackendList";
 import ModelForm from "./ModelForm";
+import ModelPrices from "./ModelPrices";
 import { Boxes, Plus, Radar } from "lucide-react";
 import { api, type Endpoint, type Model } from "../api";
 import {
   Empty,
   ErrorBanner,
   PageHeader,
+  formatAmount,
   formatTime,
-  formatTokens,
   useAction,
   useLoad,
   windowLabel,
@@ -21,6 +22,9 @@ export default function Models() {
   }));
   const action = useAction();
   const [editing, setEditing] = useState<Model | "new" | null>(null);
+  // The ID, so the dialog shows the model as it is after a change.
+  const [pricing, setPricing] = useState<string | null>(null);
+  const priced = data?.models.find((m) => m.id === pricing);
 
   const remove = (m: Model) => {
     const discovered = m.endpoints.some((e) => e.source === "discovered");
@@ -174,11 +178,25 @@ export default function Models() {
                     )}
                   </td>
                   <td>
-                    {formatTokens(m.default_limit)} per {windowLabel[m.default_window]}
-                    {m.cost_expression && (
-                      <span className="tag" title={m.cost_expression}>
-                        weighted
+                    {formatAmount(m.default_limit, m.unit)} per {windowLabel[m.default_window]}
+                    {m.unit === "credits" ? (
+                      <span className="tag" title="The model has prices. Its quotas and usage are counted in dollars.">
+                        priced
                       </span>
+                    ) : (
+                      m.cost_expression && (
+                        <span className="tag" title={m.cost_expression}>
+                          weighted
+                        </span>
+                      )
+                    )}
+                    {m.price_dry_run && (
+                      <span className="tag warn" title="Every tenant is counted in dollars and nobody is refused. Switch it off under Prices.">
+                        dry-run
+                      </span>
+                    )}
+                    {m.pending_prices && (
+                      <div className="detail">New prices from {formatTime(m.pending_prices.effective_at)}</div>
                     )}
                   </td>
                   <td className="row-actions">
@@ -208,6 +226,12 @@ export default function Models() {
                         <option value="best-effort-all">Best-effort, also without a quota</option>
                       </select>
                     )}
+                    <button
+                      title="What a million tokens of the model cost. With prices, quotas and usage are counted in dollars."
+                      onClick={() => setPricing(m.id)}
+                    >
+                      Prices
+                    </button>
                     <button onClick={() => setEditing(m)}>Edit</button>
                     <button className="danger" disabled={action.busy} onClick={() => remove(m)}>
                       Delete
@@ -220,6 +244,7 @@ export default function Models() {
         </div>
       )}
 
+      {priced && <ModelPrices model={priced} onClose={() => setPricing(null)} onChanged={reload} />}
       {editing && data && (
         <ModelForm
           model={editing === "new" ? null : editing}

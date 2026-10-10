@@ -1,3 +1,5 @@
+import type { Unit } from "./money";
+
 export type Window = "1m" | "1h" | "1d";
 
 export interface Cluster {
@@ -92,6 +94,38 @@ export interface Model {
   best_effort_unlimited: boolean;
   /** Differences between the sites that serve the model. */
   warnings: string[];
+  /** What the model's limits and usage are counted in. */
+  unit: Unit;
+  /** The prices in use, and the ones that wait for their day. */
+  prices: Price | null;
+  pending_prices: Price | null;
+  /** Every tenant is counted and nobody is refused. */
+  price_dry_run: boolean;
+}
+
+/** A credit is 0.00001 dollars. A model without prices is counted in tokens. */
+export type { Unit } from "./money";
+
+/** Prices of a model, in credits for a million tokens. */
+export interface Price {
+  version: number;
+  price_input: number;
+  price_cached: number;
+  price_output: number;
+  effective_at: string;
+  /** Null until the server has started using the prices. */
+  applied_at: string | null;
+  note: string;
+  created_at: string;
+}
+
+/** Prices as they are sent, in dollars for a million tokens. */
+export interface PriceInput {
+  input_usd: number;
+  cached_usd: number;
+  output_usd: number;
+  now: boolean;
+  note: string;
 }
 
 export type SpentMode = "refuse" | "best-effort";
@@ -137,10 +171,12 @@ export interface Quota {
   id: string;
   model_id: string;
   model_name: string;
+  /** In tokens, or in credits for a model with prices. See unit. */
   token_limit: number;
   window: Window;
   /** Counted but never rejects a request. */
   shadow: boolean;
+  unit: Unit;
 }
 
 export interface TenantDetail {
@@ -234,6 +270,10 @@ export interface UsageQuota {
   counters: { backend: string; clusters: string[]; used: number; overage?: boolean }[];
   /** Set while the tenant's requests for the model are served as best-effort. */
   best_effort_until?: string;
+  /** What limit, used and overage_used are counted in. */
+  unit: Unit;
+  /** The model's prices are being tried out: counted, nobody refused. */
+  dry_run?: boolean;
 }
 
 /** A model's default bucket: every request to the model is charged to it. */
@@ -244,6 +284,9 @@ export interface UsagePool {
   window: Window;
   used: number;
   resets_at: string;
+  unit: Unit;
+  /** The model's prices are being tried out. The limit is then not the pool. */
+  dry_run?: boolean;
 }
 
 export interface UsageReport {
@@ -375,6 +418,10 @@ export const api = {
   setModelFleet: (id: string, enabled: boolean) => request<void>("PUT", `/models/${id}/fleet`, { enabled }),
   setModelSpent: (id: string, mode: SpentMode, unlimited: boolean) =>
     request<void>("PUT", `/models/${id}/spent`, { mode, best_effort_unlimited: unlimited }),
+  prices: (id: string) => request<Price[]>("GET", `/models/${id}/prices`),
+  setPrices: (id: string, p: PriceInput) => request<Price[]>("PUT", `/models/${id}/prices`, p),
+  deletePendingPrices: (id: string) => request<void>("DELETE", `/models/${id}/prices/pending`),
+  setPriceDryRun: (id: string, enabled: boolean) => request<void>("PUT", `/models/${id}/prices/dry-run`, { enabled }),
   overage: () => request<OverageEntry[]>("GET", "/overage"),
   drainSite: (modelId: string, clusterId: string, drained: boolean) =>
     request<void>("PUT", `/models/${modelId}/sites/${clusterId}/drain`, { drained }),
