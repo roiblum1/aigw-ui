@@ -145,16 +145,21 @@ export default function TenantQuotas(props: {
                   <td className="row-actions">
                     {editing ? (
                       <>
-                        <button type="submit" form={`quota-${q.id}`} className="primary" disabled={busy}>
+                        {/* The keys keep React from turning the Edit button that was
+                            just clicked into this submit button: the browser would
+                            then finish that click by submitting the form. */}
+                        <button key="save" type="submit" form={`quota-${q.id}`} className="primary" disabled={busy}>
                           Save
                         </button>
-                        <button disabled={busy} onClick={() => setEdit(null)}>
+                        <button key="cancel" type="button" disabled={busy} onClick={() => setEdit(null)}>
                           Cancel
                         </button>
                       </>
                     ) : (
                       <>
                         <button
+                          key="edit"
+                          type="button"
                           disabled={busy}
                           onClick={() => setEdit({ id: q.id, limit: limitText(q.token_limit, q.unit), window: q.window })}
                         >
