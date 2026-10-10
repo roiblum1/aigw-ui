@@ -10,7 +10,13 @@ import (
 )
 
 // QuotaRevisionAnnotation is set on every AIGatewayRoute this tool renders.
-const QuotaRevisionAnnotation = "aigw-ui.io/quota-revision"
+//
+// The name has to begin with gateway.envoyproxy.io/. Envoy Gateway builds a
+// route again only when something it reads has changed, and of a route's
+// annotations it reads the ones with that prefix and no others. Seen on
+// Envoy Gateway 1.9.1: an annotation with another prefix reached the
+// HTTPRoute and changed nothing in the proxy.
+const QuotaRevisionAnnotation = "gateway.envoyproxy.io/aigw-ui-quota-revision"
 
 // quotaRevision identifies the quota rules of a model. It goes on the
 // model's routes as an annotation, to work around this in AI Gateway 1.1.0:
