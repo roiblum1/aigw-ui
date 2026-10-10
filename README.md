@@ -23,11 +23,13 @@ cluster.
 - **Clusters**: register LLM clusters, test the connection, see sync status, preview the YAML before it is applied.
 - **Models**: discovered automatically every minute from each gateway's `/v1/models` and its `AIGatewayRoute` objects. Models can also be added by hand.
 - **Tenants**: one tenant per team, with API keys that can be issued and revoked.
-- **Quotas**: a token budget per tenant per model, per minute, hour or day, rendered as `QuotaPolicy` on every cluster, with an optional dry-run mode and a per-model cost expression.
+- **Quotas**: a budget per tenant per model, per minute, hour or day, rendered as `QuotaPolicy` on every cluster, with an optional dry-run mode. In tokens, or in dollars for a model with prices.
+- **Prices**: per model, what a million input, cached input and output tokens cost. The gateway computes each request's cost, so a prompt answered from the prefix cache costs the tenant less.
+- **Spent budgets**: per model, a tenant past its budget is refused, draws from a shared pool, or is served as best-effort behind everyone else.
 - **Entry route and site weights**: per model, renders on every fleet cluster the route that sends each conversation to one of the sites that serve the model, weighted by how many instances each site has ready.
-- **Usage**: live tokens used per tenant and model in the current window, read from the quota counters in Redis.
+- **Usage**: what each tenant has used per model in the current window, in tokens or dollars, read from the quota counters in Redis.
 - **Activity**: a task log of every change, showing per cluster which objects were created, updated or deleted and whether the gateway accepted them, and an audit log of who asked for what.
-- **Self-test**: checks on a real gateway, with a temporary tenant, that a key works, usage is counted, a quota refuses and a reset frees.
+- **Self-test**: checks on a real gateway, with a temporary tenant, that a key works, usage is counted at the right amount, a quota refuses, a reset frees, a client cannot name another tenant, and the model reports cached tokens.
 - **Architecture**: the design of the whole multi-site platform, with its diagrams, inside the UI.
 - **API**: everything the UI does is available over REST for a self-service portal.
 
@@ -110,6 +112,8 @@ internal/gateway/      reads /v1/models from a gateway
 internal/syncer/       background sync and discovery loops, and task results
 internal/weights/      decides each site's share of a model's traffic from its ready capacity (pure)
 internal/usage/        reads the quota counters in Redis and builds the usage report
+internal/overage/      moves a tenant whose budget is spent to best-effort, from the counters
+internal/costcel/      checks and evaluates a cost expression the way the gateway does
 internal/selftest/     checks keys, counters and quotas with real requests through a gateway
 internal/secretbox/    AES-256-GCM encryption of stored secrets
 web/src/pages/         one file per page of the UI
@@ -119,7 +123,7 @@ deploy/chart/          Helm chart for OpenShift
 deploy/offline/        scripts that build and load the offline bundle
 docs/                  documentation; the platform design page is embedded in the server
 docs/release-notes/    what changed in each version
-hack/                  seed-demo.py: demo data for showing the UI without a gateway
+hack/                  checks CI runs, deploy-hub.sh, and seed-demo.py: demo data for the UI
 Containerfile          image build
 ```
 
@@ -132,12 +136,27 @@ test.
 ## Status
 
 Built and tested: the UI and API, Postgres storage, model discovery, sync to
-clusters, the image, the Helm chart on OpenShift 4.20, and the offline bundle.
+clusters, the image, the Helm chart on OpenShift, and the offline bundle.
 
-Not tested against a real Envoy AI Gateway installation yet. The Self-test
-button on a cluster checks most of the open points on your own gateway. See
+Run on a gateway (OpenShift 4.22, Envoy Gateway 1.9.1, Envoy AI Gateway
+1.1.0): keys, quotas, the self-test, best-effort with one site, and prices
+with a stand-in for the model server. Each release note says what was run
+and what was not. The Self-test button on a cluster checks the same points
+on your own gateway. Open points are in
 [docs/architecture.md](docs/architecture.md#not-verified-on-a-real-gateway).
 
-Not built yet: usage history beyond the current window, monthly budgets and grants,
-LDAP login. The audit log records a name the caller gives, not a verified
-identity.
+Known limit: on an entry route with two or more sites, Envoy AI Gateway up
+to 1.2.0 counts nothing, so quotas and prices have no effect there. A fix is
+proposed upstream.
+
+Not built yet: usage history beyond the current window, budgets longer than
+a day, LDAP login. The audit log records a name the caller gives, not a
+verified identity.
+
+## Tests and delivery
+
+Every change runs, in GitHub Actions: the Go tests with the race detector,
+the store tests against PostgreSQL, the tests against a real Kubernetes API
+server with the gateways' own definitions, the UI tests and build, and the
+chart checks. A commit on `main` then builds the image, and can upgrade one
+hub to it: see [docs/operations.md](docs/operations.md#upgrading-a-hub-from-ci).

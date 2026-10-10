@@ -1,3 +1,5 @@
+import type { Unit } from "./money";
+
 export type Window = "1m" | "1h" | "1d";
 
 export interface Cluster {
@@ -102,7 +104,7 @@ export interface Model {
 }
 
 /** A credit is 0.00001 dollars. A model without prices is counted in tokens. */
-export type Unit = "tokens" | "credits";
+export type { Unit } from "./money";
 
 /** Prices of a model, in credits for a million tokens. */
 export interface Price {

@@ -24,6 +24,58 @@ oc scale deploy/aigw-ui -n aigw-ui --replicas=1
 
 A restored database only works with the encryption key it was written with.
 
+## Upgrading a hub from CI
+
+The workflow can upgrade one hub to every commit on `main`, right after
+the image of that commit is pushed. It is off until you set it up.
+
+**What it does.** The job `deploy` runs `hack/deploy-hub.sh`: a `helm
+upgrade` of the release with the values it already has and the new image
+tag. It waits until the new pod is ready. If it is not ready within five
+minutes, Helm rolls the release back to what was running, and the job
+fails.
+
+**Set it up once.**
+
+1. On the hub's cluster, create an account that may change the release's
+   namespace and nothing else, with a token that does not expire:
+
+   ```sh
+   oc -n aigw-ui create serviceaccount aigw-ui-deployer
+   oc -n aigw-ui create rolebinding aigw-ui-deployer --clusterrole=admin \
+     --serviceaccount=aigw-ui:aigw-ui-deployer
+   oc -n aigw-ui apply -f - <<'YAML'
+   apiVersion: v1
+   kind: Secret
+   metadata:
+     name: aigw-ui-deployer-token
+     annotations: {kubernetes.io/service-account.name: aigw-ui-deployer}
+   type: kubernetes.io/service-account-token
+   YAML
+   ```
+
+2. In the GitHub repository, create an environment named `hub` with three
+   secrets: `HUB_SERVER` (the API address), `HUB_TOKEN` and `HUB_CA` (the
+   `token` and `ca.crt` of that Secret, decoded).
+3. Set the repository variable `HUB_DEPLOY` to `true`. `HUB_NAMESPACE` and
+   `HUB_RELEASE` are optional; both default to `aigw-ui`.
+
+**Things to know.**
+
+- **The database is not backed up first.** A new version can change the
+  database at start, and a rollback of the release does not undo that.
+  Changes so far only add tables and columns, so the older version keeps
+  working. Take a backup before a version whose release note says
+  otherwise.
+- **The account can read the Secrets of its namespace**, which hold the
+  admin token and the encryption key. Anyone who can change the workflow
+  on `main`, or the environment's secrets, can use it.
+- **Turn it off** by setting `HUB_DEPLOY` to anything else. To remove it
+  for good, delete the service account on the cluster too.
+- **Try it by hand** with `DRY_RUN=1 hack/deploy-hub.sh` and the same
+  variables: it asks the cluster whether it accepts the upgrade and
+  changes nothing.
+
 ## If the hub is down
 
 The LLM clusters keep serving with the configuration they last received. You
@@ -65,7 +117,13 @@ sign-in or API call.
 | Self-test: "No counter appeared under the expected name" | The rate limit service writes to another Redis, or names its keys differently | The message shows a real key from Redis when there is one. Check the Redis address on both sides, then `redis.keyPrefix` |
 | Self-test: reset step fails, "still refused" | The rate limit service caches over-limit tenants (`LOCAL_CACHE_SIZE_IN_BYTES`) | Expected with that setting: a reset only helps once the window ends |
 | A tenant named `selftest-…` stays on the Tenants page | A self-test was cut short, for example by a restart | Delete it, or run a self-test: it removes leftovers first |
-| A new quota on a model is not counted or enforced | AI Gateway 1.1.0 does not pass a new quota rule to the proxy until the route changes. The hub forces that on the routes it renders. On a route the cluster's chart owns it cannot | Create or revoke any key, which makes the gateway rebuild its routes, or wait for the next change. To check: the rule's name appears in the proxy's `config_dump` once it is in |
+| A new quota on a model is not counted or enforced | AI Gateway 1.1.0 does not pass a new quota rule to the proxy until the route changes. The hub forces that on the routes it renders, from 0.9.2 on with an annotation Envoy Gateway reads. On a route the cluster's chart owns it cannot | Create or revoke any key, which makes the gateway rebuild its routes, or wait for the next change. To check: the rule's name appears in the proxy's `config_dump` once it is in |
+| Saving a model fails with "cost_expression is not one the gateway accepts" | The expression would be ignored by the gateway, which then charges nothing | Fix it as the message says. Numbers next to a count need a `u`, and the result must be a whole number |
+| A priced model refuses nobody | It is in dry-run | Switch dry-run off under **Prices** on the Models page, after checking the tenants' limits |
+| New prices are not in effect | They start at the next 00:00 UTC | The model's row says from when. The Activity page gets a line "model.prices" when they start |
+| A cached prompt costs the same as a new one | The model server does not report cached tokens, or the cached price equals the input price | Run the self-test: "The model reports cached prompt tokens". See [deployment](deployment.md#before-cached-prompts-are-charged-less) |
+| Self-test: counter step fails, "The request is counted and its cost is not" | The gateway does not hand the computed cost to the rate limit service | Check the controller's log for the model's cost expression, and that the rate limit service is the one the controller is configured for |
+| Self-test: "A client cannot choose its tenant" fails | The gateway keeps an `x-aigw-client-id` header a client sends | Check that the `SecurityPolicy` `aigw-ui-api-key-auth` is attached to the listener clients use, and that no route in front of it sets the header |
 | A tenant past its budget still gets 429 on a best-effort model | The move takes up to one `config.overageInterval` plus a sync. Or: the quota's window is a second or a minute, the quota is a dry run, Redis is not configured, or more than 200 tenants are listed | See the warnings in the model's row and the Activity page for lines that start with "overage" |
 | Self-test: "did not show up on the best-effort route" | The route `fleetbe-<model>` is not accepted, or the model's entry route still takes the tenant's requests | `oc get aigatewayroute,envoypatchpolicy -n <namespace>`; both `fleetbe-<model>` objects must be accepted |
 | Requests are rejected with 429 for a tenant that has no quota | The model has quotas for other tenants, so this one only has the shared pool | Give the tenant a quota |

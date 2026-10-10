@@ -11,6 +11,10 @@ page explains each and then puts them side by side.
 
 Both are set per model, on the **Models** page.
 
+The examples count in tokens. For a model with prices the budgets and the
+pool are in dollars, and everything else on this page is the same. See
+[charging by cost](pricing.md).
+
 ## Shared pool
 
 **What it does.** The model gets one extra budget that every tenant can draw

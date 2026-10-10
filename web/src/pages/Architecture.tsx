@@ -16,6 +16,16 @@ function useIsDark() {
 /** What this tool does today, next to what the design asks of the hub. */
 const status: { part: string; today: string; built: "yes" | "partly" | "no" }[] = [
   { part: "Tenants, API keys, model catalog, quotas", today: "Built.", built: "yes" },
+  {
+    part: "The path of a request",
+    today: "As designed: client, gateway, model. No request passes through this tool. It writes objects to the clusters and reads the counters.",
+    built: "yes",
+  },
+  {
+    part: "Prices and budgets in money",
+    today: "Built: prices per model for input, cached input and output. The gateway computes each request's cost, and quotas and usage are in dollars, per minute, hour or day. Monthly budgets are not built: the gateway's longest window is a day.",
+    built: "partly",
+  },
   { part: "Live usage", today: "Built, read from the quota counters in Redis.", built: "yes" },
   { part: "Config to every cluster", today: "Built. This tool applies it itself with each cluster's kubeconfig, not through ACM and Argo CD.", built: "partly" },
   { part: "API keys in Postgres", today: "Stored encrypted, not hashed: every sync has to write them to the clusters.", built: "partly" },
@@ -24,7 +34,11 @@ const status: { part: string; today: string; built: "yes" | "partly" | "no" }[] 
     today: "Built: ready instances of the model times the declared capacity of one instance. The hub renders them into each model's entry route. See the Models page.",
     built: "partly",
   },
-  { part: "Priority class per key, budgets", today: "Not built.", built: "no" },
+  {
+    part: "Priority class",
+    today: "Built per model, not per key: a tenant whose budget is spent is served as best-effort, or tenants share a pool. See the Models page.",
+    built: "partly",
+  },
   { part: "Usage collector and past usage", today: "Not built. Usage is the current window only.", built: "no" },
   { part: "Site picker, site reporter, peer listener, EPP settings", today: "Not part of this tool. They belong to the cluster charts.", built: "no" },
 ];
