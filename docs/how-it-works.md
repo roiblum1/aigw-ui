@@ -408,7 +408,7 @@ with the keys it should hold and removes any other entry.
 ### Why a new quota needs the route to change
 
 **What it does.** Every route the server renders carries the annotation
-`aigw-ui.io/quota-revision`, which changes when the model's quota rules do.
+`gateway.envoyproxy.io/aigw-ui-quota-revision`, which changes when the model's quota rules do.
 
 **Why.** In Envoy AI Gateway 1.1.0 a tenant's rule is enforced through an
 entry in the proxy's route, and that entry is only written when Envoy

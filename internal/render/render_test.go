@@ -326,3 +326,12 @@ func TestServiceBackendsRemoveClientOnlyFields(t *testing.T) {
 		t.Errorf("only %d backends rendered", seen)
 	}
 }
+
+// Envoy Gateway rebuilds a route for a changed annotation only when its name
+// begins with its own prefix. With any other name a new tenant's quota is
+// not counted until something else changes the route.
+func TestQuotaRevisionAnnotationIsReadByEnvoyGateway(t *testing.T) {
+	if !strings.HasPrefix(QuotaRevisionAnnotation, "gateway.envoyproxy.io/") {
+		t.Errorf("%s: Envoy Gateway ignores this annotation", QuotaRevisionAnnotation)
+	}
+}
