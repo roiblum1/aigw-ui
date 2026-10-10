@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"strconv"
 )
 
 // changed records a change that has to reach the clusters: in the task log,
@@ -32,19 +31,5 @@ func (s *Server) log(r *http.Request, action, summary string, ok bool, message s
 
 // listTasks returns the newest tasks first. ?limit= defaults to 50, at most 500.
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
-	limit := 50
-	if v := r.URL.Query().Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > 500 {
-			fail(w, invalid("limit must be between 1 and 500"))
-			return
-		}
-		limit = n
-	}
-	tasks, err := s.st.ListTasks(r.Context(), limit)
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, tasks)
+	listLimited(w, r, 50, s.st.ListTasks)
 }

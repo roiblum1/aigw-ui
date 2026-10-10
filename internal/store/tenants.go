@@ -73,21 +73,16 @@ func (s *Store) DeleteTenantsWithPrefix(ctx context.Context, prefix string) (int
 // ---- API keys ----
 
 func (s *Store) ListKeys(ctx context.Context, tenantID string) ([]APIKey, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT id, tenant_id, name, client_id, key_prefix, revoked_at, created_at
-		 FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC`, tenantID)
-	if err != nil {
-		return nil, mapErr(err)
-	}
-	keys, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (APIKey, error) {
-		var k APIKey
-		err := r.Scan(&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt)
-		return k, err
-	})
-	if keys == nil {
-		keys = []APIKey{}
-	}
-	return keys, mapErr(err)
+	return list(ctx, s, scanKey, `SELECT `+keyColumns+` FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC`, tenantID)
+}
+
+// keyColumns is what scanKey reads. The key itself is never among them.
+const keyColumns = `id, tenant_id, name, client_id, key_prefix, revoked_at, created_at`
+
+func scanKey(r scanner) (APIKey, error) {
+	var k APIKey
+	err := r.Scan(&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt)
+	return k, err
 }
 
 // CreateKey returns the stored record and the plaintext key. The plaintext is
@@ -107,12 +102,9 @@ func (s *Store) CreateKey(ctx context.Context, tenantID, name string) (APIKey, s
 	if err != nil {
 		return APIKey{}, "", err
 	}
-	var k APIKey
-	err = s.db.QueryRow(ctx,
+	k, err := scanKey(s.db.QueryRow(ctx,
 		`INSERT INTO api_keys (tenant_id, name, client_id, key_prefix, key_enc) VALUES ($1, $2, $3, $4, $5)
-		 RETURNING id, tenant_id, name, client_id, key_prefix, revoked_at, created_at`,
-		tenantID, name, clientID, plain[:9], enc).
-		Scan(&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt)
+		 RETURNING `+keyColumns, tenantID, name, clientID, plain[:9], enc))
 	return k, plain, mapErr(err)
 }
 
@@ -126,21 +118,12 @@ func (s *Store) RevokeKey(ctx context.Context, id string) (string, error) {
 // ---- quotas ----
 
 func (s *Store) ListQuotas(ctx context.Context, tenantID string) ([]Quota, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT q.id, q.tenant_id, q.model_id, m.name, q.token_limit, q.window_size, q.shadow
-		 FROM quotas q JOIN models m ON m.id = q.model_id WHERE q.tenant_id = $1 ORDER BY m.name`, tenantID)
-	if err != nil {
-		return nil, mapErr(err)
-	}
-	quotas, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Quota, error) {
+	return list(ctx, s, func(r scanner) (Quota, error) {
 		var q Quota
 		err := r.Scan(&q.ID, &q.TenantID, &q.ModelID, &q.ModelName, &q.TokenLimit, &q.Window, &q.Shadow)
 		return q, err
-	})
-	if quotas == nil {
-		quotas = []Quota{}
-	}
-	return quotas, mapErr(err)
+	}, `SELECT q.id, q.tenant_id, q.model_id, m.name, q.token_limit, q.window_size, q.shadow
+	    FROM quotas q JOIN models m ON m.id = q.model_id WHERE q.tenant_id = $1 ORDER BY m.name`, tenantID)
 }
 
 // UpsertQuota keeps the stored shadow setting when shadow is nil. A new quota

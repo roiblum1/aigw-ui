@@ -35,30 +35,20 @@ func (s *Store) SetModelSpentMode(ctx context.Context, id, mode string, unlimite
 const overageSelect = `SELECT o.model_id, m.name, o.tenant_id, t.slug, o.since, o.until, o.until > now()
 	FROM overage o JOIN models m ON m.id = o.model_id JOIN tenants t ON t.id = o.tenant_id`
 
-func (s *Store) listOverage(ctx context.Context, query string, args ...any) ([]Overage, error) {
-	rows, err := s.db.Query(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Overage, error) {
-		var o Overage
-		err := r.Scan(&o.ModelID, &o.ModelName, &o.TenantID, &o.TenantSlug, &o.Since, &o.Until, &o.Active)
-		return o, err
-	})
-	if out == nil {
-		out = []Overage{}
-	}
-	return out, err
+func scanOverage(r scanner) (Overage, error) {
+	var o Overage
+	err := r.Scan(&o.ModelID, &o.ModelName, &o.TenantID, &o.TenantSlug, &o.Since, &o.Until, &o.Active)
+	return o, err
 }
 
 // ActiveOverage returns the overage periods that have not ended.
 func (s *Store) ActiveOverage(ctx context.Context) ([]Overage, error) {
-	return s.listOverage(ctx, overageSelect+` WHERE o.until > now() ORDER BY m.name, t.slug`)
+	return list(ctx, s, scanOverage, overageSelect+` WHERE o.until > now() ORDER BY m.name, t.slug`)
 }
 
 // ListOverage returns the newest overage periods, running and ended.
 func (s *Store) ListOverage(ctx context.Context, limit int) ([]Overage, error) {
-	return s.listOverage(ctx, overageSelect+` ORDER BY o.since DESC LIMIT $1`, limit)
+	return list(ctx, s, scanOverage, overageSelect+` ORDER BY o.since DESC LIMIT $1`, limit)
 }
 
 // StartOverage records that a tenant is served as best-effort on a model

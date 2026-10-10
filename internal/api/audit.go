@@ -124,15 +124,12 @@ func clip(v string, limit int) string {
 // listAudit returns the newest audit entries first. ?limit= defaults to 100,
 // at most 500; ?before=<id> pages back.
 func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
-	limit, before := 100, int64(0)
-	if v := r.URL.Query().Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > 500 {
-			fail(w, invalid("limit must be between 1 and 500"))
-			return
-		}
-		limit = n
+	limit, err := queryLimit(r, 100)
+	if err != nil {
+		fail(w, err)
+		return
 	}
+	before := int64(0)
 	if v := r.URL.Query().Get("before"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || n < 1 {
