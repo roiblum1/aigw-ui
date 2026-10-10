@@ -50,8 +50,10 @@ failed sync later, with a less direct message.
 **What it does.** The gateway refuses every request without a valid key.
 
 **How.** The sync writes one Secret with all active keys and one
-`SecurityPolicy` on the gateway that checks the `Authorization` header
-against it. The gateway then puts the key's client ID,
+`SecurityPolicy` on the gateway that checks the key against it. The key is
+read from the `Authorization` header, which OpenAI clients send, or from
+`x-api-key`, which Anthropic clients send. Both are removed before the
+request goes on. The gateway then puts the key's client ID,
 `<tenant>.<random>`, into the header `x-aigw-client-id`.
 
 **Why.**

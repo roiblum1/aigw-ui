@@ -91,6 +91,7 @@ The same documents are in the website, on the **Docs** page.
 | [docs/how-it-works.md](docs/how-it-works.md) | What each action does, how, and why it was built that way |
 | [docs/user-guide.md](docs/user-guide.md) | Using the UI: clusters, models, tenants, keys, quotas |
 | [docs/pricing.md](docs/pricing.md) | Prices per model: quotas and usage in dollars, cached prompts charged less, dry-run |
+| [docs/performance.md](docs/performance.md) | What the gateway adds to a request, what one proxy pod carries, and what the hub costs |
 | [docs/optimization.md](docs/optimization.md) | Shared pool and best-effort: two ways to serve a tenant past its quota, side by side |
 | [docs/platform-architecture.md](docs/platform-architecture.md) | The design of the whole multi-site platform, with diagrams, and what of it is built |
 | [docs/architecture.md](docs/architecture.md) | Components, data flows, what is applied to the clusters |
@@ -140,9 +141,12 @@ test.
 Built and tested: the UI and API, Postgres storage, model discovery, sync to
 clusters, the image, the Helm chart on OpenShift, and the offline bundle.
 
-Run on a gateway (OpenShift 4.22, Envoy Gateway 1.9.1, Envoy AI Gateway
-1.1.0): keys, quotas, the self-test, best-effort with one site, and prices
-with a stand-in for the model server. Each release note says what was run
+Run on a gateway (OpenShift 4.22, Envoy Gateway 1.9.1 with Envoy AI Gateway
+1.1.0, and Envoy Gateway 1.9.2 with Envoy AI Gateway 1.2.0): keys, quotas,
+the self-test, the OpenAI and the Anthropic path, prices, usage history,
+and, with a patched gateway, quotas and best-effort over two sites. All
+with a stand-in for the model server. [docs/performance.md](docs/performance.md)
+has what the gateway adds to a request. Each release note says what was run
 and what was not. The Self-test button on a cluster checks the same points
 on your own gateway. Open points are in
 [docs/architecture.md](docs/architecture.md#not-verified-on-a-real-gateway).

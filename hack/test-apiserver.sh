@@ -13,8 +13,16 @@ bin="$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use -p p
 work="$(mktemp -d)"
 etcd_port=23791 peer_port=23801 api_port=16444
 
+# The API server takes minutes to stop once etcd is gone, and would then
+# still hold its port for the next run. It is given a moment and then killed.
 stop() {
-  kill "${api_pid:-}" "${etcd_pid:-}" 2>/dev/null || true
+  kill "${api_pid:-}" 2>/dev/null || true
+  for _ in 1 2 3 4 5; do
+    kill -0 "${api_pid:-}" 2>/dev/null || break
+    sleep 1
+  done
+  kill -9 "${api_pid:-}" 2>/dev/null || true
+  kill "${etcd_pid:-}" 2>/dev/null || true
   rm -rf "$work"
 }
 trap stop EXIT
@@ -59,8 +67,8 @@ kc get --raw /readyz >/dev/null || { echo "the API server did not start:"; tail 
 
 # The gateway CRDs are the real ones, at the versions the clusters run, so the
 # API server checks what this tool renders against their schema and rules.
-eg="https://raw.githubusercontent.com/envoyproxy/gateway/${ENVOY_GATEWAY_VERSION:-v1.9.1}/charts/gateway-helm/charts/crds/crds/generated"
-aigw="https://raw.githubusercontent.com/envoyproxy/ai-gateway/${AI_GATEWAY_VERSION:-v1.1.0}/manifests/charts/ai-gateway-crds-helm/templates"
+eg="https://raw.githubusercontent.com/envoyproxy/gateway/${ENVOY_GATEWAY_VERSION:-v1.9.2}/charts/gateway-helm/charts/crds/crds/generated"
+aigw="https://raw.githubusercontent.com/envoyproxy/ai-gateway/${AI_GATEWAY_VERSION:-v1.2.0}/manifests/charts/ai-gateway-crds-helm/templates"
 for crd in \
   "$eg/gateway.envoyproxy.io_backends.yaml" \
   "$eg/gateway.envoyproxy.io_backendtrafficpolicies.yaml" \

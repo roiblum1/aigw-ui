@@ -126,7 +126,7 @@ func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *uns
 	if overage {
 		name = BestEffortName(m.Slug)
 	}
-	u := object(aigwAPI, "QuotaPolicy", namespace, name)
+	u := object(quotaAPI, "QuotaPolicy", namespace, name)
 	u.Object["spec"] = map[string]any{
 		"targetRefs":     targetRefs,
 		"perModelQuotas": perModel,

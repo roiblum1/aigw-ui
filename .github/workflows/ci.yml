@@ -75,6 +75,10 @@ jobs:
       - name: Tests against a real Kubernetes API server
         run: hack/test-apiserver.sh
 
+      # The gateways in production may still be on the version before.
+      - name: The same against the CRDs of Envoy AI Gateway 1.1.0
+        run: ENVOY_GATEWAY_VERSION=v1.9.1 AI_GATEWAY_VERSION=v1.1.0 hack/test-apiserver.sh
+
       - uses: actions/setup-node@v4
         with:
           node-version: 26

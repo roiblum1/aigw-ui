@@ -169,6 +169,38 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
    model. Its step "A tenant past its budget is served as best-effort"
    proves that the second route takes the tenant's requests.
 
+## Before tenants send long prompts
+
+Envoy Gateway buffers 32 KiB of a request on a client connection unless a
+`ClientTrafficPolicy` says otherwise. The AI gateway reads the whole body
+to find the model, so a longer request is answered 413. A conversation with
+a coding agent passes that size within a few turns.
+
+Every Gateway that clients reach needs this, from whoever installs it:
+
+```yaml
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: client-buffer-limit
+  namespace: <the Gateway's namespace>
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: <the Gateway>
+  connection:
+    bufferLimit: 50Mi
+  http2:
+    initialStreamWindowSize: 16Mi
+    initialConnectionWindowSize: 24Mi
+```
+
+A policy on one listener replaces the Gateway's on that listener, so a
+listener with a policy of its own, such as the one other sites come in on,
+needs the same `connection` and `http2` settings there. The self-test's
+step "A long prompt is accepted" checks the listener clients use.
+
 ## Before cached prompts are charged less
 
 A cost expression can charge the cached part of a prompt less (see the user

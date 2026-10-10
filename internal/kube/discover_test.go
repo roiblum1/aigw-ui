@@ -12,9 +12,9 @@ import (
 )
 
 const routeList = `{
-  "apiVersion": "aigateway.envoyproxy.io/v1alpha1", "kind": "AIGatewayRouteList", "metadata": {},
+  "apiVersion": "aigateway.envoyproxy.io/v1beta1", "kind": "AIGatewayRouteList", "metadata": {},
   "items": [
-    {"apiVersion": "aigateway.envoyproxy.io/v1alpha1", "kind": "AIGatewayRoute",
+    {"apiVersion": "aigateway.envoyproxy.io/v1beta1", "kind": "AIGatewayRoute",
      "metadata": {"name": "models", "namespace": "ai-gateway"},
      "spec": {"rules": [
        {"matches": [{"headers": [{"type": "Exact", "name": "x-ai-eg-model", "value": "GLM5.3"}]}],
@@ -27,13 +27,13 @@ const routeList = `{
        {"matches": [{"headers": [{"type": "Exact", "name": "x-tenant", "value": "not-a-model"}]}],
         "backendRefs": [{"name": "ignored"}]}
      ]}},
-    {"apiVersion": "aigateway.envoyproxy.io/v1alpha1", "kind": "AIGatewayRoute",
+    {"apiVersion": "aigateway.envoyproxy.io/v1beta1", "kind": "AIGatewayRoute",
      "metadata": {"name": "second", "namespace": "ai-gateway"},
      "spec": {"rules": [
        {"matches": [{"headers": [{"type": "Exact", "name": "x-ai-eg-model", "value": "GLM5.3"}]}],
         "backendRefs": [{"name": "glm-primary", "modelNameOverride": "glm-5.3"}]}
      ]}},
-    {"apiVersion": "aigateway.envoyproxy.io/v1alpha1", "kind": "AIGatewayRoute",
+    {"apiVersion": "aigateway.envoyproxy.io/v1beta1", "kind": "AIGatewayRoute",
      "metadata": {"name": "ours", "namespace": "ai-gateway", "labels": {"app.kubernetes.io/managed-by": "aigw-ui"}},
      "spec": {"rules": [
        {"matches": [{"headers": [{"type": "Exact", "name": "x-ai-eg-model", "value": "managed-here"}]}],
@@ -58,7 +58,7 @@ func TestDiscover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "/apis/aigateway.envoyproxy.io/v1alpha1/namespaces/ai-gateway/aigatewayroutes"; gotPath != want {
+	if want := "/apis/aigateway.envoyproxy.io/v1beta1/namespaces/ai-gateway/aigatewayroutes"; gotPath != want {
 		t.Errorf("listed %s, want %s", gotPath, want)
 	}
 	want := []DiscoveredModel{
@@ -94,13 +94,13 @@ func TestDiscoverMissingCRD(t *testing.T) {
 
 func TestDiscoverAttached(t *testing.T) {
 	const list = `{"apiVersion":"v1","kind":"List","metadata":{},"items":[
-	  {"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"AIGatewayRoute","metadata":{"name":"a","namespace":"team-a"},
+	  {"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"a","namespace":"team-a"},
 	   "spec":{"parentRefs":[{"name":"llm","namespace":"ai-gateway"}],
 	           "rules":[{"matches":[{"headers":[{"name":"x-ai-eg-model","value":"glm-5.3"}]}],"backendRefs":[{"name":"glm","modelNameOverride":"glm"}]}]}},
-	  {"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"AIGatewayRoute","metadata":{"name":"b","namespace":"ai-gateway"},
+	  {"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"b","namespace":"ai-gateway"},
 	   "spec":{"parentRefs":[{"name":"llm"}],
 	           "rules":[{"matches":[{"headers":[{"name":"x-ai-eg-model","value":"judge"}]}],"backendRefs":[{"name":"judge"}]}]}},
-	  {"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"AIGatewayRoute","metadata":{"name":"c","namespace":"team-a"},
+	  {"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"c","namespace":"team-a"},
 	   "spec":{"parentRefs":[{"name":"llm"}],
 	           "rules":[{"matches":[{"headers":[{"name":"x-ai-eg-model","value":"other-gateway"}]}],"backendRefs":[{"name":"x"}]}]}}
 	]}`
@@ -119,7 +119,7 @@ func TestDiscoverAttached(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "/apis/aigateway.envoyproxy.io/v1alpha1/aigatewayroutes"; gotPath != want {
+	if want := "/apis/aigateway.envoyproxy.io/v1beta1/aigatewayroutes"; gotPath != want {
 		t.Errorf("listed %s, want the all-namespaces path %s", gotPath, want)
 	}
 	// Route c names a gateway "llm" in its own namespace team-a, which is a different gateway.
@@ -137,7 +137,7 @@ func TestDiscoverAttached(t *testing.T) {
 // clients, so it keeps its quota.
 func TestPeerOnlyBackends(t *testing.T) {
 	route := func(name, model, backend string, parents string) string {
-		return `{"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"AIGatewayRoute","metadata":{"name":"` + name + `","namespace":"ai-gateway"},
+		return `{"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"` + name + `","namespace":"ai-gateway"},
 		 "spec":{"parentRefs":[` + parents + `],"rules":[{"matches":[{"headers":[{"name":"x-ai-eg-model","value":"` + model + `"}]}],"backendRefs":[{"name":"` + backend + `"}]}]}}`
 	}
 	var routes []unstructured.Unstructured

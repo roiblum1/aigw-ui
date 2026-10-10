@@ -99,3 +99,21 @@ func cachedReport(res gateway.ChatResult) (string, string) {
 		return Passed, fmt.Sprintf("%d of the %d prompt tokens of a repeated prompt came from the prefix cache.", *res.CachedTokens, res.PromptTokens)
 	}
 }
+
+// longPrompt sends a request larger than what Envoy Gateway buffers by
+// default. The gateway reads the whole body before it knows the model, so
+// with the default it refuses the request for its size alone.
+func (t *test) longPrompt() (string, string) {
+	status, err := gateway.SizeProbe(t.ctx, t.cluster.GatewayURL, t.key)
+	kb := gateway.SizeProbeBytes >> 10
+	switch {
+	case err != nil:
+		return Failed, "The request was not answered: " + err.Error()
+	case status == http.StatusRequestEntityTooLarge:
+		return Failed, fmt.Sprintf("The gateway refused a request of %d KB for its size (HTTP 413). Envoy Gateway buffers 32 KiB of a request unless told otherwise, "+
+			"so every prompt longer than that is refused. Set connection.bufferLimit in a ClientTrafficPolicy on the Gateway, for example 50Mi.", kb)
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return Warning, fmt.Sprintf("The gateway answered HTTP %d before it read the request, so its size limit was not reached.", status)
+	}
+	return Passed, fmt.Sprintf("A request of %d KB was not refused for its size. It named a model that does not exist, so no model was asked (HTTP %d).", kb, status)
+}

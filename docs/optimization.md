@@ -158,9 +158,11 @@ gateway.
   warning. A fix is proposed upstream
   ([agent-router#2833](https://github.com/theagentrouter/agent-router/pull/2833)).
   A model with one site is not affected.
-- **What has been run on a gateway.** For best-effort with one site: the
-  move at 90%, the class the site receives, the separate counter, and the
-  return to `standard` after a reset. Not run: a model under real load
+- **What has been run on a gateway.** For best-effort with one site, and
+  with two sites on a gateway built with that fix: the move at 90%, the
+  class the site receives, the separate counter, the limit on best-effort
+  use, and the return to `standard` after a reset. One request got a 500 in
+  the seconds in which the best-effort route was created. Not run: a model under real load
   dropping best-effort work first, which is the serving stack's part, and a
   window ending by itself.
 

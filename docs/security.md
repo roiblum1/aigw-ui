@@ -47,6 +47,11 @@ has synced, the key still works there: check the cluster's status on the
 Clusters page, or the task in Activity. Versions before 0.6.1 did not remove
 the key at all; see the [0.6.1 release notes](release-notes/v0.6.1.md).
 
+**Where a key is read from.** The `Authorization` header or `x-api-key`.
+When a request carries both, `Authorization` is the one that counts: a
+wrong key there is refused although `x-api-key` holds a right one. Both
+headers are removed before the request reaches a model server.
+
 **Without "Enforce API keys" there are no tenants.** The gateway then takes
 the client ID from whoever sends an `x-aigw-client-id` header, so a caller can
 use, or use up, any tenant's quota. With enforcement on, the gateway sets the
