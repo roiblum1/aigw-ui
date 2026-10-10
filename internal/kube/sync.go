@@ -25,6 +25,9 @@ type SyncResult struct {
 	Rejected []Change `json:"rejected"`
 	// Held says which models' objects were left as they are, and why.
 	Held []string `json:"held,omitempty"`
+	// Skipped lists the objects that were not written because the cluster
+	// does not have their kind, as "<kind> <namespace>/<name>".
+	Skipped []string `json:"skipped,omitempty"`
 }
 
 // Change is one object on the cluster and what happened to it.
@@ -53,8 +56,10 @@ func version(obj *unstructured.Unstructured) string {
 }
 
 // Sync makes the managed objects match desired. Everything lives in namespace
-// except QuotaPolicies, which sit next to the backends they target and so can
-// be in any namespace.
+// except the kinds in anyNamespace, which sit next to what they belong to.
+//
+// An object of a kind the cluster does not have fails the sync, unless the
+// kind is optional: then it is left out and listed in Skipped.
 //
 // held names objects of this tool that are not in desired and must stay as
 // they are all the same.
@@ -63,17 +68,22 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 	// kept holds "<kind>/<namespace>/<name>" of every desired object, so the
 	// prune step knows what to leave alone.
 	kept := map[string]bool{}
-	quotaNamespaces := map[string]bool{namespace: true}
+	// elsewhere holds the namespaces the anyNamespace kinds are in now.
+	elsewhere := map[string]bool{namespace: true}
 
 	for _, obj := range desired {
 		if obj.GetNamespace() == "" {
 			obj = obj.DeepCopy()
 			obj.SetNamespace(namespace)
 		}
-		if obj.GetKind() == "QuotaPolicy" {
-			quotaNamespaces[obj.GetNamespace()] = true
+		if anyNamespace[obj.GetKind()] {
+			elsewhere[obj.GetNamespace()] = true
 		}
 		action, err := c.apply(ctx, obj)
+		if err != nil && optional[obj.GetKind()] && missingKind(err) {
+			res.Skipped = append(res.Skipped, obj.GetKind()+" "+obj.GetNamespace()+"/"+obj.GetName())
+			continue
+		}
 		if err != nil {
 			return res, err
 		}
@@ -84,7 +94,7 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 		}
 	}
 
-	if err := c.prune(ctx, namespace, quotaNamespaces, kept, held, &res); err != nil {
+	if err := c.prune(ctx, namespace, elsewhere, kept, held, &res); err != nil {
 		return res, err
 	}
 	c.readGatewayStatus(ctx, namespace, desired, &res)
@@ -162,13 +172,13 @@ func (c *Client) dropUnownedSecretEntries(ctx context.Context, gvr schema.GroupV
 
 // prune deletes the objects this tool created earlier that are not in kept
 // and whose name is not in held.
-func (c *Client) prune(ctx context.Context, namespace string, quotaNamespaces, kept, held map[string]bool, res *SyncResult) error {
+func (c *Client) prune(ctx context.Context, namespace string, elsewhere, kept, held map[string]bool, res *SyncResult) error {
 	selector := render.ManagedLabel + "=" + render.ManagedValue
 	for _, m := range managed {
 		var items []unstructured.Unstructured
 		var err error
-		if m.Kind == "QuotaPolicy" {
-			items, err = c.managedQuotaPolicies(ctx, m.GVR, selector, quotaNamespaces)
+		if anyNamespace[m.Kind] {
+			items, err = c.managedAnywhere(ctx, m.GVR, selector, elsewhere)
 		} else {
 			items, err = c.managedObjects(ctx, namespace, m.Kind, m.GVR, selector)
 		}
@@ -195,11 +205,11 @@ func (c *Client) prune(ctx context.Context, namespace string, quotaNamespaces, k
 	return nil
 }
 
-// managedQuotaPolicies returns this tool's QuotaPolicies in every namespace, so
-// one left behind in a namespace that no longer has a backend is still found.
-// Credentials that may not list across namespaces fall back to the namespaces
-// in use now.
-func (c *Client) managedQuotaPolicies(ctx context.Context, gvr schema.GroupVersionResource, selector string, namespaces map[string]bool) ([]unstructured.Unstructured, error) {
+// managedAnywhere returns this tool's objects of one kind in every
+// namespace, so one left behind in a namespace that no longer has what it
+// belonged to is still found. Credentials that may not list across
+// namespaces fall back to the namespaces in use now.
+func (c *Client) managedAnywhere(ctx context.Context, gvr schema.GroupVersionResource, selector string, namespaces map[string]bool) ([]unstructured.Unstructured, error) {
 	list, err := c.dyn.Resource(gvr).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if missingKind(err) {
 		return nil, nil

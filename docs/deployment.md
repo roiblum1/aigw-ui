@@ -101,6 +101,7 @@ Back up the encryption key straight away. See
 | `config.syncInterval` | `5m` | How often every cluster is synced again without a change. `0` turns it off. Needs `autoSync` |
 | `config.overageInterval` | `15s` | For models that serve a spent budget as best-effort: how often the usage counters are read. At least `5s`. Needs `redis.url` |
 | `config.overageThreshold` | `0.9` | The share of its budget a tenant has to have used to be moved to best-effort, from `0.5` to `1` |
+| `config.bestEffortPriority` | `-1` | The priority of the request class `best-effort` the hub creates on the serving clusters. Below 0: a request without a class has 0 |
 | `fleet.domain` | empty | The sites' listener for other sites answers as `peers.llm.<domain>`. Empty, with `fleet.peerSNI` empty too: no entry route can be turned on |
 | `fleet.peerSNI` | empty | That server name, when it is not `peers.llm.<domain>` |
 | `fleet.peerCAConfigMap` | `llm-peer-ca` | ConfigMap in each gateway namespace with the CA of the sites' peer certificates |
@@ -155,12 +156,13 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
 
 1. The model needs its entry route, and the server needs Redis
    (`redis.url`): it finds a spent budget in the usage counters.
-2. On every cluster that serves the model, the model's release must define
-   an `InferenceObjective` named `best-effort` in the model's namespace,
-   with a lower priority than `standard`. The hub sends the name in the
-   header `x-llm-d-inference-objective` and does not create the object. A
-   serving site that does not know the name cannot queue these requests
-   behind the others.
+2. Nothing has to be created by hand on the serving clusters. For a model
+   in best-effort mode the hub creates an `InferenceObjective` named
+   `best-effort` (`llm-d.ai/v1alpha2`) next to the model's `InferencePool`
+   and removes it when the mode is switched off. It finds the pool in the
+   status of the model's `LLMInferenceService`, so the service needs a
+   scheduler (`spec.router.scheduler`). The model's row shows a warning
+   for a site where no pool was found.
 3. After switching the model, run **Self-test** on a cluster with that
    model. Its step "A tenant past its budget is served as best-effort"
    proves that the second route takes the tenant's requests.

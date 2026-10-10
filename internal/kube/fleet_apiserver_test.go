@@ -4,8 +4,10 @@ import (
 	"context"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"aigw-ui/internal/render"
 )
@@ -165,5 +167,48 @@ func TestRealAPIServerBestEffortRoute(t *testing.T) {
 	}
 	if deleted := changes(res, "deleted"); len(deleted) != 3 || !deleted["AIGatewayRoute/"+be] {
 		t.Errorf("deleted %v, want the route, its traffic policy and its patch", deleted)
+	}
+}
+
+// The request class of a best-effort model is accepted by the real CRD, sits
+// in the pool's namespace and not the gateway's, and is removed again when
+// the model goes back to refusing. hack/test-apiserver.sh installs the CRD.
+func TestRealAPIServerBestEffortClass(t *testing.T) {
+	c, gatewayNS := realClient(t)
+	_, modelNS := realClient(t)
+	ctx := context.Background()
+	state := render.State{Namespace: gatewayNS, Models: []render.Model{{
+		Name: "glm-5.3", Slug: "glm-5-3", Existing: []render.Target{},
+		BestEffortPools: []render.Pool{{Namespace: modelNS, Name: "glm-inference-pool", Group: "inference.networking.k8s.io"}},
+	}}}
+	classes := c.dyn.Resource(schema.GroupVersionResource{Group: "llm-d.ai", Version: "v1alpha2", Resource: "inferenceobjectives"}).Namespace(modelNS)
+
+	res, err := c.Sync(ctx, gatewayNS, render.Objects(state), nil)
+	if err != nil {
+		t.Fatalf("the API server refused the class: %v", err)
+	}
+	if len(res.Skipped) != 0 {
+		t.Fatalf("skipped %v although the CRD is installed", res.Skipped)
+	}
+	got, err := classes.Get(ctx, "best-effort", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	priority, _, _ := unstructured.NestedInt64(got.Object, "spec", "priority")
+	pool, _, _ := unstructured.NestedString(got.Object, "spec", "poolRef", "name")
+	if priority != -1 || pool != "glm-inference-pool" {
+		t.Errorf("class has priority %d and pool %q", priority, pool)
+	}
+	if res, err = c.Sync(ctx, gatewayNS, render.Objects(state), nil); err != nil || len(res.Changes) != 0 {
+		t.Errorf("a sync that changes nothing: %+v %v", res.Changes, err)
+	}
+
+	// Back to refusing: the class goes, although it is in another namespace.
+	state.Models[0].BestEffortPools = nil
+	if _, err := c.Sync(ctx, gatewayNS, render.Objects(state), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := classes.Get(ctx, "best-effort", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the class is still there after the model went back to refusing: %v", err)
 	}
 }

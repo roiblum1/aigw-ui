@@ -59,6 +59,7 @@ export interface Endpoint {
     drained: boolean;
     revision: string;
     max_model_len: string;
+    pools: { namespace: string; name: string; group: string }[];
     /** Ready instances times the capacity of one. Null while the cluster has not reported it. */
     observed: number | null;
     observed_at: string | null;

@@ -56,6 +56,8 @@ spec:
               value: {{ .Values.config.overageInterval | quote }}
             - name: OVERAGE_THRESHOLD
               value: {{ .Values.config.overageThreshold | quote }}
+            - name: BEST_EFFORT_PRIORITY
+              value: {{ .Values.config.bestEffortPriority | quote }}
             {{- if or .Values.redis.url .Values.redis.existingSecret }}
             - name: REDIS_URL
               valueFrom:

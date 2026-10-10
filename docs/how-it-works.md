@@ -303,9 +303,26 @@ to `standard` by itself.
   is judged against that from the start.
 - *Every cluster gets the same list.* The fleet revision covers it, so the
   Clusters page shows a cluster that is behind.
-- *The serving sites must know the class.* The header names an
-  `InferenceObjective` that the model's release defines on each serving
-  cluster. The hub does not create it.
+- *The hub creates the class on the serving sites.* The header names an
+  `InferenceObjective`, the serving stack's word for a request class. For a
+  model in best-effort mode the hub writes one called `best-effort`, with
+  priority -1, next to the model's `InferencePool` on every cluster that
+  serves it, and removes it when the model goes back to refusing. A request
+  without a class has priority 0, and the scheduler drops what is below 0
+  first when a pool is full.
+- *The pool is read, not configured.* KServe creates the pool for an
+  `LLMInferenceService` that has a scheduler and reports it in the
+  service's status. The hub reads it at every poll, where it already reads
+  the ready instances. A model served without a scheduler has no pool: the
+  model's row then shows a warning, and requests sent as best-effort are
+  served there like any other.
+- *No class called `standard`.* The entry route marks the other requests
+  `standard`, and no such class is created: a name the site does not know
+  gives priority 0, which is what `standard` should have. A release that
+  defines its own `standard` keeps it.
+- *One class per namespace.* A class is found by name within a namespace.
+  Where two best-effort models have their pools in one namespace, only the
+  first pool by name gets the class. Give each model its own namespace.
 
 ### Drain and undrain
 

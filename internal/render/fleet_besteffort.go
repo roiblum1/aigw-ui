@@ -71,3 +71,60 @@ func fleetOverageRoute(s State, m Model, tenants []string) *unstructured.Unstruc
 	}
 	return u
 }
+
+// ObjectiveKind is the kind of a request class of the serving stack.
+const ObjectiveKind = "InferenceObjective"
+
+const objectiveAPI = "llm-d.ai/v1alpha2"
+
+// DefaultBestEffortPriority is the priority of the class "best-effort". A
+// request without a class, or with a class the site does not know, has
+// priority 0, and the scheduler drops requests below 0 first when the pool
+// is full.
+const DefaultBestEffortPriority = -1
+
+// Pool names an InferencePool on the cluster that is rendered.
+type Pool struct {
+	Namespace string
+	Name      string
+	Group     string
+}
+
+// objectives returns the request class "best-effort" for every pool that
+// serves a model in best-effort mode on this cluster. The class is what the
+// header of the best-effort route names; without it the serving site treats
+// the request like any other.
+//
+// A class is found by its name within a namespace, so a namespace has one.
+// Where two pools of best-effort models share a namespace, the first by
+// name gets it.
+func objectives(s State) []*unstructured.Unstructured {
+	byNamespace := map[string]Pool{}
+	for _, m := range s.Models {
+		for _, p := range m.BestEffortPools {
+			if have, ok := byNamespace[p.Namespace]; !ok || p.Name < have.Name {
+				byNamespace[p.Namespace] = p
+			}
+		}
+	}
+	namespaces := make([]string, 0, len(byNamespace))
+	for ns := range byNamespace {
+		namespaces = append(namespaces, ns)
+	}
+	sort.Strings(namespaces)
+	priority := s.Fleet.BestEffortPriority
+	if priority == 0 {
+		priority = DefaultBestEffortPriority
+	}
+	out := make([]*unstructured.Unstructured, 0, len(namespaces))
+	for _, ns := range namespaces {
+		p := byNamespace[ns]
+		u := object(objectiveAPI, ObjectiveKind, ns, ObjectiveBestEffort)
+		u.Object["spec"] = map[string]any{
+			"priority": priority,
+			"poolRef":  map[string]any{"group": p.Group, "kind": "InferencePool", "name": p.Name},
+		}
+		out = append(out, u)
+	}
+	return out
+}

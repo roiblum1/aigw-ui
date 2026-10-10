@@ -30,7 +30,8 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 	st := render.State{Namespace: c.Namespace, GatewayName: c.GatewayName, ClientListener: c.ClientListener, AuthEnabled: c.AuthEnabled, Fleet: s.fleet}
 
 	rows, err := s.db.Query(ctx,
-		`SELECT m.id, m.name, m.slug, e.host, e.port, e.upstream_model, m.default_limit, m.default_window, m.cost_expression, e.source, e.backends
+		`SELECT m.id, m.name, m.slug, e.host, e.port, e.upstream_model, m.default_limit, m.default_window, m.cost_expression, e.source, e.backends,
+		        e.pools, m.fleet AND m.spent_mode = 'best-effort'
 		 FROM model_endpoints e JOIN models m ON m.id = e.model_id WHERE e.cluster_id = $1`, clusterID)
 	if err != nil {
 		return st, err
@@ -41,9 +42,19 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 		var m render.Model
 		var source string
 		var backends []BackendRef
-		if err := rows.Scan(&id, &m.Name, &m.Slug, &m.Host, &m.Port, &m.UpstreamModel, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &source, &backends); err != nil {
+		var pools []Pool
+		var bestEffort bool
+		if err := rows.Scan(&id, &m.Name, &m.Slug, &m.Host, &m.Port, &m.UpstreamModel, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &source, &backends,
+			&pools, &bestEffort); err != nil {
 			rows.Close()
 			return st, err
+		}
+		// The class is needed where the model runs, which may be a cluster
+		// that has no entry route itself.
+		if bestEffort {
+			for _, p := range pools {
+				m.BestEffortPools = append(m.BestEffortPools, render.Pool{Namespace: p.Namespace, Name: p.Name, Group: p.Group})
+			}
 		}
 		if source == SourceDiscovered {
 			m.Existing = make([]render.Target, 0, len(backends))

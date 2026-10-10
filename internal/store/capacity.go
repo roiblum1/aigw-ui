@@ -22,6 +22,15 @@ type Capacity struct {
 	// Known is false when a deployment of the model has not reported its
 	// ready count. The model is served, but its weight stays as it is.
 	Known bool
+	// Pools are the InferencePools the model is served through.
+	Pools []Pool
+}
+
+// Pool names an InferencePool on a cluster.
+type Pool struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Group     string `json:"group"`
 }
 
 // EndpointCapacity is the capacity of one model on one cluster as the API
@@ -41,6 +50,9 @@ type EndpointCapacity struct {
 	Detail      string     `json:"detail"`
 	Revision    string     `json:"revision"`
 	MaxModelLen string     `json:"max_model_len"`
+	// Pools are the InferencePools the model is served through here. The
+	// class "best-effort" can only be created where there is one.
+	Pools []Pool `json:"pools"`
 }
 
 // ErrLastSite is returned when a drain would leave a model with no site.
@@ -101,15 +113,15 @@ func (s *Store) ApplyCapacity(ctx context.Context, clusterID string, reported []
 			case found && !c.Known:
 				// Served, ready count unknown: keep the last weight.
 				_, err := tx.Exec(ctx,
-					`UPDATE model_endpoints SET serving = true, capacity_detail = $2, revision = $3, max_model_len = $4, unlisted = $5 WHERE id = $1`,
-					e.id, c.Detail, c.Revision, c.MaxModelLen, unlisted)
+					`UPDATE model_endpoints SET serving = true, capacity_detail = $2, revision = $3, max_model_len = $4, unlisted = $5, pools = $6 WHERE id = $1`,
+					e.id, c.Detail, c.Revision, c.MaxModelLen, unlisted, pools(c))
 				if err != nil {
 					return err
 				}
 				continue
 			case !found && e.applied == nil:
 				// Never served here: nothing to step down.
-				if _, err := tx.Exec(ctx, `UPDATE model_endpoints SET serving = false, unlisted = $2 WHERE id = $1`, e.id, unlisted); err != nil {
+				if _, err := tx.Exec(ctx, `UPDATE model_endpoints SET serving = false, unlisted = $2, pools = '[]' WHERE id = $1`, e.id, unlisted); err != nil {
 					return err
 				}
 				continue
@@ -124,10 +136,10 @@ func (s *Store) ApplyCapacity(ctx context.Context, clusterID string, reported []
 			moved := e.applied == nil || next != *e.applied
 			_, err := tx.Exec(ctx,
 				`UPDATE model_endpoints SET serving = $8, capacity_observed = $2, capacity_step = $3, capacity_detail = $4, capacity_observed_at = now(),
-				        capacity_applied = $5, capacity_low_streak = $6, revision = $9, max_model_len = $10, unlisted = $11,
+				        capacity_applied = $5, capacity_low_streak = $6, revision = $9, max_model_len = $10, unlisted = $11, pools = $12,
 				        capacity_changed_at = CASE WHEN $7 THEN now() ELSE capacity_changed_at END
 				 WHERE id = $1`,
-				e.id, c.Capacity, c.Step, c.Detail, next, streak, moved, found, c.Revision, c.MaxModelLen, unlisted)
+				e.id, c.Capacity, c.Step, c.Detail, next, streak, moved, found, c.Revision, c.MaxModelLen, unlisted, pools(c))
 			if err != nil {
 				return err
 			}
@@ -135,6 +147,14 @@ func (s *Store) ApplyCapacity(ctx context.Context, clusterID string, reported []
 		return nil
 	})
 	return mapErr(err)
+}
+
+// pools returns the reported pools, never nil: the column holds a list.
+func pools(c Capacity) []Pool {
+	if c.Pools == nil {
+		return []Pool{}
+	}
+	return c.Pools
 }
 
 // SetDrained starts or ends an operator drain of one model on one cluster and

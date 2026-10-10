@@ -198,6 +198,9 @@ func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, e
 			res.Held = append(res.Held, "The entry route of "+m.Name+" was left as it is: "+m.HeldReason+".")
 		}
 	}
+	for _, skipped := range res.Skipped {
+		res.Held = append(res.Held, skipped+" was not created: the cluster does not have that kind. Requests sent as best-effort are served there like any other.")
+	}
 	// Only a sync that applied everything moves the cluster to the revision.
 	return res, s.st.SetFleetRevision(ctx, id, render.FleetRevision(state))
 }

@@ -39,7 +39,7 @@ func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
 	rows, err = s.db.Query(ctx,
 		`SELECT e.model_id, e.cluster_id, c.name, e.host, e.port, e.upstream_model, e.source, e.backends,
 		        e.capacity_observed, e.capacity_observed_at, e.capacity_applied, e.capacity_changed_at, e.capacity_detail,
-		        e.serving, e.drained, e.revision, e.max_model_len
+		        e.serving, e.drained, e.revision, e.max_model_len, e.pools
 		 FROM model_endpoints e JOIN clusters c ON c.id = e.cluster_id ORDER BY c.name`)
 	if err != nil {
 		return nil, err
@@ -50,7 +50,7 @@ func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
 		var e Endpoint
 		if err := rows.Scan(&modelID, &e.ClusterID, &e.ClusterName, &e.Host, &e.Port, &e.UpstreamModel, &e.Source, &e.Backends,
 			&e.Capacity.Observed, &e.Capacity.ObservedAt, &e.Capacity.Weight, &e.Capacity.ChangedAt, &e.Capacity.Detail,
-			&e.Capacity.Serving, &e.Capacity.Drained, &e.Capacity.Revision, &e.Capacity.MaxModelLen); err != nil {
+			&e.Capacity.Serving, &e.Capacity.Drained, &e.Capacity.Revision, &e.Capacity.MaxModelLen, &e.Capacity.Pools); err != nil {
 			return nil, err
 		}
 		if m := byID[modelID]; m != nil {
