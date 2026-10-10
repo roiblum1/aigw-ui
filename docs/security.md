@@ -53,6 +53,29 @@ use, or use up, any tenant's quota. With enforcement on, the gateway sets the
 header itself from the key and overwrites what the client sent. Turn it on for
 every cluster where quotas are meant to hold.
 
+## The tenants' own page
+
+At `/my-usage` a tenant signs in with one of its API keys and sees its own
+budgets, usage and prices. `config.tenantPage: false` turns it off.
+
+- **What a key opens.** `GET /api/v1/my/usage` and nothing else. The admin
+  API answers 401 to a tenant's key, and the page's endpoint answers 401 to
+  the admin token.
+- **What it shows.** The tenant the key belongs to, taken from the key and
+  from nothing the caller sends. There is no parameter to ask for another
+  tenant. Cluster names, backends and other tenants are not in the answer.
+- **The key comes to the hub.** The hub already holds every key, so it
+  learns nothing new. Still, it is the one place where a tenant types its
+  key into something other than its client. The page is served over the
+  hub's Route, with TLS. No request to a model passes through the hub.
+- **In the browser** the key is kept in session storage: it is gone when
+  the tab is closed, and other tabs do not have it.
+- **Wrong keys.** Ten from one address in a minute and that address gets
+  429 until the minute is over. Each is a line in the server log, without
+  the key. Keys are 192 random bits, so guessing one is not practical.
+- **A revoked key** stops working there at once, before the clusters are
+  synced, and so does every key of a tenant that is turned off.
+
 ## Signing in
 
 The UI and the API share one admin token. Everyone who has it has full

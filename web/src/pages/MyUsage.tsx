@@ -53,6 +53,12 @@ function Budget({ b }: { b: MyBudget }) {
           This budget is not enforced yet.
         </p>
       )}
+      {b.enforced && b.used >= b.limit && !b.best_effort_until && (
+        <p className="detail">
+          <span className="tag warn">spent</span> Your budget is spent. Requests can be refused until the new{" "}
+          {windowLabel[b.window]}.
+        </p>
+      )}
       {b.best_effort_until && !b.best_effort_capped && (
         <p className="detail">
           <span className="tag warn">best-effort</span> Your budget is spent. Until the new {windowLabel[b.window]} your

@@ -310,6 +310,11 @@ to `standard` by itself.
   is nothing to move.
 - *Counted apart.* What a tenant uses as best-effort is shown on the Usage
   page next to its budget, not added to it.
+- *A limit, if you set one.* The loop already reads the best-effort
+  counter. With a limit on the model it takes a tenant at the limit off the
+  best-effort route for the rest of its window. The tenant's own budget is
+  spent, so the gateway refuses it. The period is kept, so the tenant is
+  not moved back within the same window.
 - *The route is there only while a tenant is listed.* Its retry patch names
   the route, and a patch for a route that does not exist is reported as not
   programmed.

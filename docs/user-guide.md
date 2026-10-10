@@ -287,6 +287,21 @@ With usage monitoring on, the Overview shows the current window live:
 Quotas with different windows are never added together; pick the window with
 the buttons at the top right.
 
+Below it, **Usage over time** shows what was recorded, for the last 2, 7,
+30 or 90 days:
+
+| Part | Shows |
+|---|---|
+| The four figures | The total in that time, the average per day or hour, the highest day or hour, and how much of the total was best-effort |
+| The bars | One bar per day, or per hour for 2 days, stacked by tenant or by model. Point at a bar for its numbers |
+| The table | Each tenant or model: what it used within its budgets and what as best-effort |
+
+Dollars and tokens are shown one at a time. Days and hours are in UTC, like
+the gateways' quota periods. The server reads the counters once a minute,
+so new usage appears here about a minute later.
+[Charging by cost](pricing.md#usage-over-time) says what the numbers
+include.
+
 ## Activity
 
 The **Activity** page is the task log. Every change you make, here or through
@@ -345,7 +360,8 @@ The same bar appears next to each quota on a tenant's page.
 
 The numbers come straight from the counters the gateways keep in Redis, so
 they are what the gateways enforce. They cover the current window only: a
-day starts at 00:00 UTC and an hour on the hour. There is no history.
+day starts at 00:00 UTC and an hour on the hour. Past usage is on the
+Overview, under **Usage over time**.
 
 **Reset usage** sets a tenant's usage on one model back to zero for the rest
 of the current window, on every site. The limit does not change. The button
@@ -354,6 +370,22 @@ the limit can stay blocked for a while after a reset if the rate limit
 service caches over-limit keys locally (`LOCAL_CACHE_SIZE_IN_BYTES`).
 
 The page needs `redis.url` to be set, see [deployment](deployment.md).
+
+## The tenants' own page
+
+A tenant can see its own budgets and usage without the admin token. It
+opens `/my-usage` on the hub's address and signs in with any of its API
+keys. The sign-in page of the hub links to it.
+
+| Section | Shows |
+|---|---|
+| Your budgets | For each model the tenant has a budget on: what is used and left in the running period, when the next period starts, and whether its requests are served as best-effort or refused |
+| Usage over time | Its usage per day for 30 days, or per hour for 2 days, by model |
+| Prices | What a million input, cached input and output tokens cost on its priced models |
+
+It shows that tenant and no other. Nothing can be changed there. The key
+stays in the browser tab until it is closed. Turn the page off with
+`config.tenantPage: false`; see [security](security.md#the-tenants-own-page).
 
 ## Typical first setup
 

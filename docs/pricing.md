@@ -116,6 +116,74 @@ tenants sent before. Two equal requests can therefore cost different
 amounts. All tenants share one prefix cache, so a tenant can get the lower
 price for a prompt another tenant sent first.
 
+## A budget per hour or per day
+
+A tenant's budget on a model has a period: a minute, an hour or a day. The
+gateway keeps the period by itself. A new hour starts on the hour and a new
+day at 00:00 UTC, and the counter of the new period starts at 0. The hub
+has no part in it, so a budget is kept and reset while the hub is down.
+
+There is no period of three hours, and none is planned. The gateway knows a
+second, a minute, an hour and a day. A block of three hours would have to
+be kept by the hub: it would read the day's counter every 15 seconds and
+change a tenant's rule when a block is spent. That adds a delay, a second
+place where a budget is enforced, and a budget that stops being reset when
+the hub is down. An hourly budget gives a tenant that spent its budget a
+shorter wait than a 3-hour block would, with none of that.
+
+| You want | Set |
+|---|---|
+| A tenant that overspends waits at most an hour | A budget per hour |
+| A team that works in bursts, with one cap for the day | A budget per day |
+| Both a cap for the day and a shorter wait | Not possible: a tenant has one budget per model, and the gateway lets a request through when any of its buckets has room |
+
+## Usage over time
+
+The counters in Redis hold the running period only. Once a minute
+(`config.usageHistoryInterval`) the hub reads them and adds what was used
+since its last look to the table `usage_hours` in Postgres: one row per
+tenant, model and hour, with the amount used within the budget and the
+amount used as best-effort.
+
+- The **Overview** charts it per day or per hour, by tenant or by model.
+- A tenant sees its own on [its page](user-guide.md#the-tenants-own-page).
+- `GET /usage/history` returns it, see the [API reference](api.md#usage).
+
+What to know about the numbers:
+
+- **They are what the gateway counted.** A row is the growth of a counter,
+  so the history and the budgets always agree. It includes the 1 the
+  gateway adds for every request.
+- **The end of a period is not lost.** When a period ended since the last
+  look, the hub reads its counter once more; the rate limit service keeps
+  it for some minutes.
+- **The hub being down loses little.** Usage from while it was down is
+  added at its next look, to the hour of that look. What is lost is the end
+  of a period that ended more than a few minutes before the hub came back.
+- **A reset is not subtracted.** Resetting a tenant's usage sets its budget
+  back; what it used before stays in the history.
+- **Money and tokens are kept apart.** A model that gets prices is in
+  credits from then on, and its earlier rows stay in tokens.
+- **No request is stored**, and nothing of one: only amounts. Rows are kept
+  for 400 days and go with their tenant or model when it is deleted.
+
+## A limit on best-effort use
+
+A model that [serves a spent budget as best-effort](optimization.md) can
+limit how much a tenant uses that way: **Best-effort limit** in the model's
+row. The limit is per period of the tenant's quota. At the limit the hub
+takes the tenant off the best-effort route. Its own budget is spent, so the
+gateway refuses it until the period ends.
+
+- The hub looks every `config.overageInterval` (15 seconds), so a tenant
+  can go past the limit by what it sends in that time and one sync.
+- It applies to tenants with a quota on the model. A tenant without one has
+  no counter on the best-effort route.
+- Keep the model's shared pool at its smallest. With a large pool a tenant
+  off the best-effort route is still served from the pool.
+- Best-effort use stays free. The limit keeps one tenant from taking all
+  the spare capacity, and keeps the demand for more capacity visible.
+
 ## What is not charged
 
 - **A stream the client leaves midway.** The model server sends the token
@@ -128,8 +196,6 @@ price for a prompt another tenant sent first.
 
 ## Not built yet
 
-- Budgets for a part of the day, and a limit on best-effort use.
-- A history of usage. The hub knows the running windows only.
 - What a tenant saved through cached prompts. The counter holds one total.
 - Months. The gateway's longest window is a day.
 
@@ -153,7 +219,23 @@ cached. Prices were 10 credits for an input token, 1 for a cached one and
   answered.
 - The self-test passes on a priced model.
 
+The same setup, for 0.11.0, with a budget of $0.05 per hour and one of
+$0.025 per minute:
+
+- The tenant with the hourly budget was answered twice and then got 429,
+  with its counter at $0.05268.
+- The tenant with the budget per minute got 200, 200, 200, 429, 429 within
+  one minute and 200 in the next. The hub did nothing for that.
+- The history held exactly what the counters held, also over the end of two
+  periods, after the hub was stopped while requests went on, and after a
+  usage reset. Requests were answered while the hub was down.
+- A tenant read its own budget and usage with its key. A wrong key, and a
+  tenant's key on the admin API, got 401.
+
 Not tested:
+
+- the best-effort limit on a gateway. It is covered by tests of the loop
+  and of the database only, because best-effort needs an entry route, and this test had none;
 
 - a real vLLM, and so real cached counts;
 - the server making the change at 00:00 UTC by itself. The prices in the

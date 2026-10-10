@@ -31,7 +31,7 @@ UI and API server, does of it today:
 | API keys in Postgres | Stored encrypted, not hashed, because every sync has to write them to the clusters |
 | Site weights | Built: the weight is ready instances of the model times the declared capacity of one instance, times 100 and never below 1. Rendered by the hub into each model's entry route. See [architecture.md](architecture.md#site-weights) |
 | Priority class | Built per model, not per key: a tenant whose budget is spent is served as best-effort, or tenants share a pool. See [optimization.md](optimization.md) |
-| Usage collector and past usage | Not built. Usage is the current window only |
+| Usage collector and past usage | Built differently: no collector. The hub reads the quota counters once a minute and keeps what was used per tenant, model and hour. Token counts by kind, such as cached tokens, are not kept |
 | Choosing a site | Built: a weighted hash of the session header in each entry gateway, from the entry route this tool renders. There is no separate service that picks a site |
 | Peer listener, EPP settings | Not part of this tool. They belong to the cluster charts |
 

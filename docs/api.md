@@ -128,6 +128,8 @@ Request bodies are never stored.
 |---|---|---|
 | GET | `/usage` | Tokens used in the current window, for every tenant quota |
 | GET | `/usage?tenant_id=<id>` | The same for one tenant |
+| GET | `/usage/history?step=day&days=30` | What every tenant used of every model per day or hour |
+| GET | `/my/usage` | A tenant's own budgets, usage and prices. Takes one of the tenant's API keys as the bearer token, not the admin token |
 | POST | `/tenants/{id}/quotas/{model_id}/reset` | `{"counters": 1, "deleted": 1}`. The tenant's usage on that model is back to zero |
 
 ```json
@@ -168,6 +170,59 @@ call returns 502.
 `overage_used` is what the tenant used as best-effort, after its budget was
 spent. It is counted apart and is not part of `used`. `best_effort_until` is
 there while the tenant's requests for the model are served as best-effort.
+
+`best_effort_limit` is the model's limit on best-effort use, when it has
+one, and `best_effort_capped` is `true` once the tenant reached it: it is
+refused until `best_effort_until`.
+
+### History
+
+`GET /usage/history` takes `step` (`day`, the default, or `hour`), `days`
+(1 to 400 for days, 1 to 31 for hours; the default is 30 days or 2 days of
+hours) and `tenant_id`.
+
+```json
+{
+  "from": "2026-10-09T00:00:00Z",
+  "step": "hour",
+  "points": [
+    {"at": "2026-10-10T17:00:00Z", "tenant_id": "<id>", "tenant_slug": "team-b",
+     "model_id": "<id>", "model_name": "GLM5.3", "unit": "credits",
+     "used": 5268, "best_effort": 0}
+  ]
+}
+```
+
+`from` is the start of the first step. A step in which nothing was used has
+no point. `used` is what was used within the tenant's budget and
+`best_effort` what was used after it, in the model's `unit`. Times are UTC.
+The server reads the counters once a minute, so the last minute is missing.
+
+### A tenant's own usage
+
+`GET /my/usage` is for the tenant itself. The bearer token is one of its
+API keys. It answers 401 for a key that is revoked, unknown or of a tenant
+that is turned off, 429 after ten wrong keys from one address in a minute,
+and 404 when `config.tenantPage` is off.
+
+```json
+{
+  "tenant": "team-b", "display_name": "Team B", "at": "2026-10-10T17:20:11Z",
+  "usage_enabled": true,
+  "budgets": [
+    {"model_name": "GLM5.3", "unit": "credits", "limit": 5000, "window": "1h",
+     "used": 3184, "resets_at": "2026-10-10T18:00:00Z", "enforced": true,
+     "best_effort_used": 0}
+  ],
+  "prices": [{"model_name": "GLM5.3", "price_input": 11574, "price_cached": 1157, "price_output": 46296}],
+  "days_from": "2026-09-11T00:00:00Z", "days": [ ... ],
+  "hours_from": "2026-10-09T00:00:00Z", "hours": [ ... ]
+}
+```
+
+`enforced` is `false` for a dry-run budget. `days` and `hours` are points
+as in the history above, for this tenant only. Prices are in credits for a
+million tokens.
 
 A reset deletes the counter of the current window, on every cluster that
 shares it. The limit and the window do not change, and the window still ends
@@ -319,8 +374,8 @@ revision or request length between the sites. These fields are read-only.
 |---|---|---|---|
 | PUT | `/models/{id}/sites/{cluster_id}/drain` | `{"drained": true}` or `false` | 204. 409 when no other site has capacity for the model |
 | PUT | `/models/{id}/fleet` | `{"enabled": true}` or `false` | 204. 409 when no fleet cluster serves the model, the model has manual endpoints, the server has no `FLEET_DOMAIN`, or the model is in best-effort mode and is being turned off |
-| PUT | `/models/{id}/spent` | `{"mode": "best-effort", "best_effort_unlimited": false}` | 204. `mode` is `refuse` or `best-effort`. 409 when the model has no entry route |
-| GET | `/overage?limit=100` | | The periods in which a tenant was served as best-effort, newest first: `model_id`, `model_name`, `tenant_id`, `tenant_slug`, `since`, `until`, `active`. `limit` is at most 500 |
+| PUT | `/models/{id}/spent` | `{"mode": "best-effort", "best_effort_unlimited": false, "best_effort_limit": null}` | 204. `mode` is `refuse` or `best-effort`. `best_effort_limit` is the most a tenant may use as best-effort in one period of its quota, in the model's unit, or `null`. It is not kept from the last call: send it every time. 409 when the model has no entry route |
+| GET | `/overage?limit=100` | | The periods in which a tenant was served as best-effort, newest first: `model_id`, `model_name`, `tenant_id`, `tenant_slug`, `since`, `until`, `active`, `capped_at`. `limit` is at most 500 |
 
 A drained site's weight steps down to 1, one instance per poll, and the site
 then leaves `site_weights`. `fleet` on a model says whether the hub renders
@@ -330,7 +385,10 @@ its entry route on every fleet cluster.
 spent. With `best-effort` the tenant is not refused: once it has used 90% of
 an hourly or daily quota, its requests for the model are sent as the lowest
 class until the window ends. `best_effort_unlimited` does the same, all the
-time, for tenants that have no quota on the model. See
+time, for tenants that have no quota on the model. With a
+`best_effort_limit`, a tenant that has used that much as best-effort in the
+period is taken off the best-effort route and refused until the period
+ends; `capped_at` in `/overage` says when. See
 [how it works](how-it-works.md#best-effort-when-a-budget-is-spent).
 
 ### Prices

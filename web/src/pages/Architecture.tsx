@@ -39,7 +39,11 @@ const status: { part: string; today: string; built: "yes" | "partly" | "no" }[] 
     today: "Built per model, not per key: a tenant whose budget is spent is served as best-effort, or tenants share a pool. See the Models page.",
     built: "partly",
   },
-  { part: "Usage collector and past usage", today: "Not built. Usage is the current window only.", built: "no" },
+  {
+    part: "Usage collector and past usage",
+    today: "Built differently: no collector. The hub reads the quota counters once a minute and keeps what was used per tenant, model and hour. See the Overview. Token counts by kind, such as cached tokens, are not kept.",
+    built: "partly",
+  },
   {
     part: "Choosing a site",
     today: "Built: a weighted hash of the session header in each entry gateway, from the entry route this tool renders. There is no separate service that picks a site.",
