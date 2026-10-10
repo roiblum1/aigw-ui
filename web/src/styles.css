@@ -271,6 +271,19 @@
   .inline-form > button {
     height: 36px;
   }
+  /* A quota being changed in its table row. */
+  .quota-edit {
+    flex-wrap: nowrap;
+    margin-bottom: 0;
+    max-width: 340px;
+  }
+  .quota-edit > input {
+    flex: 1 1 120px;
+    min-width: 0;
+  }
+  .quota-edit > select {
+    flex: 0 0 130px;
+  }
 
   /* ---- text helpers ---- */
   .mono {
