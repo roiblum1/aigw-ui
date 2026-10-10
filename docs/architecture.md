@@ -368,11 +368,11 @@ the operator decides, and can drain a site.
 ## Best-effort route
 
 A model in best-effort mode has, on every fleet cluster, a second
-`AIServiceBackend`, `fleet-<slug>-be`, that sends to the same `Backend` and
+`AIServiceBackend`, `fleetbe-<slug>`, that sends to the same `Backend` and
 sets `x-llm-d-inference-objective: best-effort`, and a `QuotaPolicy` of the
 same name that counts in shadow mode. While at least one tenant is past its
 budget it also has an `AIGatewayRoute`, a `BackendTrafficPolicy` and an
-`EnvoyPatchPolicy` called `fleet-<slug>-be` (the patch `…-be-retry`). The
+`EnvoyPatchPolicy` called `fleetbe-<slug>` (the patch `fleetbe-<slug>-retry`). The
 route matches the model header and `x-aigw-client-id` against the listed
 tenants. The traffic policy is the entry route's, with 429 added to the
 statuses that send a request to the next site.

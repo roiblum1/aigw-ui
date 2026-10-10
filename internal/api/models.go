@@ -149,13 +149,16 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	for i := range out {
 		out[i].Warnings = append(recipeWarnings(out[i]), ownRouteWarnings(out[i], fleet)...)
 		if n := len(bestEffort[out[i].ID]) - render.MaxOverageTenants; n > 0 {
-			out[i].Warnings = append(out[i].Warnings, fmt.Sprintf("%d tenants should be served as best-effort and are not: the best-effort route lists at most %d tenants, the first by name. The others are refused once their budget is spent.", n, render.MaxOverageTenants))
+			out[i].Warnings = append(out[i].Warnings, fmt.Sprintf("%d tenants should be served as best-effort and are not: the best-effort route lists at most %d tenants, those past their budget first. The others are refused once their budget is spent.", n, render.MaxOverageTenants))
 		}
 		if out[i].Fleet && fleetSites(out[i], peers) > 1 {
 			out[i].Warnings = append(out[i].Warnings, "Quotas are not enforced on this model's entry route: it has more than one site, and Envoy AI Gateway up to 1.2.0 attaches no quota to a route with site weights. Every tenant is answered without a limit until the gateways run a version with the fix.")
 		}
 		if out[i].SpentMode == store.SpentBestEffort && s.usage == nil {
 			out[i].Warnings = append(out[i].Warnings, "The server has no Redis configured, so it cannot see that a budget is spent. A tenant past its budget is refused.")
+		}
+		if out[i].SpentMode == store.SpentBestEffort && s.usage != nil && !s.sy.Auto() {
+			out[i].Warnings = append(out[i].Warnings, "Auto sync is off, so a tenant past its budget is only moved to best-effort, and back, when someone presses Sync. Until then it is refused.")
 		}
 		if out[i].Fleet && !s.st.FleetConfigured() {
 			out[i].Warnings = append(out[i].Warnings, "The server has no FLEET_DOMAIN or FLEET_PEER_SNI set, so the entry route is left as it is on the clusters and gets no weight changes.")

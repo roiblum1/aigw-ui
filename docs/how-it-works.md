@@ -259,7 +259,7 @@ to `standard` by itself.
 1. Every 15 seconds the server reads the counters the Usage page reads. A
    tenant that has used 90% of its quota on the model is recorded as "in
    overage" until the end of its window.
-2. A sync then lists the tenant in a second entry route, `fleet-<model>-be`.
+2. A sync then lists the tenant in a second entry route, `fleetbe-<model>`.
    That route matches the model *and* the tenant's client ID, which makes it
    more specific than the model's entry route, so it wins for this tenant.
 3. Its backend sets the header `x-llm-d-inference-objective: best-effort`.

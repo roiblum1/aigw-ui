@@ -30,6 +30,9 @@ func New(st *store.Store, auto bool, discoverEvery, syncEvery time.Duration) *Sy
 	return &Syncer{st: st, auto: auto, every: discoverEvery, resync: syncEvery, trigger: make(chan struct{}, 1)}
 }
 
+// Auto reports whether a change is synced to the clusters by itself.
+func (s *Syncer) Auto() bool { return s.auto }
+
 // Changed records that desired state moved, with a line for the task log
 // saying what changed. Clusters are marked pending and, when auto sync is on,
 // a background sync is queued.

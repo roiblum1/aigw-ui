@@ -11,7 +11,9 @@ package overage
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,15 +21,11 @@ import (
 	"aigw-ui/internal/usage"
 )
 
-// Actor is the name the loop's moves carry in the audit log.
-const Actor = "overage-loop"
-
 // Store is what the loop reads and writes in Postgres.
 type Store interface {
 	ListModels(ctx context.Context) ([]store.Model, error)
 	ActiveOverage(ctx context.Context) ([]store.Overage, error)
 	StartOverage(ctx context.Context, modelID, tenantID string, until time.Time) (bool, error)
-	AddAudit(ctx context.Context, e store.AuditEntry) error
 }
 
 // Usage reports the tokens every tenant has used in its current window.
@@ -94,6 +92,10 @@ func (s *Service) Tick(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	bestEffort, err := s.bestEffortModels(ctx)
+	if err != nil {
+		return err
+	}
 	active, err := s.st.ActiveOverage(ctx)
 	if err != nil {
 		return err
@@ -102,43 +104,58 @@ func (s *Service) Tick(ctx context.Context) error {
 	for _, o := range active {
 		now[period{o.ModelID, o.TenantID}] = o.TenantSlug + " on " + o.ModelName
 	}
+	moves := s.ended(now, len(bestEffort) > 0)
+	started, err := s.start(ctx, bestEffort, now)
+	moves = append(moves, started...)
+	s.last = now
+	if len(moves) > 0 {
+		// One task and one sync for the tick, however many tenants moved.
+		// The periods themselves are kept in the overage table.
+		s.sy.Changed(ctx, "overage", strings.Join(moves, " "))
+	}
+	return err
+}
+
+// ended returns a line for every period of the previous tick that is not in
+// now. The first tick has no previous one: a period may have ended while the
+// server was not running, so the clusters are synced once to be sure.
+func (s *Service) ended(now map[period]string, anyBestEffort bool) []string {
+	if s.last == nil {
+		if !anyBestEffort {
+			return nil
+		}
+		return []string{"The server started: the tenants served as best-effort are applied again."}
+	}
 	var moves []string
 	for p, label := range s.last {
 		if _, ok := now[p]; !ok {
 			moves = append(moves, label+" is served as standard again: its overage period ended.")
 		}
 	}
-
-	started, err := s.start(ctx, now)
-	moves = append(moves, started...)
-	s.last = now
-	for _, summary := range moves {
-		if auditErr := s.st.AddAudit(context.WithoutCancel(ctx), store.AuditEntry{Actor: Actor, Action: "overage", Summary: summary}); auditErr != nil {
-			slog.Error("record overage move", "err", auditErr)
-		}
-		// Each move is a line of its own in the task log. They end up in
-		// one sync.
-		s.sy.Changed(ctx, "overage", summary)
-	}
-	return err
+	sort.Strings(moves)
+	return moves
 }
 
-// start moves the tenants that are past the threshold and not moved yet,
-// adds them to now and returns a line for each.
-func (s *Service) start(ctx context.Context, now map[period]string) ([]string, error) {
+// bestEffortModels returns the IDs of the models that serve a spent budget
+// as best-effort.
+func (s *Service) bestEffortModels(ctx context.Context) (map[string]bool, error) {
 	models, err := s.st.ListModels(ctx)
 	if err != nil {
 		return nil, err
 	}
-	bestEffort := map[string]bool{}
+	out := map[string]bool{}
 	for _, m := range models {
-		bestEffort[m.ID] = m.Fleet && m.SpentMode == store.SpentBestEffort
+		if m.Fleet && m.SpentMode == store.SpentBestEffort {
+			out[m.ID] = true
+		}
 	}
-	any := false
-	for _, on := range bestEffort {
-		any = any || on
-	}
-	if !any {
+	return out, nil
+}
+
+// start moves the tenants that are past the threshold and not moved yet,
+// adds them to now and returns a line for each.
+func (s *Service) start(ctx context.Context, bestEffort map[string]bool, now map[period]string) ([]string, error) {
+	if len(bestEffort) == 0 {
 		// Nothing to move, so Redis is not asked at all.
 		return nil, nil
 	}

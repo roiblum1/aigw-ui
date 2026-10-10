@@ -61,8 +61,10 @@ const (
 func RetryPatchName(slug string) string { return FleetName(slug) + "-retry" }
 
 // BestEffortName is the name of the objects of a model's best-effort route:
-// the entry route for the tenants whose budget is spent.
-func BestEffortName(slug string) string { return FleetName(slug) + "-be" }
+// the entry route for the tenants whose budget is spent. It differs from
+// every FleetName in its prefix, so the best-effort objects of a model "x"
+// cannot be the entry objects of a model "x-be".
+func BestEffortName(slug string) string { return "fleetbe-" + slug }
 
 const (
 	// ObjectiveHeader names the class a serving site queues a request in.
@@ -80,11 +82,12 @@ const (
 // OverageTenants returns the tenants the model's best-effort route lists:
 // the first MaxOverageTenants by slug.
 func (m Model) OverageTenants() []string {
-	tenants := append([]string(nil), m.Overage...)
-	sort.Strings(tenants)
+	tenants := m.Overage
 	if len(tenants) > MaxOverageTenants {
 		tenants = tenants[:MaxOverageTenants]
 	}
+	tenants = append([]string(nil), tenants...)
+	sort.Strings(tenants)
 	return tenants
 }
 

@@ -164,7 +164,9 @@ func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) (
 			}
 			id := ""
 			if ct.Pool {
-				if tenantID != "" {
+				// The default bucket of a best-effort route only makes
+				// sure nobody is refused there. It is not the model's pool.
+				if tenantID != "" || ct.Overage {
 					continue
 				}
 			} else if id = tenantIDBySlug[ct.TenantSlug]; id == "" || (tenantID != "" && tenantID != id) {
@@ -307,13 +309,18 @@ func (s *Service) Reset(ctx context.Context, tenantID, modelID string) (ResetRes
 		for _, k := range b.keys {
 			keys = append(keys, k.redis)
 		}
+		// The overage ends first. If Redis then fails, nothing is half
+		// done: the tenant is still past its budget and the loop moves it
+		// again at its next look.
+		res.EndedOverage, err = s.st.EndOverage(ctx, modelID, tenantID)
+		if err != nil {
+			return res, err
+		}
 		res.Deleted, err = s.rd.Delete(ctx, keys)
 		if err != nil {
 			return res, RedisError{fmt.Errorf("reset usage: %w", err)}
 		}
-		// The budget is whole again, so the tenant is no longer past it.
-		res.EndedOverage, err = s.st.EndOverage(ctx, modelID, tenantID)
-		return res, err
+		return res, nil
 	}
 	return ResetResult{}, ErrNoQuota
 }

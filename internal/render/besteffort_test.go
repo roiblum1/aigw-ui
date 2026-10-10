@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ func has(objs []*unstructured.Unstructured, kind, name string) bool {
 // best-effort existed.
 func TestRefuseModeRendersNothingNew(t *testing.T) {
 	for _, o := range Objects(fleetState()) {
-		if strings.Contains(o.GetName(), "-be") {
+		if strings.HasPrefix(o.GetName(), "fleetbe-") {
 			t.Errorf("rendered %s %s for a model in refuse mode", o.GetKind(), o.GetName())
 		}
 	}
@@ -45,14 +46,14 @@ func TestRefuseModeRendersNothingNew(t *testing.T) {
 func TestBestEffortWithNobodyInOverage(t *testing.T) {
 	objs := Objects(bestEffortState())
 	for _, kind := range []string{"AIGatewayRoute", "BackendTrafficPolicy"} {
-		if has(objs, kind, "fleet-glm-5-3-be") {
-			t.Errorf("rendered %s fleet-glm-5-3-be with nobody in overage", kind)
+		if has(objs, kind, "fleetbe-glm-5-3") {
+			t.Errorf("rendered %s fleetbe-glm-5-3 with nobody in overage", kind)
 		}
 	}
-	if has(objs, "EnvoyPatchPolicy", "fleet-glm-5-3-be-retry") {
+	if has(objs, "EnvoyPatchPolicy", "fleetbe-glm-5-3-retry") {
 		t.Error("rendered the retry patch of a route that is not there: it would not be programmed")
 	}
-	backend := find(t, objs, "AIServiceBackend", "fleet-glm-5-3-be")
+	backend := find(t, objs, "AIServiceBackend", "fleetbe-glm-5-3")
 	set, _, _ := unstructured.NestedSlice(backend.Object, "spec", "headerMutation", "set")
 	want := []any{map[string]any{"name": "x-llm-d-inference-objective", "value": "best-effort"}}
 	if !reflect.DeepEqual(set, want) {
@@ -61,7 +62,7 @@ func TestBestEffortWithNobodyInOverage(t *testing.T) {
 	if name, _, _ := unstructured.NestedString(backend.Object, "spec", "backendRef", "name"); name != "fleet-glm-5-3" {
 		t.Errorf("the best-effort backend sends to %q, want the model's sites", name)
 	}
-	find(t, objs, "QuotaPolicy", "fleet-glm-5-3-be")
+	find(t, objs, "QuotaPolicy", "fleetbe-glm-5-3")
 
 	// The model's own route now names its class too.
 	route := find(t, objs, "AIGatewayRoute", "fleet-glm-5-3")
@@ -77,7 +78,7 @@ func TestBestEffortRoute(t *testing.T) {
 	// Given out of order: every cluster must render the same pattern.
 	objs := Objects(bestEffortState("team.b", "team-a"))
 
-	route := find(t, objs, "AIGatewayRoute", "fleet-glm-5-3-be")
+	route := find(t, objs, "AIGatewayRoute", "fleetbe-glm-5-3")
 	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
 	rule := rules[0].(map[string]any)
 	wantMatches := []any{map[string]any{"headers": []any{
@@ -87,7 +88,7 @@ func TestBestEffortRoute(t *testing.T) {
 	if !reflect.DeepEqual(rule["matches"], wantMatches) {
 		t.Errorf("matches:\n got %v\nwant %v", rule["matches"], wantMatches)
 	}
-	wantRefs := []any{map[string]any{"name": "fleet-glm-5-3-be", "modelNameOverride": "glm-5.3"}}
+	wantRefs := []any{map[string]any{"name": "fleetbe-glm-5-3", "modelNameOverride": "glm-5.3"}}
 	if !reflect.DeepEqual(rule["backendRefs"], wantRefs) {
 		t.Errorf("backendRefs = %v", rule["backendRefs"])
 	}
@@ -99,7 +100,7 @@ func TestBestEffortRoute(t *testing.T) {
 	// The same routing as the model's own route, and a 429 also goes on to
 	// the next site.
 	own := find(t, objs, "BackendTrafficPolicy", "fleet-glm-5-3")
-	be := find(t, objs, "BackendTrafficPolicy", "fleet-glm-5-3-be")
+	be := find(t, objs, "BackendTrafficPolicy", "fleetbe-glm-5-3")
 	codes, _, _ := unstructured.NestedSlice(be.Object, "spec", "retry", "retryOn", "httpStatusCodes")
 	if !reflect.DeepEqual(codes, []any{int64(503), int64(429)}) {
 		t.Errorf("best-effort retries on %v", codes)
@@ -109,7 +110,7 @@ func TestBestEffortRoute(t *testing.T) {
 		t.Errorf("the entry route retries on %v", ownCodes)
 	}
 	targets, _, _ := unstructured.NestedSlice(be.Object, "spec", "targetRefs")
-	if targets[0].(map[string]any)["name"] != "fleet-glm-5-3-be" {
+	if targets[0].(map[string]any)["name"] != "fleetbe-glm-5-3" {
 		t.Errorf("policy targets %v", targets)
 	}
 	for _, field := range []string{"loadBalancer", "healthCheck", "circuitBreaker", "timeout"} {
@@ -120,10 +121,10 @@ func TestBestEffortRoute(t *testing.T) {
 		}
 	}
 
-	patch := find(t, objs, "EnvoyPatchPolicy", "fleet-glm-5-3-be-retry")
+	patch := find(t, objs, "EnvoyPatchPolicy", "fleetbe-glm-5-3-retry")
 	patches, _, _ := unstructured.NestedSlice(patch.Object, "spec", "jsonPatches")
 	path, _, _ := unstructured.NestedString(patches[0].(map[string]any), "operation", "jsonPath")
-	if want := "..routes[?(@.name == 'httproute/ai-gateway/fleet-glm-5-3-be/rule/0/match/0/*')].route.retry_policy"; path != want {
+	if want := "..routes[?(@.name == 'httproute/ai-gateway/fleetbe-glm-5-3/rule/0/match/0/*')].route.retry_policy"; path != want {
 		t.Errorf("patch selects %s", path)
 	}
 }
@@ -144,7 +145,7 @@ func TestBestEffortQuotaPolicy(t *testing.T) {
 		return quota["bucketRules"].([]any), quota["defaultBucket"].(map[string]any)
 	}
 	own, _ := rulesOf("glm-5-3")
-	be, pool := rulesOf("fleet-glm-5-3-be")
+	be, pool := rulesOf("fleetbe-glm-5-3")
 	if len(be) != len(own) {
 		t.Fatalf("%d rules on the best-effort route, %d on the model's own", len(be), len(own))
 	}
@@ -161,9 +162,9 @@ func TestBestEffortQuotaPolicy(t *testing.T) {
 	if pool["limit"] != serviceQuotaLimit {
 		t.Errorf("default bucket of the best-effort route = %v, want one that never runs out", pool)
 	}
-	policy := find(t, objs, "QuotaPolicy", "fleet-glm-5-3-be")
+	policy := find(t, objs, "QuotaPolicy", "fleetbe-glm-5-3")
 	refs, _, _ := unstructured.NestedSlice(policy.Object, "spec", "targetRefs")
-	if len(refs) != 1 || refs[0].(map[string]any)["name"] != "fleet-glm-5-3-be" {
+	if len(refs) != 1 || refs[0].(map[string]any)["name"] != "fleetbe-glm-5-3" {
 		t.Errorf("targets = %v", refs)
 	}
 	// The model's own policy is not attached to the best-effort backend:
@@ -171,7 +172,7 @@ func TestBestEffortQuotaPolicy(t *testing.T) {
 	ownPolicy := find(t, objs, "QuotaPolicy", "glm-5-3")
 	refs, _, _ = unstructured.NestedSlice(ownPolicy.Object, "spec", "targetRefs")
 	for _, ref := range refs {
-		if ref.(map[string]any)["name"] == "fleet-glm-5-3-be" {
+		if ref.(map[string]any)["name"] == "fleetbe-glm-5-3" {
 			t.Error("the model's own policy targets the best-effort backend")
 		}
 	}
@@ -192,11 +193,11 @@ func TestBestEffortCounters(t *testing.T) {
 	if len(own) != 1 || len(be) != 1 {
 		t.Fatalf("counters: %d on the model's own route, %d on the best-effort route", len(own), len(be))
 	}
-	if be[0].Backend != "ai-gateway/fleet-glm-5-3-be" || !be[0].Shadow || be[0].Limit != 500 {
+	if be[0].Backend != "ai-gateway/fleetbe-glm-5-3" || !be[0].Shadow || be[0].Limit != 500 {
 		t.Errorf("best-effort counter = %+v", be[0])
 	}
 	// Same rule, other backend.
-	if want := strings.Replace(own[0].stem, "fleet-glm-5-3_", "fleet-glm-5-3-be_", 1); be[0].stem != want {
+	if want := strings.Replace(own[0].stem, "fleet-glm-5-3_", "fleetbe-glm-5-3_", 1); be[0].stem != want {
 		t.Errorf("stem:\n got %s\nwant %s", be[0].stem, want)
 	}
 }
@@ -237,7 +238,7 @@ func TestQuotaRevisionOnRoutes(t *testing.T) {
 	before := bestEffortState("team-a")
 	after := bestEffortState("team-a")
 	after.Models[0].Quotas = append(after.Models[0].Quotas, TenantQuota{TenantSlug: "team-b", Slot: 1, Limit: 5, Window: "1h"})
-	for _, name := range []string{"fleet-glm-5-3", "fleet-glm-5-3-be"} {
+	for _, name := range []string{"fleet-glm-5-3", "fleetbe-glm-5-3"} {
 		a, b := revision(before, name), revision(after, name)
 		if a == "" || a == b {
 			t.Errorf("%s: revision %q before and %q after a tenant got a quota", name, a, b)
@@ -255,8 +256,8 @@ func TestQuotaRevisionOnRoutes(t *testing.T) {
 		position[o.GetKind()+"/"+o.GetName()] = i
 	}
 	for route, policy := range map[string]string{
-		"AIGatewayRoute/fleet-glm-5-3":    "QuotaPolicy/glm-5-3",
-		"AIGatewayRoute/fleet-glm-5-3-be": "QuotaPolicy/fleet-glm-5-3-be",
+		"AIGatewayRoute/fleet-glm-5-3":   "QuotaPolicy/glm-5-3",
+		"AIGatewayRoute/fleetbe-glm-5-3": "QuotaPolicy/fleetbe-glm-5-3",
 	} {
 		if position[route] > position[policy] {
 			t.Errorf("%s is applied after %s", route, policy)
@@ -270,7 +271,7 @@ func TestOneSiteHasNoZoneWeights(t *testing.T) {
 	s := bestEffortState("team-a")
 	s.Models[0].Fleet = s.Models[0].Fleet[:1]
 	objs := Objects(s)
-	for _, name := range []string{"fleet-glm-5-3", "fleet-glm-5-3-be"} {
+	for _, name := range []string{"fleet-glm-5-3", "fleetbe-glm-5-3"} {
 		policy := find(t, objs, "BackendTrafficPolicy", name)
 		if _, found, _ := unstructured.NestedMap(policy.Object, "spec", "loadBalancer", "zoneAware"); found {
 			t.Errorf("%s has zone weights for a single site", name)
@@ -282,5 +283,18 @@ func TestOneSiteHasNoZoneWeights(t *testing.T) {
 	two := find(t, Objects(bestEffortState("team-a")), "BackendTrafficPolicy", "fleet-glm-5-3")
 	if zones, _, _ := unstructured.NestedSlice(two.Object, "spec", "loadBalancer", "zoneAware", "weightedZones"); len(zones) != 2 {
 		t.Errorf("zones for two sites = %v", zones)
+	}
+}
+
+// The route lists a limited number of tenants. The ones given first, which
+// are those past their budget, keep their place.
+func TestOverageTenantsKeepsTheFirst(t *testing.T) {
+	m := Model{Overage: []string{"zeta-spent"}}
+	for i := 0; i < MaxOverageTenants+50; i++ {
+		m.Overage = append(m.Overage, fmt.Sprintf("a-no-quota-%03d", i))
+	}
+	got := m.OverageTenants()
+	if len(got) != MaxOverageTenants || got[len(got)-1] != "zeta-spent" {
+		t.Errorf("%d tenants, last %q: want %d, sorted, with the first one given kept", len(got), got[len(got)-1], MaxOverageTenants)
 	}
 }

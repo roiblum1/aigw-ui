@@ -98,7 +98,8 @@ type Model struct {
 	// refusing it. It needs the entry route.
 	BestEffort bool
 	// Overage is the slugs of the tenants whose requests take that second
-	// route right now. The route is rendered while there are any.
+	// route right now, the ones that must not be left out first. The route
+	// is rendered while there are any.
 	Overage []string
 }
 

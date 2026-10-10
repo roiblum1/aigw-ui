@@ -17,7 +17,6 @@ type fake struct {
 	quotas  []usage.Quota
 	redis   error
 	changes []string
-	audits  int
 }
 
 func (f *fake) ListModels(context.Context) ([]store.Model, error) { return f.models, nil }
@@ -28,8 +27,6 @@ func (f *fake) StartOverage(_ context.Context, modelID, tenantID string, until t
 	f.active = append(f.active, store.Overage{ModelID: modelID, ModelName: modelID, TenantID: tenantID, TenantSlug: tenantID, Until: until})
 	return true, nil
 }
-
-func (f *fake) AddAudit(context.Context, store.AuditEntry) error { f.audits++; return nil }
 
 func (f *fake) Report(context.Context, string) (usage.Report, error) {
 	return usage.Report{Quotas: f.quotas}, f.redis
@@ -79,8 +76,9 @@ func TestTickMovesAtTheThreshold(t *testing.T) {
 			t.Errorf("%s moved = %v, want %v", tenant, f.in(tenant), want)
 		}
 	}
-	if len(f.changes) != 2 || f.audits != 2 {
-		t.Errorf("%d task lines and %d audit lines, want one of each per move: %v", len(f.changes), f.audits, f.changes)
+	// One task, and so one sync, for the whole tick.
+	if len(f.changes) != 1 || !strings.Contains(f.changes[0], "at on glm") || !strings.Contains(f.changes[0], "over on glm") {
+		t.Errorf("changes = %v, want one line naming both tenants", f.changes)
 	}
 	if f.active[0].Until.Unix() != 1791403200 {
 		t.Errorf("until = %v, want the end of the quota's window", f.active[0].Until)
@@ -141,5 +139,26 @@ func TestTickDoesNothingWithoutABestEffortModel(t *testing.T) {
 	f.redis = errors.New("must not be asked")
 	if err := s.Tick(context.Background()); err != nil {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// A period can end while the server is not running. The first tick cannot
+// know, so it has the clusters synced once.
+func TestFirstTickSyncsOnce(t *testing.T) {
+	f, s := setup()
+	s.Tick(context.Background())
+	if len(f.changes) != 1 || !strings.Contains(f.changes[0], "server started") {
+		t.Errorf("changes = %v, want one line for the start", f.changes)
+	}
+	s.Tick(context.Background())
+	if len(f.changes) != 1 {
+		t.Errorf("a later tick synced again: %v", f.changes)
+	}
+
+	f, s = setup()
+	f.models = f.models[1:]
+	s.Tick(context.Background())
+	if len(f.changes) != 0 {
+		t.Errorf("synced without a best-effort model: %v", f.changes)
 	}
 }

@@ -199,7 +199,7 @@ func TestHeldModelKeepsItsQuotas(t *testing.T) {
 	}
 	find(t, objs, "Backend", "local")
 	// The best-effort route's names are held too, whether it is there or not.
-	if held := HeldNames(s); !held["fleet-glm-5-3"] || !held["fleet-glm-5-3-retry"] || !held["fleet-glm-5-3-be"] || !held["fleet-glm-5-3-be-retry"] || len(held) != 4 {
+	if held := HeldNames(s); !held["fleet-glm-5-3"] || !held["fleet-glm-5-3-retry"] || !held["fleetbe-glm-5-3"] || !held["fleetbe-glm-5-3-retry"] || len(held) != 4 {
 		t.Errorf("held = %v", held)
 	}
 }
