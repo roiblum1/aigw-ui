@@ -298,3 +298,23 @@ func TestOverageTenantsKeepsTheFirst(t *testing.T) {
 		t.Errorf("%d tenants, last %q: want %d, sorted, with the first one given kept", len(got), got[len(got)-1], MaxOverageTenants)
 	}
 }
+
+// A model in best-effort mode next to a model whose name ends in "-be": no
+// two objects of one kind may share a name, or each sync overwrites one
+// model's objects with the other's.
+func TestBestEffortNamesDoNotCollide(t *testing.T) {
+	s := bestEffortState("team-a")
+	other := s.Models[0]
+	other.Name, other.Slug = "glm-5.3-be", "glm-5-3-be"
+	other.BestEffort, other.Overage = false, nil
+	s.Models = append(s.Models, other)
+
+	seen := map[string]bool{}
+	for _, o := range Objects(s) {
+		id := o.GetKind() + "/" + o.GetNamespace() + "/" + o.GetName()
+		if seen[id] {
+			t.Errorf("%s is rendered twice", id)
+		}
+		seen[id] = true
+	}
+}
