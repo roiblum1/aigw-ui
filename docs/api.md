@@ -293,7 +293,9 @@ Each endpoint of a model carries `capacity`, and the model `site_weights`:
                   "weight": 8, "changed_at": "2026-10-09T08:12:00Z",
                   "detail": "894-llms/glm53: 8 of 8 ready",
                   "serving": true, "drained": false,
-                  "revision": "glm-5.3-fp8-2026-09-14", "max_model_len": "262144"}}
+                  "revision": "glm-5.3-fp8-2026-09-14", "max_model_len": "262144",
+                  "pools": [{"namespace": "894-llms", "name": "glm53-inference-pool",
+                             "group": "inference.networking.k8s.io"}]}}
   ],
   "warnings": [],
   "fleet": false,

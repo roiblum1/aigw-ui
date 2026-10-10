@@ -14,7 +14,7 @@ func valid(t *testing.T) {
 	for _, name := range []string{
 		"LISTEN_ADDR", "UI_DIR", "AUTO_SYNC", "DISCOVERY_INTERVAL", "SYNC_INTERVAL",
 		"REDIS_URL", "REDIS_CA_FILE", "REDIS_TLS_INSECURE", "REDIS_KEY_PREFIX", "REDIS_ALLOW_RESET",
-		"OVERAGE_INTERVAL", "OVERAGE_THRESHOLD",
+		"OVERAGE_INTERVAL", "OVERAGE_THRESHOLD", "BEST_EFFORT_PRIORITY",
 		"FLEET_PEER_SNI", "FLEET_DOMAIN", "FLEET_PEER_CA_CONFIGMAP", "FLEET_PEER_CLIENT_SECRET", "FLEET_SESSION_HEADER",
 	} {
 		t.Setenv(name, "")
@@ -35,6 +35,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if c.OverageEvery != 15*time.Second || c.OverageThreshold != 0.9 {
 		t.Errorf("overage defaults = %v, %v", c.OverageEvery, c.OverageThreshold)
+	}
+	if c.Fleet.BestEffortPriority != -1 {
+		t.Errorf("best-effort priority = %d, want -1", c.Fleet.BestEffortPriority)
 	}
 	if c.RedisURL != "" || c.RedisAllowReset {
 		t.Error("usage monitoring is on without a Redis URL")
@@ -82,6 +85,9 @@ func TestLoadRefuses(t *testing.T) {
 		{"OVERAGE_INTERVAL", "0", "OVERAGE_INTERVAL"},
 		{"OVERAGE_THRESHOLD", "0.2", "OVERAGE_THRESHOLD"},
 		{"OVERAGE_THRESHOLD", "1.5", "OVERAGE_THRESHOLD"},
+		{"BEST_EFFORT_PRIORITY", "0", "BEST_EFFORT_PRIORITY"},
+		{"BEST_EFFORT_PRIORITY", "3", "BEST_EFFORT_PRIORITY"},
+		{"BEST_EFFORT_PRIORITY", "low", "BEST_EFFORT_PRIORITY"},
 	} {
 		t.Run(tc.name+"="+tc.value, func(t *testing.T) {
 			valid(t)

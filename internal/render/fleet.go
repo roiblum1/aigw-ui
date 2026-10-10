@@ -26,6 +26,9 @@ type FleetConfig struct {
 	// client. Requests with the same value go to the same site. A request
 	// is hashed on the ones it has.
 	SessionHeaders []string
+	// BestEffortPriority is the priority of the request class the hub
+	// creates for best-effort models. 0 means DefaultBestEffortPriority.
+	BestEffortPriority int64
 }
 
 // FleetSite is one site that serves a model, as an entry gateway reaches it.

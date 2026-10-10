@@ -73,6 +73,47 @@ type ModelCapacity struct {
 	// than one value on a cluster is joined with ", ".
 	Revision    string
 	MaxModelLen string
+	// Pools are the InferencePools the model's deployments are served
+	// through, one per deployment that has a scheduler.
+	Pools []Pool
+}
+
+// Pool names an InferencePool: the set of pods of one deployment that its
+// scheduler picks from. A request class is defined per pool.
+type Pool struct {
+	Namespace string
+	Name      string
+	// Group is the pool's API group. Two generations of the kind exist.
+	Group string
+}
+
+// defaultPoolGroup is the group of the InferencePool KServe creates today.
+const defaultPoolGroup = "inference.networking.k8s.io"
+
+// pool returns the InferencePool of an LLMInferenceService, and false for a
+// service without a scheduler: its requests are not queued by class.
+//
+// KServe reports the pool it observed in the status. Before it has, the
+// pool is the one the spec names, or the one KServe creates, which is
+// called after the service.
+func pool(svc *unstructured.Unstructured) (Pool, bool) {
+	if _, scheduled, _ := unstructured.NestedMap(svc.Object, "spec", "router", "scheduler"); !scheduled {
+		return Pool{}, false
+	}
+	p := Pool{Namespace: svc.GetNamespace(), Group: defaultPoolGroup}
+	if observed, ok, _ := unstructured.NestedMap(svc.Object, "status", "router", "scheduler", "inferencePool"); ok {
+		p.Name, _ = observed["name"].(string)
+		if group, _ := observed["group"].(string); group != "" {
+			p.Group = group
+		}
+	}
+	if p.Name == "" {
+		p.Name, _, _ = unstructured.NestedString(svc.Object, "spec", "router", "scheduler", "pool", "ref", "name")
+	}
+	if p.Name == "" {
+		p.Name = svc.GetName() + "-inference-pool"
+	}
+	return p, true
 }
 
 // Capacity reads how many instances of each model are ready, from the
@@ -122,6 +163,9 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 		mc.Detail += describeWorkload(svc, w, instances, known) + note
 		mc.Revision = addValue(mc.Revision, svc.GetAnnotations()[RevisionAnnotation])
 		mc.MaxModelLen = addValue(mc.MaxModelLen, svc.GetAnnotations()[MaxModelLenAnnotation])
+		if p, ok := pool(svc); ok {
+			mc.Pools = append(mc.Pools, p)
+		}
 	}
 	out := make([]ModelCapacity, 0, len(byModel))
 	for _, mc := range byModel {

@@ -72,6 +72,7 @@ for crd in \
   curl -fsSL "$crd" | kc apply --server-side -f -
 done
 kc apply -f internal/kube/testdata/llminferenceservice-crd.yaml
+kc apply -f internal/kube/testdata/inferenceobjective-crd.yaml
 kc wait --for=condition=Established crd --all --timeout=60s
 
 KUBE_TEST_KUBECONFIG="$work/kubeconfig" go test ./internal/kube/ -run RealAPIServer -count=1 -v
