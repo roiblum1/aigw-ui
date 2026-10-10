@@ -54,7 +54,15 @@ export function UsageMeter({ q }: { q: UsageQuota }) {
           dry-run
         </span>
       )}
-      {q.best_effort_until && (
+      {q.best_effort_until && q.best_effort_capped && (
+        <span
+          className="tag warn"
+          title="The budget is spent and the tenant has used all the model allows as best-effort in one period. It is refused until the period ends."
+        >
+          best-effort limit reached, refused until {untilTime(q.best_effort_until)}
+        </span>
+      )}
+      {q.best_effort_until && !q.best_effort_capped && (
         <span
           className="tag warn"
           title="The budget is spent. Requests are answered as best-effort: queued behind all others and dropped first when a site is full."
@@ -64,7 +72,9 @@ export function UsageMeter({ q }: { q: UsageQuota }) {
       )}
       {q.overage_used > 0 && (
         <div className="detail">
-          {formatAmount(q.overage_used, q.unit)} used as best-effort{q.unit === "credits" && ", not charged"}
+          {formatAmount(q.overage_used, q.unit)}
+          {q.best_effort_limit ? ` of ${formatAmount(q.best_effort_limit, q.unit)}` : ""} used as best-effort
+          {q.unit === "credits" && ", not charged"}
         </div>
       )}
     </div>

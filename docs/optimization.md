@@ -92,8 +92,11 @@ and are not held up by them.
 
 - The decision is made by the sites, per request, from what they can serve
   at that moment. There is no number to set and none to keep up to date.
-- There is no upper limit on what a tenant uses as best-effort. It is shown
-  on the **Usage** page next to the budget and is not added to it.
+- What a tenant uses as best-effort is shown on the **Usage** page next to
+  the budget and is not added to it. It has no upper limit unless you set
+  one: **Best-effort limit** in the model's row. A tenant at the limit is
+  taken off the best-effort route and refused until its window ends. See
+  [a limit on best-effort use](pricing.md#a-limit-on-best-effort-use).
 - The move takes up to 15 seconds plus a sync. A tenant that spends its last
   10% faster than that gets 429 for a few seconds.
 - Only hourly and daily quotas are moved. A window of a second or a minute

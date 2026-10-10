@@ -101,6 +101,8 @@ Back up the encryption key straight away. See
 | `config.syncInterval` | `5m` | How often every cluster is synced again without a change. `0` turns it off. Needs `autoSync` |
 | `config.overageInterval` | `15s` | For models that serve a spent budget as best-effort: how often the usage counters are read. At least `5s`. Needs `redis.url` |
 | `config.overageThreshold` | `0.9` | The share of its budget a tenant has to have used to be moved to best-effort, from `0.5` to `1` |
+| `config.usageHistoryInterval` | `1m` | How often the usage counters are read to keep the usage history. At least `10s`; `0` keeps none. Needs `redis.url` |
+| `config.tenantPage` | `true` | Lets a tenant sign in at `/my-usage` with one of its API keys and see its own budgets and usage |
 | `config.bestEffortPriority` | `-1` | The priority of the request class `best-effort` the hub creates on the serving clusters. Below 0: a request without a class has 0 |
 | `fleet.domain` | empty | The sites' listener for other sites answers as `peers.llm.<domain>`. Empty, with `fleet.peerSNI` empty too: no entry route can be turned on |
 | `fleet.peerSNI` | empty | That server name, when it is not `peers.llm.<domain>` |

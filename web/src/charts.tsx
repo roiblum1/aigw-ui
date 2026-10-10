@@ -130,3 +130,52 @@ export function topSlices(items: { label: string; value: number }[]): Slice[] {
   if (rest > 0) top.push({ label: `${sorted.length - 5} others`, value: rest, color: PALETTE[5] });
   return top;
 }
+
+export const paletteColor = (i: number) => PALETTE[Math.min(i, PALETTE.length - 1)];
+
+/**
+ * Usage over time: one bar per hour or day, stacked by series. The data is
+ * laid out by stack() in history.ts.
+ */
+export function TimeBars(props: {
+  steps: Date[];
+  series: { label: string; values: number[] }[];
+  peak: number;
+  label: (at: Date) => string;
+  format: (n: number) => string;
+  title: string;
+}) {
+  const { steps, series, peak } = props;
+  if (peak <= 0) return <p className="detail">Nothing was used in this time.</p>;
+  // Three labels fit under the bars on a phone: the first, the middle, the last.
+  const marks = [0, Math.floor((steps.length - 1) / 2), steps.length - 1].filter((v, i, a) => a.indexOf(v) === i);
+  return (
+    <div className="timebars" role="img" aria-label={props.title}>
+      <div className="timebars-scale" aria-hidden>
+        <span>{props.format(peak)}</span>
+        <span>{props.format(Math.round(peak / 2))}</span>
+        <span>0</span>
+      </div>
+      <div className="timebars-plot">
+        <div className="timebars-bars">
+          {steps.map((at, i) => {
+            const sum = series.reduce((n, s) => n + s.values[i], 0);
+            const parts = series.filter((s) => s.values[i] > 0).map((s) => `${s.label}: ${props.format(s.values[i])}`);
+            return (
+              <div key={i} className="timebars-col" title={`${props.label(at)}: ${props.format(sum)}${parts.length > 1 ? "\n" + parts.join("\n") : parts.length === 1 ? ` (${series.find((s) => s.values[i] > 0)?.label})` : ""}`}>
+                {series.map((s, n) =>
+                  s.values[i] > 0 ? <span key={s.label} style={{ height: `${(s.values[i] / peak) * 100}%`, background: paletteColor(n) }} /> : null,
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="timebars-axis" aria-hidden>
+          {marks.map((i) => (
+            <span key={i}>{props.label(steps[i])}</span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

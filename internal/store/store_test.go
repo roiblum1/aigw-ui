@@ -167,12 +167,12 @@ func TestTenantKeysAndQuotas(t *testing.T) {
 func TestSpentModeNeedsTheEntryRoute(t *testing.T) {
 	s, ctx := open(t)
 	plain := model(t, s, ctx, "plain", false)
-	if _, err := s.SetModelSpentMode(ctx, plain, SpentBestEffort, false); !errors.Is(err, ErrNoEntryRoute) {
+	if _, err := s.SetModelSpentMode(ctx, plain, SpentBestEffort, false, nil); !errors.Is(err, ErrNoEntryRoute) {
 		t.Errorf("best-effort without an entry route: %v, want ErrNoEntryRoute", err)
 	}
 
 	glm := model(t, s, ctx, "glm", true)
-	if _, err := s.SetModelSpentMode(ctx, glm, SpentBestEffort, true); err != nil {
+	if _, err := s.SetModelSpentMode(ctx, glm, SpentBestEffort, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.SetModelFleet(ctx, glm, false); !errors.Is(err, ErrBestEffortOn) {
@@ -187,7 +187,7 @@ func TestSpentModeNeedsTheEntryRoute(t *testing.T) {
 	if ok, err := s.StartOverage(ctx, glm, team.ID, time.Now().Add(time.Hour)); err != nil || !ok {
 		t.Fatalf("start = %v, %v", ok, err)
 	}
-	if _, err := s.SetModelSpentMode(ctx, glm, SpentRefuse, true); err != nil {
+	if _, err := s.SetModelSpentMode(ctx, glm, SpentRefuse, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n := active(t, s, ctx); n != 0 {
@@ -263,7 +263,7 @@ func TestOveragePeriod(t *testing.T) {
 func TestBestEffortTenantsOrder(t *testing.T) {
 	s, ctx := open(t)
 	glm := model(t, s, ctx, "glm", true)
-	if _, err := s.SetModelSpentMode(ctx, glm, SpentBestEffort, true); err != nil {
+	if _, err := s.SetModelSpentMode(ctx, glm, SpentBestEffort, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	tenant(t, s, ctx, "alpha")
@@ -298,7 +298,7 @@ func TestBestEffortTenantsOrder(t *testing.T) {
 	}
 
 	// Without "also without a quota" only the moved tenant is left.
-	if _, err := s.SetModelSpentMode(ctx, glm, SpentBestEffort, false); err != nil {
+	if _, err := s.SetModelSpentMode(ctx, glm, SpentBestEffort, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = s.BestEffortTenants(ctx); len(got[glm]) != 1 || got[glm][0] != "zeta" {

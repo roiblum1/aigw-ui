@@ -22,6 +22,7 @@ import Architecture from "./pages/Architecture";
 import Docs from "./pages/Docs";
 import BrandMark from "./BrandMark";
 import Login from "./pages/Login";
+import MyUsage from "./pages/MyUsage";
 import Overview from "./pages/Overview";
 import { UNAUTHORIZED_EVENT } from "./components";
 
@@ -64,7 +65,15 @@ const navItem =
   "flex h-9 items-center justify-start gap-2.5 rounded-lg border-0 bg-transparent px-3 text-[13.5px] font-medium " +
   "text-sidebar-foreground no-underline shadow-none transition-colors hover:bg-white/10 hover:text-white";
 
+/** The tenants' own page has its own address and sign-in. */
+const TENANT_PATH = "/my-usage";
+
 export default function App() {
+  if (location.pathname.replace(/\/+$/, "") === TENANT_PATH) return <MyUsage />;
+  return <Admin />;
+}
+
+function Admin() {
   const [authed, setAuthed] = useState(() => getToken() !== "");
   const [page, setPage] = useState<Page>(pageFromHash);
   const theme = useDarkMode();

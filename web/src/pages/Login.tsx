@@ -50,6 +50,9 @@ export default function Login({ onLogin }: { onLogin: () => void }) {
         <button type="submit" className="primary mt-1 w-full" disabled={busy}>
           {busy ? "Signing in…" : "Sign in"}
         </button>
+        <p className="mt-4 text-center text-[13px] text-muted-foreground">
+          Looking for your team's usage? <a href="/my-usage">Sign in with an API key</a>.
+        </p>
       </form>
     </div>
   );

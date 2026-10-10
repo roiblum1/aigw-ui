@@ -9,7 +9,6 @@ import (
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/selftest"
 	"aigw-ui/internal/store"
-	"aigw-ui/internal/syncer"
 )
 
 func (s *Server) listTenants(w http.ResponseWriter, r *http.Request) {
@@ -202,19 +201,11 @@ func (s *Server) quotaSummary(ctx context.Context, tenantID, modelID string, quo
 		if q.ModelID != modelID {
 			continue
 		}
-		summary := fmt.Sprintf("Set quota of %s on %s to %s per %s", t.Slug, q.ModelName, amount(q.TokenLimit, q.Unit), windowNames[q.Window])
+		summary := fmt.Sprintf("Set quota of %s on %s to %s per %s", t.Slug, q.ModelName, store.Amount(q.TokenLimit, q.Unit), windowNames[q.Window])
 		if q.Shadow {
 			summary += " (dry run)"
 		}
 		return summary
 	}
 	return "Set a quota for " + t.Slug
-}
-
-// amount writes a limit in its unit: "2000000 tokens" or "$12.50".
-func amount(n int64, unit string) string {
-	if unit == store.UnitCredits {
-		return syncer.Dollars(n)
-	}
-	return fmt.Sprintf("%d tokens", n)
 }

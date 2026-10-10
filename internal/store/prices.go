@@ -17,6 +17,15 @@ const (
 	UnitCredits = "credits"
 )
 
+// Amount writes a limit or a usage in a unit the way a person reads it:
+// "$12.50" or "40000 tokens".
+func Amount(n int64, unit string) string {
+	if unit == UnitCredits {
+		return render.Dollars(n)
+	}
+	return fmt.Sprintf("%d tokens", n)
+}
+
 // Price is one set of prices of a model, in credits per million tokens.
 type Price struct {
 	Version int   `json:"version"`
@@ -161,7 +170,8 @@ func toCredits(ctx context.Context, tx pgx.Tx, modelID string, priceInput int64)
 	const converted = `LEAST($3::numeric, GREATEST(1, floor(%s::numeric * $2 / 1000000)))::bigint`
 	for _, q := range []string{
 		`UPDATE quotas SET token_limit = ` + fmt.Sprintf(converted, "token_limit") + ` WHERE model_id = $1`,
-		`UPDATE models SET price_dry_run = true, default_limit = ` + fmt.Sprintf(converted, "default_limit") + ` WHERE id = $1`,
+		`UPDATE models SET price_dry_run = true, default_limit = ` + fmt.Sprintf(converted, "default_limit") +
+			`, best_effort_limit = ` + fmt.Sprintf(converted, "best_effort_limit") + ` WHERE id = $1`,
 		// Nobody is moved to best-effort during dry-run, and a period that
 		// began against a limit in tokens says nothing about one in credits.
 		`UPDATE overage SET until = now() WHERE model_id = $1 AND until > now() AND $2::bigint > 0 AND $3::bigint > 0`,

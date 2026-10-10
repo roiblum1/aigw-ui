@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"aigw-ui/internal/render"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ func TestDollars(t *testing.T) {
 	for credits, want := range map[int64]string{
 		0: "$0.00", 1: "$0.00001", 11574: "$0.11574", 100_000: "$1.00", 1_250_000: "$12.50", 4_294_967_295: "$42949.67295",
 	} {
-		if got := Dollars(credits); got != want {
+		if got := render.Dollars(credits); got != want {
 			t.Errorf("Dollars(%d) = %s, want %s", credits, got, want)
 		}
 	}

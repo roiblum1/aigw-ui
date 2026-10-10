@@ -114,6 +114,10 @@ type Model struct {
 	// BestEffortUnlimited serves tenants without a quota of their own on the
 	// model as best-effort, in place of sharing its default pool.
 	BestEffortUnlimited bool `json:"best_effort_unlimited"`
+	// BestEffortLimit is the most a tenant may use of the model as
+	// best-effort in one period of its quota, in the model's unit. Nil is
+	// no limit.
+	BestEffortLimit *int64 `json:"best_effort_limit"`
 	// Warnings are differences between the sites that serve the model which
 	// an operator should look at.
 	Warnings []string `json:"warnings"`
@@ -154,6 +158,9 @@ type Overage struct {
 	Until      time.Time `json:"until"`
 	// Active is true while the period has not ended.
 	Active bool `json:"active"`
+	// CappedAt is set when the tenant reached the model's best-effort limit
+	// in the period. From then on it is refused until the period ends.
+	CappedAt *time.Time `json:"capped_at"`
 }
 
 type Tenant struct {

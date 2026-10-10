@@ -21,7 +21,9 @@ type bucket struct {
 	// whose prices are being tried out: nobody is refused there.
 	unit   string
 	dryRun bool
-	keys   []*key
+	// bestEffortLimit is the model's limit on best-effort use, if any.
+	bestEffortLimit *int64
+	keys            []*key
 }
 
 // key is one Redis key and the clusters that count in it.
@@ -86,6 +88,9 @@ func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) (
 					tenantID: id, tenantSlug: ct.TenantSlug, modelID: model.ID, modelName: model.Name,
 					limit: ct.Limit, window: ct.Window, shadow: ct.Shadow,
 					unit: model.Unit, dryRun: model.PriceDryRun,
+				}
+				if model.SpentMode == store.SpentBestEffort {
+					b.bestEffortLimit = model.BestEffortLimit
 				}
 				byID[bucketID{ct.TenantSlug, ct.ModelSlug}] = b
 				out = append(out, b)

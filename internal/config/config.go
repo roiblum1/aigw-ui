@@ -42,6 +42,13 @@ type Config struct {
 	// the gateway starts refusing.
 	OverageThreshold float64
 
+	// HistoryEvery is how often the usage counters are read to keep the
+	// usage history. 0 keeps none.
+	HistoryEvery time.Duration
+	// TenantPage lets a tenant see its own usage by signing in with one of
+	// its API keys.
+	TenantPage bool
+
 	// Fleet is what every site's entry route has in common. PeerSNI is
 	// empty when neither FLEET_PEER_SNI nor FLEET_DOMAIN is set, and no
 	// entry route can be turned on then.
@@ -104,6 +111,11 @@ func Load() (*Config, error) {
 	if err != nil || c.OverageThreshold < 0.5 || c.OverageThreshold > 1 {
 		return nil, errors.New("OVERAGE_THRESHOLD must be a number from 0.5 to 1 such as 0.9")
 	}
+	c.HistoryEvery, err = time.ParseDuration(envOr("USAGE_HISTORY_INTERVAL", "1m"))
+	if err != nil || c.HistoryEvery < 0 || (c.HistoryEvery > 0 && c.HistoryEvery < 10*time.Second) {
+		return nil, errors.New("USAGE_HISTORY_INTERVAL must be a duration of at least 10s such as 1m, or 0 to keep no usage history")
+	}
+	c.TenantPage = envOr("TENANT_PAGE", "true") == "true"
 	c.Fleet.BestEffortPriority, err = strconv.ParseInt(envOr("BEST_EFFORT_PRIORITY", strconv.Itoa(render.DefaultBestEffortPriority)), 10, 32)
 	if err != nil || c.Fleet.BestEffortPriority >= 0 {
 		return nil, errors.New("BEST_EFFORT_PRIORITY must be a whole number below 0 such as -1")

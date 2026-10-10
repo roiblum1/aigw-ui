@@ -23,6 +23,16 @@ export function formatDollars(credits: number): string {
   });
 }
 
+/** A price for a million tokens: as many decimals as it has, at least two. */
+export function formatPrice(credits: number): string {
+  return (credits / CREDITS_PER_DOLLAR).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 5,
+  });
+}
+
 /** An amount in the unit its model is counted in. */
 export function formatAmount(n: number, unit: Unit): string {
   return unit === "credits" ? formatDollars(n) : formatTokens(n);

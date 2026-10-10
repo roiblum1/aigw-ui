@@ -8,11 +8,11 @@ whole platform, including routing between sites, see
 
 | Component | Runs on | Role |
 |---|---|---|
-| API server (Go) | hub | Serves the UI and the REST API, runs the sync and discovery loops |
+| API server (Go) | hub | Serves the UI and the REST API, runs the sync and discovery loops, and reads the usage counters |
 | UI (React) | hub, inside the server image | Static files served by the API server |
-| Postgres | hub | Source of truth: clusters, models, tenants, keys, quotas |
+| Postgres | hub | Source of truth: clusters, models, tenants, keys, quotas. Also the usage history |
 | Envoy AI Gateway | each LLM cluster | Serves the traffic. Not installed by this tool |
-| Redis | hub | Shared token counters for the gateways' rate limit service. Not installed by this tool and not used by the server itself |
+| Redis | hub | Shared usage counters of the gateways' rate limit service. Not installed by this tool. The server reads it and, when resets are allowed, deletes a counter |
 
 The server is stateless. All state is in Postgres, so the pod can be restarted
 or replaced at any time.
@@ -381,6 +381,14 @@ The overage loop (`internal/overage`) decides who is listed. It reads the
 usage report, the same counters as the Usage page, every `OVERAGE_INTERVAL`
 and stores each move in the table `overage` with the end of the quota's
 window. A change of the set queues one sync of all clusters.
+
+A model can limit best-effort use (`models.best_effort_limit`). The same
+loop compares the limit with the tenant's counter on the best-effort
+backend. At the limit it sets `overage.capped_at`, and the next sync
+renders the best-effort route without the tenant. The period stays in the
+table until the window ends, so the tenant is not moved again in it. Its
+own budget is spent, so the gateway's quota filter refuses it. This has
+been tested in the loop and against Postgres, not on a gateway.
 [What each action does](how-it-works.md#best-effort-when-a-budget-is-spent)
 has the reasons.
 
@@ -485,6 +493,42 @@ Two things follow from that name:
   which happens when a quota is added at the end or the last one is removed.
   The self-test does both. With the default pool of 1 token this does not
   matter; with a large shared pool, expect the pool's usage to restart.
+
+## Usage history
+
+`internal/history` keeps what was used in the past. Every
+`USAGE_HISTORY_INTERVAL` (default 1 minute) it asks for the usage report
+and adds, per tenant and model, the growth of the counter since its last
+look to the row of the running hour in `usage_hours`. What the counter held
+at the last look is in `usage_cursors`.
+
+| Case | What is added |
+|---|---|
+| Same window as the last look | The counter minus the cursor |
+| The counter is lower than the cursor | The counter: it was reset |
+| A new window began | The new counter, and what the old window's counter grew by after the last look. That part goes to the last hour of the old window |
+| Redis cannot be read | Nothing. The cursors stay, and the next look adds it |
+
+The counter of a window that ended is still in Redis: the rate limit
+service lets a key expire one window length and some jitter after its last
+hit. That is how the end of a window is read after it.
+
+A look runs in one transaction that first takes an advisory lock, so two
+replicas never add the same usage twice. Rows older than 400 days are
+deleted once a day.
+
+The history is read by `GET /usage/history` and by the tenants' own page.
+
+## The tenants' own page
+
+`GET /api/v1/my/usage` is outside the admin API. Its bearer token is a
+tenant's API key. The server finds the stored keys that start like it,
+opens them and compares in constant time; the tenant of the match is the
+only one the answer is about. The answer is built from the usage report of
+that tenant, its rows of the history and the prices of its models.
+
+The UI serves it at `/my-usage`, a path of its own next to the admin
+pages, with its own sign-in. See [security](security.md#the-tenants-own-page).
 
 ## Not verified on a real gateway
 

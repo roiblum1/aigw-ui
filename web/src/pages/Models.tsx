@@ -7,9 +7,15 @@ import { api, type Endpoint, type Model } from "../api";
 import {
   Empty,
   ErrorBanner,
+  Field,
+  FormModal,
+  LimitInput,
   PageHeader,
   formatAmount,
+  formatNumber,
   formatTime,
+  limitText,
+  limitValue,
   useAction,
   useLoad,
   windowLabel,
@@ -24,6 +30,7 @@ export default function Models() {
   const [editing, setEditing] = useState<Model | "new" | null>(null);
   // The ID, so the dialog shows the model as it is after a change.
   const [pricing, setPricing] = useState<string | null>(null);
+  const [limiting, setLimiting] = useState<Model | null>(null);
   const priced = data?.models.find((m) => m.id === pricing);
 
   const remove = (m: Model) => {
@@ -60,7 +67,7 @@ export default function Models() {
     )
       return;
     action.run(async () => {
-      await api.setModelSpent(m.id, bestEffort ? "best-effort" : "refuse", choice === "best-effort-all");
+      await api.setModelSpent(m.id, bestEffort ? "best-effort" : "refuse", choice === "best-effort-all", m.best_effort_limit);
       await reload();
     });
   };
@@ -226,6 +233,15 @@ export default function Models() {
                         <option value="best-effort-all">Best-effort, also without a quota</option>
                       </select>
                     )}
+                    {m.fleet && m.spent_mode === "best-effort" && (
+                      <button
+                        disabled={action.busy}
+                        title="The most a tenant may use of the model as best-effort in one period of its quota. After that it is refused until the period ends."
+                        onClick={() => setLimiting(m)}
+                      >
+                        Best-effort limit: {m.best_effort_limit ? formatNumber(m.best_effort_limit, m.unit) : "none"}
+                      </button>
+                    )}
                     <button
                       title="What a million tokens of the model cost. With prices, quotas and usage are counted in dollars."
                       onClick={() => setPricing(m.id)}
@@ -244,6 +260,7 @@ export default function Models() {
         </div>
       )}
 
+      {limiting && <BestEffortLimit model={limiting} onClose={() => setLimiting(null)} onChanged={reload} />}
       {priced && <ModelPrices model={priced} onClose={() => setPricing(null)} onChanged={reload} />}
       {editing && data && (
         <ModelForm
@@ -295,3 +312,39 @@ function SiteWeight({ model, endpoint }: { model: Model; endpoint: Endpoint }) {
 }
 
 /** The backends a discovered endpoint's quota attaches to, with what limits it. */
+
+/** Sets the most a tenant may use of a model as best-effort in one period. */
+function BestEffortLimit(props: { model: Model; onClose: () => void; onChanged: () => Promise<void> }) {
+  const m = props.model;
+  const [limited, setLimited] = useState(m.best_effort_limit !== null);
+  const [text, setText] = useState(m.best_effort_limit ? limitText(m.best_effort_limit, m.unit) : "");
+  return (
+    <FormModal
+      title={`Best-effort limit of ${m.name}`}
+      submitLabel="Save"
+      onClose={props.onClose}
+      onSubmit={async () => {
+        await api.setModelSpent(m.id, "best-effort", m.best_effort_unlimited, limited ? limitValue(text, m.unit) : null);
+        await props.onChanged();
+      }}
+    >
+      <p className="hint">
+        A tenant whose budget is spent goes on at the lowest priority, and that use is not charged to its budget. A
+        limit keeps one tenant from taking all the spare capacity: at the limit it is refused until its quota's period
+        ends. The limit counts per period of the tenant's quota, an hour or a day.
+      </p>
+      <label className="check">
+        <input type="checkbox" checked={limited} onChange={(e) => setLimited(e.target.checked)} />
+        <span>Limit best-effort use</span>
+      </label>
+      {limited && (
+        <Field
+          label={m.unit === "credits" ? "At most, in dollars per period" : "At most, in tokens per period"}
+          hint="It applies to tenants with a quota on the model. A tenant without one has no counter to measure."
+        >
+          <LimitInput unit={m.unit} value={text} onChange={setText} label="Best-effort limit" autoFocus />
+        </Field>
+      )}
+    </FormModal>
+  );
+}

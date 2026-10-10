@@ -26,6 +26,7 @@ type Store interface {
 	ListModels(ctx context.Context) ([]store.Model, error)
 	ActiveOverage(ctx context.Context) ([]store.Overage, error)
 	StartOverage(ctx context.Context, modelID, tenantID string, until time.Time) (bool, error)
+	CapOverage(ctx context.Context, modelID, tenantID string) (bool, error)
 }
 
 // Usage reports the tokens every tenant has used in its current window.
@@ -101,11 +102,13 @@ func (s *Service) Tick(ctx context.Context) error {
 		return err
 	}
 	now := make(map[period]string, len(active))
+	capped := map[period]bool{}
 	for _, o := range active {
 		now[period{o.ModelID, o.TenantID}] = o.TenantSlug + " on " + o.ModelName
+		capped[period{o.ModelID, o.TenantID}] = o.CappedAt != nil
 	}
 	moves := s.ended(now, len(bestEffort) > 0)
-	started, err := s.start(ctx, bestEffort, now)
+	started, err := s.start(ctx, bestEffort, now, capped)
 	moves = append(moves, started...)
 	s.last = now
 	if len(moves) > 0 {
@@ -136,25 +139,28 @@ func (s *Service) ended(now map[period]string, anyBestEffort bool) []string {
 	return moves
 }
 
-// bestEffortModels returns the IDs of the models that serve a spent budget
-// as best-effort.
-func (s *Service) bestEffortModels(ctx context.Context) (map[string]bool, error) {
+// bestEffortModels returns the models that serve a spent budget as
+// best-effort, by ID.
+func (s *Service) bestEffortModels(ctx context.Context) (map[string]store.Model, error) {
 	models, err := s.st.ListModels(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]bool{}
+	out := map[string]store.Model{}
 	for _, m := range models {
 		if m.Fleet && m.SpentMode == store.SpentBestEffort {
-			out[m.ID] = true
+			out[m.ID] = m
 		}
 	}
 	return out, nil
 }
 
 // start moves the tenants that are past the threshold and not moved yet,
-// adds them to now and returns a line for each.
-func (s *Service) start(ctx context.Context, bestEffort map[string]bool, now map[period]string) ([]string, error) {
+// adds them to now and returns a line for each. A moved tenant that has
+// used all the model allows as best-effort is taken off the best-effort
+// route: its own budget is spent, so the gateway refuses it until its
+// window ends.
+func (s *Service) start(ctx context.Context, bestEffort map[string]store.Model, now map[period]string, capped map[period]bool) ([]string, error) {
 	if len(bestEffort) == 0 {
 		// Nothing to move, so Redis is not asked at all.
 		return nil, nil
@@ -166,7 +172,24 @@ func (s *Service) start(ctx context.Context, bestEffort map[string]bool, now map
 	var moves []string
 	for _, q := range rep.Quotas {
 		p := period{q.ModelID, q.TenantID}
-		if _, moved := now[p]; moved || !bestEffort[q.ModelID] || q.Shadow || !Movable(q.Window) {
+		model, ok := bestEffort[q.ModelID]
+		if !ok {
+			continue
+		}
+		if label, moved := now[p]; moved {
+			if limit := model.BestEffortLimit; limit != nil && q.OverageUsed >= *limit && !capped[p] {
+				done, err := s.st.CapOverage(ctx, q.ModelID, q.TenantID)
+				if err != nil {
+					return moves, err
+				}
+				if done {
+					capped[p] = true
+					moves = append(moves, label+" has used "+store.Amount(q.OverageUsed, q.Unit)+" as best-effort, the most the model allows in one period, and is refused until "+until(q.ResetsAt)+".")
+				}
+			}
+			continue
+		}
+		if q.Shadow || !Movable(q.Window) {
 			continue
 		}
 		if float64(q.Used) < s.threshold*float64(q.Limit) {
@@ -181,10 +204,12 @@ func (s *Service) start(ctx context.Context, bestEffort map[string]bool, now map
 		}
 		label := q.TenantSlug + " on " + q.ModelName
 		now[p] = label
-		moves = append(moves, label+" has used "+share(q.Used, q.Limit)+" of its budget and is served as best-effort until "+q.ResetsAt.UTC().Format("2006-01-02 15:04 UTC")+".")
+		moves = append(moves, label+" has used "+share(q.Used, q.Limit)+" of its budget and is served as best-effort until "+until(q.ResetsAt)+".")
 	}
 	return moves, nil
 }
+
+func until(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
 
 func share(used, limit int64) string {
 	if limit <= 0 {

@@ -25,9 +25,10 @@ cluster.
 - **Tenants**: one tenant per team, with API keys that can be issued and revoked.
 - **Quotas**: a budget per tenant per model, per minute, hour or day, rendered as `QuotaPolicy` on every cluster, with an optional dry-run mode. In tokens, or in dollars for a model with prices.
 - **Prices**: per model, what a million input, cached input and output tokens cost. The gateway computes each request's cost, so a prompt answered from the prefix cache costs the tenant less.
-- **Spent budgets**: per model, a tenant past its budget is refused, draws from a shared pool, or is served as best-effort behind everyone else.
+- **Spent budgets**: per model, a tenant past its budget is refused, draws from a shared pool, or is served as best-effort behind everyone else, with an optional limit on that.
 - **Entry route and site weights**: per model, renders on every fleet cluster the route that sends each conversation to one of the sites that serve the model, weighted by how many instances each site has ready.
-- **Usage**: what each tenant has used per model in the current window, in tokens or dollars, read from the quota counters in Redis.
+- **Usage**: what each tenant has used per model in the current window, in tokens or dollars, read from the quota counters in Redis, and what it used in each past hour and day, kept in Postgres.
+- **A page for tenants**: at `/my-usage` a tenant signs in with one of its API keys and sees its own budgets, usage and prices.
 - **Activity**: a task log of every change, showing per cluster which objects were created, updated or deleted and whether the gateway accepted them, and an audit log of who asked for what.
 - **Self-test**: checks on a real gateway, with a temporary tenant, that a key works, usage is counted at the right amount, a quota refuses, a reset frees, a client cannot name another tenant, and the model reports cached tokens.
 - **Architecture**: the design of the whole multi-site platform, with its diagrams, inside the UI.
@@ -113,6 +114,7 @@ internal/syncer/       background sync and discovery loops, and task results
 internal/weights/      decides each site's share of a model's traffic from its ready capacity (pure)
 internal/usage/        reads the quota counters in Redis and builds the usage report
 internal/overage/      moves a tenant whose budget is spent to best-effort, from the counters
+internal/history/      writes what was used since the last look to Postgres, per hour
 internal/costcel/      checks and evaluates a cost expression the way the gateway does
 internal/selftest/     checks keys, counters and quotas with real requests through a gateway
 internal/secretbox/    AES-256-GCM encryption of stored secrets
@@ -149,8 +151,7 @@ Known limit: on an entry route with two or more sites, Envoy AI Gateway up
 to 1.2.0 counts nothing, so quotas and prices have no effect there. A fix is
 proposed upstream.
 
-Not built yet: usage history beyond the current window, budgets longer than
-a day, LDAP login. The audit log records a name the caller gives, not a
+Not built yet: budgets longer than a day, LDAP login. The audit log records a name the caller gives, not a
 verified identity.
 
 ## Tests and delivery

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
 )
 
@@ -66,6 +67,9 @@ type spentBody struct {
 	// Unlimited also serves the tenants without a quota of their own on
 	// the model as best-effort. It only applies in best-effort mode.
 	Unlimited bool `json:"best_effort_unlimited"`
+	// Limit is the most a tenant may use as best-effort in one period of
+	// its quota, in the model's unit. Left out or null is no limit.
+	Limit *int64 `json:"best_effort_limit"`
 }
 
 // setModelSpentMode sets what a model does with a tenant whose budget is
@@ -80,7 +84,11 @@ func (s *Server) setModelSpentMode(w http.ResponseWriter, r *http.Request) {
 		fail(w, invalid("mode must be refuse or best-effort"))
 		return
 	}
-	name, err := s.st.SetModelSpentMode(r.Context(), r.PathValue("id"), b.Mode, b.Unlimited)
+	if b.Limit != nil && (*b.Limit < 1 || *b.Limit > render.MaxLimit) {
+		fail(w, invalid("best_effort_limit must be from 1 to %d", int64(render.MaxLimit)))
+		return
+	}
+	name, err := s.st.SetModelSpentMode(r.Context(), r.PathValue("id"), b.Mode, b.Unlimited, b.Limit)
 	switch {
 	case errors.Is(err, store.ErrNoEntryRoute):
 		writeError(w, http.StatusConflict, name+" has no entry route. Best-effort is a second entry route, so turn the entry route on first.")
@@ -89,13 +97,21 @@ func (s *Server) setModelSpentMode(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	limit := ""
+	if b.Limit != nil {
+		unit := store.UnitTokens
+		if m, err := s.st.GetModel(r.Context(), r.PathValue("id")); err == nil {
+			unit = m.Unit
+		}
+		limit = " It may use at most " + store.Amount(*b.Limit, unit) + " that way in one period of its quota, and is refused after that."
+	}
 	switch {
 	case b.Mode == store.SpentRefuse:
 		s.changed(r, "model.spent-refuse", "A tenant past its budget on "+name+" is refused again.")
 	case b.Unlimited:
-		s.changed(r, "model.spent-best-effort", "A tenant past its budget on "+name+" is served as best-effort, and so is a tenant without a quota on it.")
+		s.changed(r, "model.spent-best-effort", "A tenant past its budget on "+name+" is served as best-effort, and so is a tenant without a quota on it."+limit)
 	default:
-		s.changed(r, "model.spent-best-effort", "A tenant past its budget on "+name+" is served as best-effort.")
+		s.changed(r, "model.spent-best-effort", "A tenant past its budget on "+name+" is served as best-effort."+limit)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

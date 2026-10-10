@@ -167,9 +167,9 @@ export function Empty({ icon: Icon, children }: { icon: LucideIcon; children: Re
 export function WindowSelect(props: { value: Window; onChange: (w: Window) => void }) {
   return (
     <select value={props.value} onChange={(e) => props.onChange(e.target.value as Window)}>
-      <option value="1m">per minute</option>
-      <option value="1h">per hour</option>
       <option value="1d">per day</option>
+      <option value="1h">per hour</option>
+      <option value="1m">per minute</option>
     </select>
   );
 }
