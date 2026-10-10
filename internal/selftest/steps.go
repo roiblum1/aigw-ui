@@ -25,6 +25,7 @@ const (
 	stepReset   = "reset"
 	stepSpoof   = "client-id"
 	stepCached  = "cached-tokens"
+	stepSize    = "long-prompt"
 	stepSticky  = "sticky"
 	stepFleet   = "fleet-revision"
 	stepCleanup = "cleanup"
@@ -42,6 +43,7 @@ func plan() []Step {
 		{ID: stepReset, Title: "A usage reset lets the tenant through again", Status: Pending},
 		{ID: stepSpoof, Title: "A client cannot choose its tenant", Status: Pending},
 		{ID: stepCached, Title: "The model reports cached prompt tokens", Status: Pending},
+		{ID: stepSize, Title: "A long prompt is accepted", Status: Pending},
 		{ID: stepSticky, Title: "A conversation stays on one site", Status: Pending},
 		{ID: stepFleet, Title: "The cluster has the fleet's current entry routes", Status: Pending},
 		{ID: stepCleanup, Title: "The temporary tenant is removed", Status: Pending},
@@ -108,6 +110,7 @@ func (t *test) steps() {
 		{stepReset, t.reset, false},
 		{stepSpoof, t.clientID, false},
 		{stepCached, t.cachedTokens, false},
+		{stepSize, t.longPrompt, false},
 		{stepSticky, t.sticky, false},
 		{stepFleet, t.fleetRevision, false},
 	} {

@@ -583,7 +583,17 @@ removed.
 ## Requirements on each LLM cluster
 
 - Envoy Gateway with the `Backend` API enabled.
-- Envoy AI Gateway 1.0 or later (`QuotaPolicy`).
+- Envoy AI Gateway 1.1.0 or 1.2.0. This tool writes `AIGatewayRoute` and
+  `AIServiceBackend` as `aigateway.envoyproxy.io/v1beta1`, and `QuotaPolicy`
+  as `v1alpha1`, the only version it has. Up to 0.11.0 it wrote all three as
+  `v1alpha1`, which both gateway versions still serve but call deprecated.
 - For quotas: the dedicated quota rate limit service, pointed at the hub Redis. The AI gateway Helm chart does not deploy it.
+- A `ClientTrafficPolicy` on the Gateway with `connection.bufferLimit`, for
+  example `50Mi`. Without it Envoy Gateway buffers 32 KiB of a request and
+  the gateway answers 413 to every longer prompt. This tool does not write
+  it: it belongs to whoever installs the Gateway. The self-test checks it.
+- For quotas on a model with two or more sites: a gateway with
+  [agent-router#2833](https://github.com/theagentrouter/agent-router/pull/2833),
+  which no release has yet.
 
 The Test button on the Clusters page reports which of the CRDs are installed.

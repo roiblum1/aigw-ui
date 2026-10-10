@@ -23,8 +23,8 @@ func TestSyncPrunesOnlyManagedObjects(t *testing.T) {
 			w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Success"}`))
 		case strings.HasSuffix(r.URL.Path, "/aigatewayroutes"):
 			w.Write([]byte(`{"apiVersion":"v1","kind":"List","metadata":{},"items":[
-				{"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"AIGatewayRoute","metadata":{"name":"theirs","namespace":"ns"}},
-				{"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"AIGatewayRoute","metadata":{"name":"ours-stale","namespace":"ns","labels":{"app.kubernetes.io/managed-by":"aigw-ui"}}}
+				{"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"theirs","namespace":"ns"}},
+				{"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"ours-stale","namespace":"ns","labels":{"app.kubernetes.io/managed-by":"aigw-ui"}}}
 			]}`))
 		case strings.Contains(r.URL.Path, "/secrets"):
 			// The role on the cluster grants no list on Secrets, only get on this one name.

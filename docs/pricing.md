@@ -116,6 +116,24 @@ tenants sent before. Two equal requests can therefore cost different
 amounts. All tenants share one prefix cache, so a tenant can get the lower
 price for a prompt another tenant sent first.
 
+## The Anthropic path
+
+A client can ask on `/anthropic/v1/messages` as well as on
+`/v1/chat/completions`. Both are counted and charged by the same prices.
+
+One difference matters for cost. For a model served by vLLM, or any server
+that speaks the OpenAI format, Envoy AI Gateway up to 1.2.0 drops the cached
+token count on the Anthropic path. Measured on 1.2.0: the same 100-token
+prompt sent twice was charged 1041 credits both times, and 1041 then 177 on
+the OpenAI path. So a tenant whose clients use the Anthropic path pays the
+full input price for cached prompts, and its usage shows no cache read.
+
+The fix is a small change in the gateway, not in this tool. With it the
+second request was charged 177 and the answer showed
+`cache_read_input_tokens: 96`. Until a release has it, the choices are a
+gateway built with the patch, or accepting that the discount applies to
+OpenAI-style clients only.
+
 ## A budget per day
 
 The standard budget is per day. A tenant gets an amount for the day on a
@@ -237,10 +255,20 @@ $0.025 per minute:
 - A tenant read its own budget and usage with its key. A wrong key, and a
   tenant's key on the admin API, got 401.
 
-Not tested:
+For 0.12.0, on Envoy Gateway 1.9.2 and AI Gateway 1.2.0:
 
-- the best-effort limit on a gateway. It is covered by tests of the loop
-  and of the database only, because best-effort needs an entry route, and this test had none;
+- The self-test passed on a model counted in tokens and on a priced model.
+- A request on `/anthropic/v1/messages`, plain and streamed, was answered
+  and counted. A key in `x-api-key` was accepted on both paths.
+- With a gateway built with the two-site fix: of 20 requests against a
+  budget of 60 tokens an hour over two sites, 9 were answered and 11
+  refused. With best-effort and a limit of 30 tokens, the tenant was moved
+  at 93% of its budget, served with the class `best-effort`, taken off the
+  best-effort route at the limit and then refused. It had used 57 tokens as
+  best-effort by then: the hub looks every few seconds and a sync takes a
+  few more.
+
+Not tested:
 
 - a real vLLM, and so real cached counts;
 - the server making the change at 00:00 UTC by itself. The prices in the

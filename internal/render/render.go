@@ -20,11 +20,18 @@ const (
 	// ClientIDHeader carries "<tenant-slug>.<key-id>" once the gateway has
 	// authenticated the API key.
 	ClientIDHeader = "x-aigw-client-id"
+	// APIKeyHeader is the second header a key is read from.
+	APIKeyHeader   = "x-api-key"
 	KeysSecretName = "aigw-ui-api-keys"
 	AuthPolicyName = "aigw-ui-api-key-auth"
 
-	aigwAPI = "aigateway.envoyproxy.io/v1alpha1"
-	egAPI   = "gateway.envoyproxy.io/v1alpha1"
+	// aigwAPI is the version of the gateway's routes and backends. v1alpha1
+	// of them is deprecated since AI Gateway 1.1.0; both versions are served
+	// by 1.1.0 and 1.2.0 and hold the same fields this tool writes.
+	aigwAPI = "aigateway.envoyproxy.io/v1beta1"
+	// quotaAPI is the version of QuotaPolicy, which has no other.
+	quotaAPI = "aigateway.envoyproxy.io/v1alpha1"
+	egAPI    = "gateway.envoyproxy.io/v1alpha1"
 	// serviceQuotaLimit and serviceQuotaWindow fill spec.serviceQuota on every
 	// QuotaPolicy. The field is optional and not enforced by the gateway, but
 	// its controller writes the object back with an empty serviceQuota when

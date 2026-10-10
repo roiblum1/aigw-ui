@@ -74,6 +74,7 @@ about a minute. Every request has the same prompt of about 300 tokens.
 | A usage reset lets the tenant through again | **Reset usage** works on this gateway |
 | A client cannot choose its tenant | A request that names another client ID in `x-aigw-client-id` is still counted for the tenant of its key. A failure means a client can spend another tenant's budget |
 | The model reports cached prompt tokens | The answer to a repeated prompt says how much came from the prefix cache. **Unclear** when the model does not report it, or reports none |
+| A long prompt is accepted | A request of 64 KB is not refused for its size. It names a model that does not exist, so no model is asked. A failure means the gateway has Envoy Gateway's default limit of 32 KiB, and every longer prompt gets 413: set `connection.bufferLimit` in a `ClientTrafficPolicy` on the Gateway |
 | A conversation stays on one site | Three requests with one session ID are served by the same site, as named in the `x-llm-served-by` response header. It also lists where ten other session IDs landed. Skipped unless the model has an entry route on this cluster. It raises the temporary quota and sends 13 small requests |
 | The cluster has the fleet's current entry routes | The cluster's fleet revision is the fleet's. Skipped outside the fleet |
 
@@ -223,7 +224,10 @@ A tenant is a team.
    requests, and press **Enforce** on the quota when you are ready. The
    list only offers models the tenant has no quota on yet.
 
-Clients send the key as `Authorization: Bearer sk-...`.
+Clients send the key as `Authorization: Bearer sk-...`, or in the header
+`x-api-key`, which is what Anthropic's clients do by default. The address
+stays the same for every model: `/v1/chat/completions` for OpenAI-style
+clients and `/anthropic/v1/messages` for Anthropic-style ones.
 
 | Action | Effect |
 |---|---|

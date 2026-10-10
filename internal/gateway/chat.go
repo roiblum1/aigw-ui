@@ -99,3 +99,41 @@ func ChatWith(ctx context.Context, baseURL, key, model string, headers map[strin
 	}
 	return res, nil
 }
+
+// SizeProbeBytes is the size of the request SizeProbe sends. Envoy Gateway
+// buffers 32 KiB of a request unless a ClientTrafficPolicy raises it, and a
+// conversation with an agent is soon larger than that.
+const SizeProbeBytes = 64 << 10
+
+// sizeProbeModel is a model name no gateway serves.
+const sizeProbeModel = "aigw-ui-size-probe"
+
+// SizeProbe sends a chat request of SizeProbeBytes for a model that does not
+// exist and returns the status of the answer. The gateway has to read the
+// whole body to find the model's name, so it answers 413 when the body is
+// too large for it, and that there is no such model otherwise. No model
+// server is asked and nothing is counted.
+func SizeProbe(ctx context.Context, baseURL, key string) (int, error) {
+	body, err := json.Marshal(map[string]any{
+		"model":    sizeProbeModel,
+		"messages": []map[string]string{{"role": "user", "content": strings.Repeat("a long prompt ", SizeProbeBytes/14)}},
+	})
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(baseURL, "/")+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	resp, err := chatClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	return resp.StatusCode, nil
+}

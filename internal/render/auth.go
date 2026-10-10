@@ -40,7 +40,9 @@ func authPolicy(s State) *unstructured.Unstructured {
 			"credentialRefs": []any{
 				map[string]any{"group": "", "kind": "Secret", "name": KeysSecretName},
 			},
-			"extractFrom":           []any{map[string]any{"headers": []any{"Authorization"}}},
+			// Authorization is what OpenAI clients send, x-api-key what
+			// Anthropic clients send unless told otherwise.
+			"extractFrom":           []any{map[string]any{"headers": []any{"Authorization", APIKeyHeader}}},
 			"forwardClientIDHeader": ClientIDHeader,
 			"sanitize":              true,
 		},
