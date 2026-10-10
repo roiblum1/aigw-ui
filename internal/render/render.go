@@ -96,6 +96,10 @@ type Model struct {
 	// route right now, the ones that must not be left out first. The route
 	// is rendered while there are any.
 	Overage []string
+	// BestEffortPools are the InferencePools that serve the model on this
+	// cluster, set for a model in best-effort mode. Each gets the request
+	// class the best-effort route names.
+	BestEffortPools []Pool
 }
 
 // Held reports whether the model's objects on the cluster are left alone.
@@ -188,7 +192,7 @@ func Objects(s State) []*unstructured.Unstructured {
 	if s.AuthEnabled {
 		out = append(out, authPolicy(s))
 	}
-	return out
+	return append(out, objectives(s)...)
 }
 
 func object(apiVersion, kind, namespace, name string) *unstructured.Unstructured {

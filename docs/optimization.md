@@ -102,10 +102,10 @@ and are not held up by them.
 
 - The model's **entry route** is on.
 - The hub can read the counters (`redis.url` is set).
-- Every serving cluster has an `InferenceObjective` named `best-effort` for
-  the model, with a lower priority than `standard`. The model's release
-  creates it; the hub does not. Without it the header names a class the
-  site does not know.
+- The model's `LLMInferenceService` has a scheduler on every serving
+  cluster. The hub then creates the class `best-effort` there by itself,
+  next to the model's `InferencePool`, and removes it when the mode is
+  switched off. Nothing has to be added to the model's release.
 
 ## Side by side
 
@@ -122,7 +122,7 @@ and are not held up by them.
 | Tenants without a quota | use the pool | refused, or best-effort with the second setting |
 | Where it is decided | in the gateway, before the request is sent on | at the serving site |
 | Works on | every route | the entry route |
-| Needs on the clusters | nothing more | an `InferenceObjective` named `best-effort` |
+| Needs on the clusters | nothing more | a model served with a scheduler; the hub creates the class |
 | Needs on the hub | nothing more | Redis, to read the counters |
 | Where the extra use is shown | the pool on the **Overview** | per tenant on the **Usage** page |
 

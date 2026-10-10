@@ -3,6 +3,7 @@
 package kube
 
 import (
+	"aigw-ui/internal/render"
 	"context"
 	"fmt"
 	"time"
@@ -32,7 +33,17 @@ var managed = []struct {
 	{"AIServiceBackend", schema.GroupVersionResource{Group: "aigateway.envoyproxy.io", Version: "v1alpha1", Resource: "aiservicebackends"}},
 	{"Backend", schema.GroupVersionResource{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Resource: "backends"}},
 	{"Secret", schema.GroupVersionResource{Version: "v1", Resource: "secrets"}},
+	{render.ObjectiveKind, schema.GroupVersionResource{Group: "llm-d.ai", Version: "v1alpha2", Resource: "inferenceobjectives"}},
 }
+
+// anyNamespace holds the kinds that sit next to what they belong to, not in
+// the gateway's namespace: a QuotaPolicy next to the backends it targets, a
+// request class next to the model's pool.
+var anyNamespace = map[string]bool{"QuotaPolicy": true, render.ObjectiveKind: true}
+
+// optional holds the kinds a cluster may not have. An object of such a kind
+// is left out there, and everything else is still synced.
+var optional = map[string]bool{render.ObjectiveKind: true}
 
 var gatewayGVR = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
 
