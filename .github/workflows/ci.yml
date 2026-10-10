@@ -68,7 +68,8 @@ jobs:
         run: go test -race ./...
 
       - name: The store tests did run
-        run: go test ./internal/store/ -run TestMigrationsApplyOnce -count=1 -v | grep -q -- "--- PASS: TestMigrationsApplyOnce"
+        run: |
+          go test ./internal/store/ -run TestMigrationsApplyOnce -count=1 -v | grep -q -- "--- PASS: TestMigrationsApplyOnce"
 
       - name: Tests against a real Kubernetes API server
         run: hack/test-apiserver.sh
