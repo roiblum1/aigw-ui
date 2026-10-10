@@ -40,7 +40,12 @@ const status: { part: string; today: string; built: "yes" | "partly" | "no" }[] 
     built: "partly",
   },
   { part: "Usage collector and past usage", today: "Not built. Usage is the current window only.", built: "no" },
-  { part: "Site picker, site reporter, peer listener, EPP settings", today: "Not part of this tool. They belong to the cluster charts.", built: "no" },
+  {
+    part: "Choosing a site",
+    today: "Built: a weighted hash of the session header in each entry gateway, from the entry route this tool renders. There is no separate service that picks a site.",
+    built: "yes",
+  },
+  { part: "Peer listener, EPP settings", today: "Not part of this tool. They belong to the cluster charts.", built: "no" },
 ];
 
 const badge = { yes: ["synced", "Built"], partly: ["pending", "Differs"], no: ["idle", "Not built"] } as const;

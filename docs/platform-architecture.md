@@ -9,9 +9,9 @@ Open the file in a browser, or open **Architecture** in the UI, which shows
 the same page. It needs nothing from the network.
 
 It covers the hub and the LLM clusters, one request from end to end, how a
-conversation finds its site (weighted hash now, a site picker with spill
-later), the settings inside each site, the two rollout phases, and what
-happens under load and failure.
+conversation finds its site (a weighted hash in the entry gateway, with no
+separate service that picks a site), the settings inside each site, how
+the routing is configured, and what happens under load and failure.
 
 [architecture.md](architecture.md) is a different document: it describes how
 this tool works today.
@@ -32,7 +32,8 @@ UI and API server, does of it today:
 | Site weights | Built: the weight is ready instances of the model times the declared capacity of one instance, times 100 and never below 1. Rendered by the hub into each model's entry route. See [architecture.md](architecture.md#site-weights) |
 | Priority class | Built per model, not per key: a tenant whose budget is spent is served as best-effort, or tenants share a pool. See [optimization.md](optimization.md) |
 | Usage collector and past usage | Not built. Usage is the current window only |
-| Site picker, site reporter, peer listener, EPP settings | Not part of this tool. They belong to the cluster charts |
+| Choosing a site | Built: a weighted hash of the session header in each entry gateway, from the entry route this tool renders. There is no separate service that picks a site |
+| Peer listener, EPP settings | Not part of this tool. They belong to the cluster charts |
 
 ## Keeping it up to date
 

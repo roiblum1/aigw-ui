@@ -189,7 +189,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <header>
   <p class="eyebrow">Architecture · v2 routing</p>
   <h1>Multi-site LLM platform</h1>
-  <p class="lede">One API endpoint for every model and every site. Each conversation keeps a home site, picked in proportion to capacity. A busy site hands off as few conversations as it can, chat first. Token quotas are enforced globally from the hub. Every cluster runs Envoy AI Gateway, KServe llm-d and LMCache.</p>
+  <p class="lede">One API endpoint for every model and every site. Each conversation keeps a home site, picked in proportion to capacity. A site that is full answers 503 at once, and the request is tried at another site. Token quotas are enforced globally from the hub. Every cluster runs Envoy AI Gateway, KServe llm-d and LMCache.</p>
   <ul class="meta">
     <li>hub: ocp4-prod-hub-site1</li>
     <li>sites: site1-a · site1-b · site2-a · site3-a · site4-a</li>
@@ -204,13 +204,12 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
     <li><svg viewBox="0 0 40 10" aria-hidden="true"><line x1="0" y1="5" x2="40" y2="5" class="ln ln-config"/></svg>① Config: hub → clusters</li>
     <li><svg viewBox="0 0 40 10" aria-hidden="true"><line x1="0" y1="5" x2="40" y2="5" class="ln ln-quota"/></svg>② Quota: check + deduct</li>
     <li><svg viewBox="0 0 40 10" aria-hidden="true"><line x1="0" y1="5" x2="40" y2="5" class="ln ln-usage"/></svg>③ Usage: per-request records</li>
-    <li><svg viewBox="0 0 40 10" aria-hidden="true"><line x1="2" y1="5" x2="38" y2="5" class="ln ln-report"/></svg>④ Site reports: every site → every picker</li>
     <li><svg viewBox="0 0 40 10" aria-hidden="true"><line x1="0" y1="5" x2="40" y2="5" class="ln ln-muted"/></svg>Inside the hub</li>
     <li><span class="pill">NEW</span><span class="pill">CHANGED</span> compared with the current design</li>
   </ul>
   <figure>
     <div class="figwrap">
-<svg viewBox="0 0 1480 1284" role="img" aria-label="Multi-site LLM platform v2. Clients reach any healthy entry gateway through Avi GSLB. The entry gateway authenticates, checks quota, asks the site picker for a ranked list of sites and sends the request over mTLS to the chosen site peer listener, which is this site or another. The serving site sheds or admits, the EPP queues by priority and picks a replica, vLLM answers. Site reporters publish load every second to every picker. The hub renders config, holds quota counters and collects usage, and is not in the routing path." class="fig fig-main">
+<svg viewBox="0 0 1480 1230" role="img" aria-label="Multi-site LLM platform v2. Clients reach any healthy entry gateway through Avi GSLB. The entry gateway authenticates, checks quota, picks a site for the conversation by a weighted hash and sends the request over mTLS to that site’s peer listener, which is this site or another. The serving site sheds or admits, the EPP queues by priority and picks a replica, vLLM answers. The hub renders config, holds quota counters and collects usage, and is not in the routing path." class="fig fig-main">
 <defs>
 <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-ink"/></marker>
 <marker id="ah-config" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-config"/></marker>
@@ -221,7 +220,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 </defs>
 <rect x="300" y="16" width="1160" height="318" rx="14" class="panel-hub"/>
 <text x="324" y="44" class="lbl lbl-hub">HUB · ocp4-prod-hub-site1</text>
-<text x="1416" y="44" class="t-note" text-anchor="end">not in the routing path: pickers read site reports directly</text>
+<text x="1416" y="44" class="t-note" text-anchor="end">not in the routing path</text>
 <rect x="324" y="60" width="246" height="112" rx="8" class="box "/>
 <text x="342" y="90" class="t-title">Portal &amp; admin UI</text>
 <text x="342" y="112" class="t-body">Tenants, API keys + priority</text>
@@ -290,12 +289,6 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <text x="906" y="532" class="t-body">Tenant, key, model, site,</text>
 <text x="906" y="550" class="t-body">tokens in / out / cached.</text>
 <text x="906" y="568" class="t-body">Disk queue survives outages.</text>
-<rect x="1170" y="480" width="246" height="112" rx="8" class="box b-report"/>
-<text x="1188" y="510" class="t-title">Site picker · ext-proc</text>
-<text x="1188" y="532" class="t-body">Ranks the model’s sites per</text>
-<text x="1188" y="550" class="t-body">conversation by capacity,</text>
-<text x="1188" y="568" class="t-body">skips sites spilling it.</text>
-<rect x="1363.8" y="471" width="36.2" height="18" rx="9" class="tag"/><text x="1381.9" y="484" class="tag-t" text-anchor="middle">NEW</text>
 <path d="M447,592 L447,658" class="ln ln-config" marker-end="url(#ah-config)"/>
 <text x="459" y="622" class="al al-config">configures entry</text>
 <text x="459" y="638" class="al al-config">and serving routes</text>
@@ -305,9 +298,6 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <path d="M1011,660 L1011,594" class="ln ln-usage" marker-end="url(#ah-usage)"/>
 <text x="1023" y="622" class="al al-usage">one record</text>
 <text x="1023" y="638" class="al al-usage">per request</text>
-<path d="M1293,594 L1293,658" class="ln ln-ink-thin" marker-end="url(#ah)" marker-start="url(#ah)"/>
-<text x="1305" y="622" class="al">ext-proc call:</text>
-<text x="1305" y="638" class="al">ranked sites</text>
 <rect x="324" y="660" width="1092" height="156" rx="8" class="box b-req"/>
 <text x="344" y="690" class="t-title">Envoy AI Gateway · entry role</text>
 <text x="609" y="690" class="t-mono">client listener · every request enters here</text>
@@ -328,9 +318,9 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <text x="914" y="764" class="t-chipb">written only at the entry.</text>
 <rect x="1182" y="706" width="222" height="96" rx="6" class="chip"/>
 <text x="1196" y="728" class="t-chip">Site choice</text>
-<text x="1196" y="748" class="t-chipb">Ranked list from the picker.</text>
-<text x="1196" y="764" class="t-chipb">Picker down: weighted hash.</text>
-<text x="1196" y="780" class="t-chipb">503: next site in the list.</text>
+<text x="1196" y="748" class="t-chipb">Hash of the session header,</text>
+<text x="1196" y="764" class="t-chipb">weighted by site capacity.</text>
+<text x="1196" y="780" class="t-chipb">503: tried at another site.</text>
 <path d="M264,724 L322,724" class="ln ln-ink" marker-end="url(#ah)"/>
 <path d="M324,792 L282,792 L282,1074 L1293,1074" class="ln ln-ink"/>
 <path d="M447,1074 L447,1098" class="ln ln-ink" marker-end="url(#ah)"/>
@@ -345,7 +335,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <text x="342" y="932" class="t-body">Serving route → InferencePool.</text>
 <text x="342" y="950" class="t-body">Over the site’s limit: instant</text>
 <text x="342" y="968" class="t-body">503, so the entry retries</text>
-<text x="342" y="986" class="t-body">the next site in its list.</text>
+<text x="342" y="986" class="t-body">another site.</text>
 <rect x="488.2" y="871" width="65.8" height="18" rx="9" class="tag"/><text x="521.1" y="884" class="tag-t" text-anchor="middle">CHANGED</text>
 <rect x="606" y="880" width="246" height="118" rx="8" class="box "/>
 <text x="624" y="910" class="t-title">llm-d scheduler (EPP)</text>
@@ -359,31 +349,14 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <text x="906" y="932" class="t-body">P/D pods (LWS), usage in</text>
 <text x="906" y="950" class="t-body">every stream. KV: GPU → CPU</text>
 <text x="906" y="968" class="t-body">→ NVMe, never leaves the site.</text>
-<rect x="1170" y="880" width="246" height="118" rx="8" class="box b-report"/>
-<text x="1188" y="910" class="t-title">Site reporter</text>
-<text x="1188" y="932" class="t-body">Every 1 s: ready instances,</text>
-<text x="1188" y="950" class="t-body">waiting, KV use, revision,</text>
-<text x="1188" y="968" class="t-body">max-model-len, spill fraction.</text>
-<rect x="1363.8" y="871" width="36.2" height="18" rx="9" class="tag"/><text x="1381.9" y="884" class="tag-t" text-anchor="middle">NEW</text>
 <path d="M570,939 L604,939" class="ln ln-ink" marker-end="url(#ah)"/>
 <path d="M852,939 L886,939" class="ln ln-ink" marker-end="url(#ah)"/>
-<path d="M1134,939 L1168,939" class="ln ln-report" marker-end="url(#ah-report)"/>
-<path d="M1416,939 L1440,939" class="ln ln-report"/>
-<circle cx="1440" cy="939" r="3.5" class="dot-report"/>
-<path d="M447,1206 L447,1238 L1440,1238 L1440,536 L1418,536" class="ln ln-report" marker-end="url(#ah-report)"/>
-<path d="M729,1206 L729,1238" class="ln ln-report"/>
-<circle cx="729" cy="1238" r="3.5" class="dot-report"/>
-<path d="M1011,1206 L1011,1238" class="ln ln-report"/>
-<circle cx="1011" cy="1238" r="3.5" class="dot-report"/>
-<path d="M1293,1206 L1293,1238" class="ln ln-report"/>
-<circle cx="1293" cy="1238" r="3.5" class="dot-report"/>
-<text x="459" y="1262" class="al al-report">④ site reports · every picker reads every site’s reporter, every 1 s, over the peer listener</text>
 <text x="324" y="1060" class="lbl lbl-cluster">OTHER SITE CLUSTERS · SAME STACK</text>
 <text x="1416" y="1060" class="al" text-anchor="end">chosen site elsewhere → its peer listener (mTLS)</text>
 <rect x="324" y="1100" width="246" height="106" rx="8" class="box b-peer"/>
 <text x="342" y="1130" class="t-site">site1-b</text>
 <text x="342" y="1152" class="t-body">MiniMax-M2.7 · its own</text>
-<text x="342" y="1170" class="t-body">ranking and weights</text>
+<text x="342" y="1170" class="t-body">sites and weights</text>
 <rect x="606" y="1100" width="246" height="106" rx="8" class="box b-peer"/>
 <text x="624" y="1130" class="t-site">site2-a</text>
 <text x="624" y="1152" class="t-body">GLM-5.3 · 3 ready instances</text>
@@ -415,7 +388,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <text x="156" y="1032" class="al">entry gateway</text>
 </svg>
     </div>
-    <figcaption>Every cluster runs both roles. The entry role authenticates, meters and picks a site for each request that arrives through the global name. The serving role admits or sheds requests from any site’s entry and serves them. Site reports travel directly from site to site, so the hub stays out of the routing path.</figcaption>
+    <figcaption>Every cluster runs both roles. The entry role authenticates, meters and picks a site for each request that arrives through the global name. The serving role admits or sheds requests from any site’s entry and serves them. The gateways need nothing from the hub to route a request, so the hub stays out of the routing path.</figcaption>
   </figure>
 </section>
 
@@ -425,10 +398,10 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
     <table>
       <thead><tr><th scope="col"></th><th scope="col">Current design</th><th scope="col">v2</th></tr></thead>
       <tbody>
-        <tr><th scope="row">Choosing a site</th><td>Least-request on each gateway replica’s own request counts</td><td>Weighted hash per conversation now; a site picker with spill fractions next</td></tr>
+        <tr><th scope="row">Choosing a site</th><td>Least-request on each gateway replica’s own request counts</td><td>Weighted hash per conversation, in the entry gateway</td></tr>
         <tr><th scope="row">Capacity</th><td>Every site counts the same, so the smaller site fills first</td><td>Sites weighted by ready instances of the model × the capacity of one instance (8 : 3)</td></tr>
         <tr><th scope="row">Stickiness</th><td>None: in simulation about 4 in 10 turns landed on a different site</td><td>A conversation stays on its home site and keeps its KV cache there</td></tr>
-        <tr><th scope="row">Overload</th><td>503 and retry only</td><td>The busy site hands off the fewest conversations, chat first, each to its own second site</td></tr>
+        <tr><th scope="row">Overload</th><td>503 and retry only</td><td>A full site answers 503 at once and the entry tries another site; inside a site, flow control serves by priority</td></tr>
         <tr><th scope="row">Avi GSLB</th><td>Entry, and in practice where the request ran</td><td>Entry only; every entry gateway reaches the same site choice</td></tr>
         <tr><th scope="row">Inside a site</th><td>EPP defaults calibrated for Qwen 32B on 2×H100; no admission control</td><td>Calibrated for GLM-5.3 on B200; flow control with priorities and fairness between tenants</td></tr>
         <tr><th scope="row">Hub</th><td>Config, quotas, usage</td><td>The same, plus site weights and priority classes; still not in the routing path</td></tr>
@@ -443,79 +416,51 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
     <li><div><b>Entry.</b> The client resolves <code>llm.&lt;domain&gt;</code>. Avi GSLB returns any healthy site’s gateway. That only decides where the request enters.</div></li>
     <li><div><b>Identity.</b> The entry gateway checks the API key and writes the tenant ID into the tenant and fairness headers, replacing anything the client sent. An unknown key gets 401.</div></li>
     <li><div><b>Quota check.</b> The rate limit service checks the tenant’s bucket in the hub Redis at cost 0. A tenant over budget gets 429 here.</div></li>
-    <li><div><b>Conversation key.</b> The site picker takes <code>X-Claude-Code-Session-Id</code>, or else hashes the tenant, system prompt, tools and first user message. Those parts are the same on every turn, so every turn gets the same key.</div></li>
-    <li><div><b>Site choice.</b> The picker ranks the sites that serve the model by weighted rendezvous hash, drops any whose revision or <code>max-model-len</code> can’t take the request, and walks the ranking. The first site whose spill zone doesn’t cover this conversation wins; if every site covers it, the home site wins. Envoy gets the ranked list.</div></li>
+    <li><div><b>Conversation key.</b> The entry gateway takes the session header the client sends: <code>X-Claude-Code-Session-Id</code>, or the conversation header of a chat UI. It is the same on every turn, so every turn gets the same key. A request without such a header has no key.</div></li>
+    <li><div><b>Site choice.</b> Envoy hashes the key over the sites that serve the model, each weighted by its ready capacity. The same key lands on the same site at every entry gateway, with no service to ask. A request without a key is spread over the sites by the same weights.</div></li>
     <li><div><b>Hop.</b> Envoy sends the request over mTLS to the chosen site’s peer listener. When the home site is the entry site, the request stays in the cluster.</div></li>
-    <li><div><b>Admit or shed.</b> Over its limit, the peer listener answers 503 at once and the entry tries the next site in the conversation’s ranking. Retries happen only before the first response byte, so a stream is never duplicated.</div></li>
+    <li><div><b>Admit or shed.</b> Over its limit, the peer listener answers 503 at once and the entry tries another site. Retries happen only before the first response byte, so a stream is never duplicated.</div></li>
     <li><div><b>Inside the site.</b> When the pool is saturated, the EPP holds the request in its queue, ordered by priority and fair between tenants, for up to 5 s, then answers 429. It then picks a replica: cache-warm replicas first unless they are too slow, then the lowest token load.</div></li>
     <li><div><b>Answer and metering.</b> vLLM streams the answer with token usage. The entry gateway deducts the tokens in the hub Redis and sends one usage record through its OTel collector to the hub.</div></li>
   </ol>
 </section>
 
-<section aria-labelledby="spill">
-  <h2 id="spill">How a conversation finds its site</h2>
-  <div class="prose"><p>Two hashes of the conversation key decide the site, so every entry gateway reaches the same answer without asking anyone.</p></div>
+<section aria-labelledby="site">
+  <h2 id="site">How a conversation finds its site</h2>
+  <div class="prose"><p>One hash of the conversation key decides the site. Every entry gateway has the same sites and the same weights, so each reaches the same answer without asking anyone. There is no separate service that picks a site.</p></div>
   <figure>
     <div class="figwrap">
-<svg viewBox="0 0 1000 404" role="img" aria-label="How one model ranks its sites for two conversations. site1-a is ranked first with spill fraction 0.30, so the chat conversation, whose position on site1-a is 0.18, moves to its second-ranked site site2-a, where nothing spills and it is served. The Claude Code session, at position 0.72 on site1-a, stays home." class="fig fig-spill">
+<svg viewBox="0 0 1000 250" role="img" aria-label="One model served by two sites. The hash space is split by weight: site1-a with weight 8 gets 8 of 11 parts, site2-a with weight 3 gets 3 of 11. A Claude Code session lands at the same position on every turn, inside site1-a. A chat request without a session header lands somewhere new each time." class="fig fig-spill">
 <defs>
-<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-ink"/></marker>
-<marker id="ah-config" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-config"/></marker>
-<marker id="ah-quota" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-quota"/></marker>
-<marker id="ah-usage" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-usage"/></marker>
-<marker id="ah-report" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-report"/></marker>
-<marker id="ah-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-muted"/></marker>
+<marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-ink"/></marker>
 </defs>
-<text x="20" y="26" class="lbl">RANKING FOR THIS CONVERSATION</text>
-<text x="300" y="26" class="lbl">POSITION ON EACH SITE’S BAR</text>
-<text x="850" y="26" class="lbl">RESULT</text>
-<text x="430.0" y="52" class="al" text-anchor="middle">chat conversations</text>
-<text x="690.0" y="52" class="al" text-anchor="middle">Claude Code sessions</text>
-<path d="M560.0,60 L560.0,352" class="ln ln-divider"/>
-<g>
-<text x="20" y="102" class="t-title">1 · site1-a</text>
-<text x="20" y="122" class="t-mono">home · weight 8 · f = 0.30</text>
-<rect x="300" y="86" width="520" height="30" rx="4" class="bar"/>
-<rect x="300" y="86" width="156" height="30" rx="4" class="bar-spill"/>
-<text x="302" y="80" class="al al-quota">spill zone 0 – 0.30</text>
-<circle cx="394" cy="101" r="8" class="mk-chat"/>
-<text x="407" y="106" class="t-mono t-ink">0.18</text>
-<rect x="666" y="93" width="16" height="16" rx="2" class="mk-sess"/>
-<text x="687" y="106" class="t-mono t-ink">0.72</text>
-<text x="850" y="100" class="t-body t-strong">● leaves: inside the</text>
-<text x="850" y="118" class="t-body">spill zone</text>
-<text x="850" y="136" class="t-body t-strong">■ stays home</text>
-</g>
-<g>
-<text x="20" y="198" class="t-title">2 · site2-a</text>
-<text x="20" y="218" class="t-mono">weight 3 · f = 0</text>
-<rect x="300" y="182" width="520" height="30" rx="4" class="bar"/>
-<circle cx="513" cy="197" r="8" class="mk-chat"/>
-<text x="526" y="202" class="t-mono t-ink">0.41</text>
-<text x="850" y="196" class="t-body t-strong">● served here</text>
-</g>
-<g class="dim">
-<text x="20" y="294" class="t-title">3 · site3-a</text>
-<text x="20" y="314" class="t-mono">weight n · f = 0.10</text>
-<rect x="300" y="278" width="520" height="30" rx="4" class="bar"/>
-<rect x="300" y="278" width="52" height="30" rx="4" class="bar-spill"/>
-<text x="302" y="272" class="al al-quota">spill zone 0 – 0.10</text>
-<text x="850" y="292" class="t-body t-strong">not reached</text>
-</g>
-<path d="M393.6,118 L393.6,142 L513.2,142 L513.2,187" class="ln ln-ink-thin ln-dash" marker-end="url(#ah)"/>
-<text x="525.2" y="146" class="al">next site in its ranking</text>
-<text x="20" y="392" class="t-mono">● chat conversation</text>
-<text x="190" y="392" class="t-mono">■ Claude Code session</text>
-<text x="380" y="392" class="t-mono">f = spill fraction, set by each site every second</text>
+<text x="20" y="26" class="lbl">HASH SPACE OF ONE MODEL, SPLIT BY WEIGHT</text>
+<rect x="20" y="70" width="698" height="34" rx="4" class="bar"/>
+<rect x="722" y="70" width="258" height="34" rx="4" class="bar"/>
+<text x="20" y="60" class="t-title">site1-a</text>
+<text x="92" y="60" class="t-mono">weight 8 · 8 of 11</text>
+<text x="722" y="60" class="t-title">site2-a</text>
+<text x="794" y="60" class="t-mono">weight 3 · 3 of 11</text>
+<rect x="392" y="79" width="16" height="16" rx="2" class="mk-sess"/>
+<circle cx="188" cy="87" r="8" class="mk-chat"/>
+<circle cx="604" cy="87" r="8" class="mk-chat"/>
+<circle cx="846" cy="87" r="8" class="mk-chat"/>
+<path d="M400,150 L400,100" class="ln ln-ink-thin" marker-end="url(#ah2)"/>
+<text x="412" y="140" class="al">every turn of one session: the same key, the same place</text>
+<path d="M846,190 L846,100" class="ln ln-ink-thin ln-dash" marker-end="url(#ah2)"/>
+<text x="834" y="184" class="al" text-anchor="end">no session header: a new place each time, by weight</text>
+<text x="20" y="232" class="t-mono">■ Claude Code session</text>
+<text x="220" y="232" class="t-mono">● request without a session header</text>
 </svg>
     </div>
-    <figcaption>site1-a is queueing, so its spill fraction is 0.30. The chat conversation’s position on site1-a falls inside the spill zone, so it moves to the next site in its own ranking. The Claude Code session sits in the right half of the bar, outside the zone, and stays home.</figcaption>
+    <figcaption>With weights 8 and 3, eight of every eleven conversations live at site1-a. A session keeps its place for as long as the sites and their weights stay the same.</figcaption>
   </figure>
   <dl class="defs">
-    <div><dt>Home site</dt><dd>Weighted rendezvous hash over the sites that serve the model, weight = ready instances of the model × the capacity of one instance. With 8 and 3 equal instances, 8 of every 11 conversations live at the bigger site. How the model is deployed sets the capacity: a multi-node or prefill/decode deployment is one instance, and it declares a higher capacity than a single-node one. When a site gains or loses instances, only the conversations that have to move, move.</dd></div>
-    <div><dt>Spill fraction</dt><dd>Each site’s reporter updates it every second: up 0.03 while the site queues and another site serving the model has room, down 0.01 once it stops queueing and is under about 95% busy. Most of the time it is 0.</dd></div>
-    <div><dt>Every site full</dt><dd>The conversation stays home. Moving it would add no capacity and would throw away its KV cache. The EPP’s flow control then serves by priority.</dd></div>
-    <div><dt>Stale reports</dt><dd>A report older than a few seconds means “don’t spill to this site”, never “idle”. A site that comes back ramps its weight up over a few minutes.</dd></div>
+    <div><dt>Home site</dt><dd>A weighted consistent hash over the sites that serve the model, weight = ready instances of the model × the capacity of one instance. How the model is deployed sets the capacity: a multi-node or prefill/decode deployment is one instance, and it declares a higher capacity than a single-node one. When a site gains or loses instances, most conversations keep their site.</dd></div>
+    <div><dt>Without a session header</dt><dd>The request is spread over the sites by the same weights and is not sticky. A chat UI that sends a stable conversation header gets the same stickiness as Claude Code.</dd></div>
+    <div><dt>A site is full</dt><dd>Its peer listener answers 503 before the first byte. The entry gateway then tries another site, and the next turn of the conversation goes to its home site again.</dd></div>
+    <div><dt>Every site full</dt><dd>The request ends at a site whose EPP queues it by priority. A request that waits too long gets 429.</dd></div>
+    <div><dt>Weights</dt><dd>The hub reads each site’s ready instances at every poll and writes the weights to every cluster. A weight steps by one instance per poll, so a site that comes back does not get all its conversations at once on a cold cache.</dd></div>
   </dl>
 </section>
 
@@ -523,9 +468,9 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
   <h2 id="insite">Inside each site</h2>
   <div class="prose"><p>These come from the GKE Inference Gateway write-up on Vertex AI, mapped onto the endpoint picker that KServe 0.21 already deploys.</p></div>
   <ul class="plain">
-    <li><b>Calibrate the picker.</b> Keep KServe’s default (prefix-affinity filter, then token-load scorer). Measure <code>peakPrefillThroughput</code> for GLM-5.3 on B200; the default is calibrated for Qwen 32B on 2×H100. Lower <code>maxTTFTPenaltyMs</code> from 18,000 to about 4,000 so a hot replica loses its stickiness sooner. That is the same move as Vertex’s weight change from 3:3:2 to 3:5:2.</li>
+    <li><b>Calibrate the endpoint picker.</b> Keep KServe’s default (prefix-affinity filter, then token-load scorer). Measure <code>peakPrefillThroughput</code> for GLM-5.3 on B200; the default is calibrated for Qwen 32B on 2×H100. Lower <code>maxTTFTPenaltyMs</code> from 18,000 to about 4,000 so a hot replica loses its stickiness sooner. That is the same move as Vertex’s weight change from 3:3:2 to 3:5:2.</li>
     <li><b>Turn on flow control.</b> When the pool is saturated (queue depth 5 or KV cache 80% by default), requests wait in the EPP, ordered by priority and shared fairly between tenants. Cap the wait at 5 s; the EPP default is 60 s.</li>
-    <li><b>Priority classes</b> as InferenceObjectives: chat UIs 10, Claude Code 0, scheduled agent runs −10. In phase 1 every request runs at 0, because the entry strips the header. In phase 2 the picker sets it from the API key’s class.</li>
+    <li><b>Priority classes</b> as InferenceObjectives: chat UIs 10, Claude Code 0, scheduled agent runs −10. Today the hub sets the class per model, not per key: the entry gateway replaces the header a client sends with <code>standard</code>, and with <code>best-effort</code> (priority −1) for a tenant whose budget is spent on a model that serves it that way.</li>
   </ul>
   <pre><code><span class="c"># LLMInferenceService, every model on every site</span>
 spec:
@@ -561,15 +506,15 @@ spec:
 </section>
 
 <section aria-labelledby="rollout">
-  <h2 id="rollout">Rollout in two phases</h2>
+  <h2 id="rollout">How it is configured</h2>
   <div class="phases">
     <article class="phase">
-      <p class="kicker">Phase 1 · config only</p>
+      <p class="kicker">Config only · no extra service</p>
       <h3>Weighted session hash</h3>
       <ul>
         <li>Works on Envoy Gateway 1.9.1 today: zone weights become Maglev locality weights.</li>
         <li>Requests without the session header are spread by weight at random.</li>
-        <li>A 503 retry goes to the conversation’s stable second site.</li>
+        <li>A 503 is retried at another site.</li>
         <li>Limits: weights change only as fast as the hub polls the clusters, chat without a session header isn’t sticky, and overload only moves through shed and retry.</li>
       </ul>
       <pre><code><span class="c"># Backend fleet-all-sites: one zone per endpoint, zone = cluster name</span>
@@ -604,45 +549,18 @@ spec:
         - {zone: site3-a, weight: &lt;n&gt;}
   <span class="c"># retry, health check, breaker, rate limit: unchanged</span></code></pre>
     </article>
-    <article class="phase">
-      <p class="kicker">Phase 2 · site picker</p>
-      <h3>Rendezvous ranking with spill</h3>
-      <ul>
-        <li>One internal Go service per cluster with two jobs: ext-proc picker for this site’s entry traffic, and reporter for this site’s state.</li>
-        <li>It writes the ranked list into Envoy’s <code>endpointOverride</code> header (IP:port of each site’s VIP) on its own route rule. The phase 1 rule stays the default, so a picker outage falls back to the weighted hash, never to an equal split.</li>
-        <li>It also sets the priority header from the key’s class.</li>
-      </ul>
-      <pre><code><span class="c">per request, at the entry site</span>
-key  = X-Claude-Code-Session-Id
-       or hash(tenant, system, tools, messages[0])
-rank = sites serving the model, by w_s / -ln(H1(key, s))
-                                  <span class="c"># w_s = instances × capacity</span>
-rank = rank minus sites whose revision or
-       max-model-len can't take the request
-for s in rank:
-    pos = H2(key, s) / 2          <span class="c"># chat</span>
-        | 0.5 + H2(key, s) / 2    <span class="c"># Claude Code, agents</span>
-    if pos &gt;= f_s:
-        route to s, rest of rank as retries; stop
-else:
-    route to rank[0]              <span class="c"># all spilling: stay home</span>
-
-<span class="c">per site, every second (reporter)</span>
-f_s += 0.03  while queueing and another site has room
-f_s -= 0.01  while not queueing and under ~95% busy</code></pre>
-    </article>
   </div>
 
   <h3>Simulated effect</h3>
   <div class="tablewrap">
     <table>
-      <thead><tr><th scope="col">8 + 3 B200 nodes</th><th scope="col" class="num">Current: least-request</th><th scope="col" class="num">Phase 1</th><th scope="col" class="num">Phase 2</th></tr></thead>
+      <thead><tr><th scope="col">8 + 3 B200 nodes</th><th scope="col" class="num">Current: least-request</th><th scope="col" class="num">Weighted hash</th></tr></thead>
       <tbody>
-        <tr><th scope="row">3-node site busy, 80% load</th><td class="num">100%, always queued</td><td class="num">80%</td><td class="num good">79%</td></tr>
-        <tr><th scope="row">8-node site busy, 80% load</th><td class="num">75%</td><td class="num">79%</td><td class="num good">79%</td></tr>
-        <tr><th scope="row">p95 queue wait, 92% load</th><td class="num">4.2 s</td><td class="num">0.1 s</td><td class="num good">0.01 s</td></tr>
-        <tr><th scope="row">p95 queue wait, 2 of 8 nodes down</th><td class="num">4.2 s</td><td class="num">1.8 s</td><td class="num good">0.05 s</td></tr>
-        <tr><th scope="row">Turns that changed site</th><td class="num">44%</td><td class="num">9% (chat only)</td><td class="num good">0–1%</td></tr>
+        <tr><th scope="row">3-node site busy, 80% load</th><td class="num">100%, always queued</td><td class="num">80%</td></tr>
+        <tr><th scope="row">8-node site busy, 80% load</th><td class="num">75%</td><td class="num">79%</td></tr>
+        <tr><th scope="row">p95 queue wait, 92% load</th><td class="num">4.2 s</td><td class="num">0.1 s</td></tr>
+        <tr><th scope="row">p95 queue wait, 2 of 8 nodes down</th><td class="num">4.2 s</td><td class="num">1.8 s</td></tr>
+        <tr><th scope="row">Turns that changed site</th><td class="num">44%</td><td class="num">9% (chat only)</td></tr>
       </tbody>
     </table>
   </div>
@@ -656,12 +574,11 @@ f_s -= 0.01  while not queueing and under ~95% busy</code></pre>
       <thead><tr><th scope="col">Event</th><th scope="col">What happens</th></tr></thead>
       <tbody>
         <tr><th scope="row">Normal load</th><td>Every conversation stays on its home site. Sites fill in proportion to their nodes, 8 : 3.</td></tr>
-        <tr><th scope="row">One site runs hot</th><td>Its spill fraction rises. Chat conversations leave first, each to its own second-ranked site. Claude Code sessions leave last.</td></tr>
-        <tr><th scope="row">A site loses instances</th><td>Phase 2: its weight follows ready instances, and only the conversations that must move, move. Phase 1: the hub lowers the weight once two polls in a row agree; shed and retry cover the gap.</td></tr>
+        <tr><th scope="row">One site runs hot</th><td>Past its limit it answers 503, and those requests are tried at another site. Its conversations come back to it as soon as it has room.</td></tr>
+        <tr><th scope="row">A site loses instances</th><td>The hub lowers the weight once two polls in a row agree; shed and retry cover the gap.</td></tr>
         <tr><th scope="row">Every site full</th><td>Conversations stay home. Flow control serves by priority; a request that waits 5 s gets 429.</td></tr>
-        <tr><th scope="row">A site or its gateway goes down</th><td>Health checks remove it from every model within about 15 s. Connect failures go to the next-ranked site at once.</td></tr>
-        <tr><th scope="row">The picker is down</th><td>Requests fall back to the phase 1 rule, the weighted session hash.</td></tr>
-        <tr><th scope="row">The hub is down</th><td>Budgets fail open and config stays as last delivered. Routing keeps working, because reports go site to site.</td></tr>
+        <tr><th scope="row">A site or its gateway goes down</th><td>Health checks remove it from every model within about 15 s. Connect failures go to another site at once.</td></tr>
+        <tr><th scope="row">The hub is down</th><td>Budgets fail open and config stays as last delivered. Routing keeps working: the gateways need nothing from the hub to route.</td></tr>
         <tr><th scope="row">A site comes back</th><td>Its weight rises one instance per hub poll, so its conversations don’t all return to a cold cache at once.</td></tr>
       </tbody>
     </table>
@@ -672,9 +589,7 @@ f_s -= 0.01  while not queueing and under ~95% busy</code></pre>
   <h2 id="confirm">To confirm before building</h2>
   <ol class="confirm">
     <li><b>Fairness header.</b> The simplest path is to have the API-key auth write the tenant ID straight into <code>x-llm-d-inference-fairness-id</code> and key token budgets on that same header. The serving site must trust it only from peer certificates.</li>
-    <li><b>Endpoint override with hostname endpoints.</b> Confirm that Envoy Gateway 1.9.1 matches the override (IP:port) against the resolved VIP addresses of the site Backend.</li>
-    <li><b>Spill constants.</b> The +0.03 / −0.01 per second steps and the 1 s report interval come from the simulation. Tune them on real traffic.</li>
-    <li><b>Chat UIs.</b> A UI that sends a stable conversation header makes chat sticky in phase 1 as well.</li>
+    <li><b>Chat UIs.</b> A UI that sends a stable conversation header makes chat sticky as well.</li>
     <li><b>Peer listener limit.</b> It sheds by request count, while the real cost is tokens. Size it from vLLM’s reported concurrency at a realistic context length.</li>
   </ol>
 </section>
