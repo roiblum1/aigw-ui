@@ -116,26 +116,31 @@ tenants sent before. Two equal requests can therefore cost different
 amounts. All tenants share one prefix cache, so a tenant can get the lower
 price for a prompt another tenant sent first.
 
-## A budget per hour or per day
+## A budget per day
 
-A tenant's budget on a model has a period: a minute, an hour or a day. The
-gateway keeps the period by itself. A new hour starts on the hour and a new
-day at 00:00 UTC, and the counter of the new period starts at 0. The hub
-has no part in it, so a budget is kept and reset while the hub is down.
+The standard budget is per day. A tenant gets an amount for the day on a
+model, and a new day starts at 00:00 UTC with the counter at 0. New quotas
+and a model's shared pool are per day unless you choose otherwise.
+
+The gateway keeps the period by itself. The hub has no part in it, so a
+budget is kept and reset while the hub is down.
+
+| Period | When to use it |
+|---|---|
+| Day | The standard. One amount for the day, which suits teams that work in bursts |
+| Hour | For a tenant that should never wait longer than an hour after overspending. It can then spend 24 times the amount in a day |
+| Minute | A rate limit more than a budget |
+
+A tenant has one budget per model, so it is one of these and not two. The
+gateway lets a request through when any of a tenant's buckets has room, so
+a daily and an hourly budget together would not both hold.
 
 There is no period of three hours, and none is planned. The gateway knows a
 second, a minute, an hour and a day. A block of three hours would have to
 be kept by the hub: it would read the day's counter every 15 seconds and
 change a tenant's rule when a block is spent. That adds a delay, a second
 place where a budget is enforced, and a budget that stops being reset when
-the hub is down. An hourly budget gives a tenant that spent its budget a
-shorter wait than a 3-hour block would, with none of that.
-
-| You want | Set |
-|---|---|
-| A tenant that overspends waits at most an hour | A budget per hour |
-| A team that works in bursts, with one cap for the day | A budget per day |
-| Both a cap for the day and a shorter wait | Not possible: a tenant has one budget per model, and the gateway lets a request through when any of its buckets has room |
+the hub is down.
 
 ## Usage over time
 
