@@ -167,6 +167,43 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
    model. Its step "A tenant past its budget is served as best-effort"
    proves that the second route takes the tenant's requests.
 
+## Before cached prompts are charged less
+
+A cost expression can charge the cached part of a prompt less (see the user
+guide, Models). It follows what the model server reports, so three things
+have to be right on the serving side. None of them is set by the hub.
+
+1. vLLM reports cached tokens only when asked to, and puts usage on a
+   streamed answer only when the client asks or the server forces it. Start
+   it with:
+
+   ```
+   --enable-prefix-caching --enable-prompt-tokens-details --enable-force-include-usage
+   ```
+
+   On an `LLMInferenceService`, add them to the `VLLM_ADDITIONAL_ARGS`
+   variable of the `main` container, after what is already there.
+2. A client must not be able to send `kv_transfer_params`. From vLLM 0.31 it
+   sets the cached count of the answer (vLLM issue 58728, open), and up to
+   0.29 a malformed one is reported to stop the server. The hub removes the field on
+   every `AIServiceBackend` it creates. For a model the cluster's own chart
+   brings, add the same to its backend:
+
+   ```yaml
+   spec:
+     bodyMutation:
+       remove: ["kv_transfer_params"]
+   ```
+
+3. Run **Self-test** on a cluster with the model. "The model reports cached
+   prompt tokens" shows whether the count arrives, and "A client cannot
+   choose its tenant" that a request is charged to the tenant of its key.
+
+Not checked by the self-test: a model served with prefill and decode on
+separate instances. Some vLLM versions then report nearly the whole prompt
+as cached. Look at one cold request by hand before giving such a model a
+lower price for cached tokens.
+
 ## Upgrade
 
 ```sh

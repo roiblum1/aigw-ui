@@ -131,14 +131,7 @@ func fleetBackend(s State, m Model) *unstructured.Unstructured {
 // objective, when not empty, is the class every request through it gets.
 func fleetServiceBackend(s State, m Model, name, objective string) *unstructured.Unstructured {
 	u := object(aigwAPI, "AIServiceBackend", s.Namespace, name)
-	spec := map[string]any{
-		"schema": map[string]any{"name": "OpenAI"},
-		"backendRef": map[string]any{
-			"group": "gateway.envoyproxy.io",
-			"kind":  "Backend",
-			"name":  FleetName(m.Slug),
-		},
-	}
+	spec := serviceBackendSpec(FleetName(m.Slug))
 	if objective != "" {
 		spec["headerMutation"] = objectiveHeader(objective)
 	}

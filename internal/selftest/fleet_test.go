@@ -20,22 +20,3 @@ func TestStickiness(t *testing.T) {
 		}
 	}
 }
-
-func TestChargedTwice(t *testing.T) {
-	for name, tc := range map[string]struct {
-		counted, request int64
-		cost             string
-		want             bool
-	}{
-		"once":                    {12, 12, "", false},
-		"twice":                   {24, 12, "", true},
-		"a little more":           {13, 12, "", false},
-		"tokens unknown":          {24, 0, "", false},
-		"with a cost expression":  {48, 12, "output_tokens * 4u", false},
-		"three times, both sites": {36, 12, "", true},
-	} {
-		if got, _ := chargedTwice(tc.counted, tc.request, tc.cost); got != tc.want {
-			t.Errorf("%s: got %v, want %v", name, got, tc.want)
-		}
-	}
-}

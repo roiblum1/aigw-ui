@@ -280,7 +280,12 @@ by `GET` with `"source": "discovered"` and cannot be set. On update, leaving
 `cache_creation_input_tokens` and `reasoning_tokens` that says how much a
 request charges to quotas, for example `input_tokens + output_tokens * 4u`.
 The counts are unsigned integers, so number literals need the `u` suffix.
-Empty charges `total_tokens`.
+Empty charges `total_tokens`. `input_tokens` includes the cached part.
+
+The expression is compiled and run once with every count at 0, as the
+gateway does. One the gateway would not use is refused with 400: an unknown
+name, a number without `u` next to a count, a result that is not a whole
+number, a division by a count. It can be at most 1000 characters.
 
 Each endpoint of a model carries `capacity`, and the model `site_weights`:
 

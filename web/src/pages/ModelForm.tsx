@@ -147,7 +147,7 @@ export default function ModelForm(props: {
       <h3>What a request costs</h3>
       <Field
         label="Cost expression"
-        hint="Optional. Leave empty to charge every token the same. Counts are whole numbers and literals need a u, e.g. input_tokens + output_tokens * 4u."
+        hint="Optional. Leave empty to charge every token the same. Counts are whole numbers and literals need a u, e.g. input_tokens + output_tokens * 4u. input_tokens includes the cached part."
       >
         <input
           value={cost}
