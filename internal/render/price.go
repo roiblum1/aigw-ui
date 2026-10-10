@@ -1,6 +1,9 @@
 package render
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // CreditsPerDollar is the unit a priced model is counted in: one credit is
 // a hundred-thousandth of a dollar. It is small enough that rounding a
@@ -32,4 +35,14 @@ func (p Prices) Expression() string {
 	return fmt.Sprintf("((cached_input_tokens <= input_tokens ? input_tokens - cached_input_tokens : input_tokens) * %du"+
 		" + (cached_input_tokens <= input_tokens ? cached_input_tokens : 0u) * %du"+
 		" + output_tokens * %du) / 1000000u", p.Input, p.Cached, p.Output)
+}
+
+// Dollars writes an amount of credits as money, with as many decimals as it
+// needs and at least two.
+func Dollars(credits int64) string {
+	s := fmt.Sprintf("%d.%05d", credits/CreditsPerDollar, credits%CreditsPerDollar)
+	for strings.HasSuffix(s, "0") && len(s)-strings.IndexByte(s, '.') > 3 {
+		s = s[:len(s)-1]
+	}
+	return "$" + s
 }

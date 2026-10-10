@@ -43,9 +43,9 @@ func (b priceBody) price(now time.Time) (store.Price, error) {
 		credits := math.Round(f.dollars * render.CreditsPerDollar)
 		switch {
 		case math.IsNaN(credits) || credits < float64(f.min):
-			return p, invalid("%s must be at least %s", f.name, syncer.Dollars(f.min))
+			return p, invalid("%s must be at least %s", f.name, render.Dollars(f.min))
 		case credits > maxPrice:
-			return p, invalid("%s is a price for a million tokens and can be at most %s", f.name, syncer.Dollars(maxPrice))
+			return p, invalid("%s is a price for a million tokens and can be at most %s", f.name, render.Dollars(maxPrice))
 		}
 		*f.credits = int64(credits)
 	}

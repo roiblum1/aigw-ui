@@ -10,7 +10,10 @@ import (
 // SetModelSpentMode sets what happens to a tenant whose budget for the model
 // is spent and returns the model's name. Going back to SpentRefuse ends every
 // running overage period of the model.
-func (s *Store) SetModelSpentMode(ctx context.Context, id, mode string, unlimited bool) (string, error) {
+//
+// limit is the most a tenant may use as best-effort in one period of its
+// quota, or nil for no limit.
+func (s *Store) SetModelSpentMode(ctx context.Context, id, mode string, unlimited bool, limit *int64) (string, error) {
 	var name string
 	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
 		var fleet bool
@@ -21,23 +24,27 @@ func (s *Store) SetModelSpentMode(ctx context.Context, id, mode string, unlimite
 			return ErrNoEntryRoute
 		}
 		if mode != SpentBestEffort {
-			unlimited = false
+			unlimited, limit = false, nil
 			if _, err := tx.Exec(ctx, `UPDATE overage SET until = now() WHERE model_id = $1 AND until > now()`, id); err != nil {
 				return err
 			}
 		}
-		_, err := tx.Exec(ctx, `UPDATE models SET spent_mode = $2, best_effort_unlimited = $3 WHERE id = $1`, id, mode, unlimited)
+		if _, err := tx.Exec(ctx, `UPDATE models SET spent_mode = $2, best_effort_unlimited = $3, best_effort_limit = $4 WHERE id = $1`, id, mode, unlimited, limit); err != nil {
+			return err
+		}
+		// A tenant that was refused under the old limit gets the new one.
+		_, err := tx.Exec(ctx, `UPDATE overage SET capped_at = NULL WHERE model_id = $1 AND until > now()`, id)
 		return err
 	})
 	return name, mapErr(err)
 }
 
-const overageSelect = `SELECT o.model_id, m.name, o.tenant_id, t.slug, o.since, o.until, o.until > now()
+const overageSelect = `SELECT o.model_id, m.name, o.tenant_id, t.slug, o.since, o.until, o.until > now(), o.capped_at
 	FROM overage o JOIN models m ON m.id = o.model_id JOIN tenants t ON t.id = o.tenant_id`
 
 func scanOverage(r scanner) (Overage, error) {
 	var o Overage
-	err := r.Scan(&o.ModelID, &o.ModelName, &o.TenantID, &o.TenantSlug, &o.Since, &o.Until, &o.Active)
+	err := r.Scan(&o.ModelID, &o.ModelName, &o.TenantID, &o.TenantSlug, &o.Since, &o.Until, &o.Active, &o.CappedAt)
 	return o, err
 }
 
@@ -68,9 +75,17 @@ func (s *Store) EndOverage(ctx context.Context, modelID, tenantID string) (bool,
 	return tag.RowsAffected() > 0, mapErr(err)
 }
 
+// CapOverage takes a tenant off the best-effort route of a model for the rest
+// of its running overage period, and reports whether it was on it.
+func (s *Store) CapOverage(ctx context.Context, modelID, tenantID string) (bool, error) {
+	tag, err := s.db.Exec(ctx, `UPDATE overage SET capped_at = now() WHERE model_id = $1 AND tenant_id = $2 AND until > now() AND capped_at IS NULL`, modelID, tenantID)
+	return tag.RowsAffected() > 0, mapErr(err)
+}
+
 // BestEffortTenants returns, for every model in best-effort mode, the slugs
 // of the tenants whose requests go to the model's best-effort route: first
-// the tenants in a running overage period, then, when the model says so,
+// the tenants in a running overage period that have not reached the
+// model's best-effort limit, then, when the model says so,
 // the tenants without a quota of their own on it. Each group is sorted. The
 // route lists a limited number of tenants, and a tenant that was moved
 // because its budget is spent must not lose its place to one without a
@@ -79,7 +94,7 @@ func (s *Store) BestEffortTenants(ctx context.Context) (map[string][]string, err
 	rows, err := s.db.Query(ctx,
 		`SELECT o.model_id, t.slug, 0 AS place FROM overage o
 		   JOIN tenants t ON t.id = o.tenant_id JOIN models m ON m.id = o.model_id
-		  WHERE o.until > now() AND t.enabled AND m.fleet AND m.spent_mode = 'best-effort'
+		  WHERE o.until > now() AND o.capped_at IS NULL AND t.enabled AND m.fleet AND m.spent_mode = 'best-effort'
 		 UNION
 		 SELECT m.id, t.slug, 1 FROM models m CROSS JOIN tenants t
 		  WHERE m.fleet AND m.spent_mode = 'best-effort' AND m.best_effort_unlimited AND t.enabled

@@ -62,6 +62,11 @@ type Quota struct {
 	// BestEffortUntil is set while the tenant's requests for the model are
 	// served as best-effort.
 	BestEffortUntil *time.Time `json:"best_effort_until,omitempty"`
+	// BestEffortLimit is the most the model lets a tenant use as
+	// best-effort in one period, when it sets one. BestEffortCapped is true
+	// once the tenant reached it: it is refused until the period ends.
+	BestEffortLimit  *int64 `json:"best_effort_limit,omitempty"`
+	BestEffortCapped bool   `json:"best_effort_capped,omitempty"`
 }
 
 // Pool is the default bucket of a model: every request to the model is
@@ -118,7 +123,13 @@ func (s *Service) CanReset() bool { return s.rd.AllowReset }
 // the current window as the gateways' rate limit services count them.
 // tenantID limits it to the quotas of one tenant.
 func (s *Service) Report(ctx context.Context, tenantID string) (Report, error) {
-	now := time.Now()
+	return s.ReportAt(ctx, tenantID, time.Now())
+}
+
+// ReportAt is Report for the windows that contain now. The counters of a
+// window that ended stay in Redis for a while, which is how the last usage
+// of a window is still read after it.
+func (s *Service) ReportAt(ctx context.Context, tenantID string, now time.Time) (Report, error) {
 	rep := Report{At: now.UTC(), Quotas: []Quota{}, Pools: []Pool{}}
 	buckets, err := s.buckets(ctx, now, tenantID)
 	if err != nil {
@@ -135,7 +146,7 @@ func (s *Service) Report(ctx context.Context, tenantID string) (Report, error) {
 		return rep, RedisError{err}
 	}
 
-	until, err := s.bestEffortUntil(ctx)
+	periods, err := s.overagePeriods(ctx)
 	if err != nil {
 		return rep, err
 	}
@@ -158,12 +169,16 @@ func (s *Service) Report(ctx context.Context, tenantID string) (Report, error) {
 			})
 			continue
 		}
-		rep.Quotas = append(rep.Quotas, Quota{
+		q := Quota{
 			TenantID: b.tenantID, TenantSlug: b.tenantSlug, ModelID: b.modelID, ModelName: b.modelName,
 			Limit: b.limit, Window: b.window, Shadow: b.shadow, Unit: b.unit, DryRun: b.dryRun,
 			Used: used, OverageUsed: overage, ResetsAt: resets, Counters: counters,
-			BestEffortUntil: until[[2]string{b.modelID, b.tenantID}],
-		})
+			BestEffortLimit: b.bestEffortLimit,
+		}
+		if o, ok := periods[[2]string{b.modelID, b.tenantID}]; ok {
+			q.BestEffortUntil, q.BestEffortCapped = &o.Until, o.CappedAt != nil
+		}
+		rep.Quotas = append(rep.Quotas, q)
 	}
 	sort.Slice(rep.Pools, func(i, j int) bool { return rep.Pools[i].ModelName < rep.Pools[j].ModelName })
 	sort.Slice(rep.Quotas, func(i, j int) bool {
@@ -180,16 +195,15 @@ func (s *Service) Report(ctx context.Context, tenantID string) (Report, error) {
 	return rep, nil
 }
 
-// bestEffortUntil returns when each running overage period ends, by model
-// and tenant ID.
-func (s *Service) bestEffortUntil(ctx context.Context) (map[[2]string]*time.Time, error) {
+// overagePeriods returns the running overage periods by model and tenant ID.
+func (s *Service) overagePeriods(ctx context.Context) (map[[2]string]store.Overage, error) {
 	active, err := s.st.ActiveOverage(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[[2]string]*time.Time, len(active))
+	out := make(map[[2]string]store.Overage, len(active))
 	for _, o := range active {
-		out[[2]string{o.ModelID, o.TenantID}] = &o.Until
+		out[[2]string{o.ModelID, o.TenantID}] = o
 	}
 	return out, nil
 }

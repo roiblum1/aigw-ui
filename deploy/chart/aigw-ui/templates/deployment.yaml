@@ -56,6 +56,10 @@ spec:
               value: {{ .Values.config.overageInterval | quote }}
             - name: OVERAGE_THRESHOLD
               value: {{ .Values.config.overageThreshold | quote }}
+            - name: USAGE_HISTORY_INTERVAL
+              value: {{ .Values.config.usageHistoryInterval | quote }}
+            - name: TENANT_PAGE
+              value: {{ .Values.config.tenantPage | quote }}
             - name: BEST_EFFORT_PRIORITY
               value: {{ .Values.config.bestEffortPriority | quote }}
             {{- if or .Values.redis.url .Values.redis.existingSecret }}

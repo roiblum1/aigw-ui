@@ -24,11 +24,14 @@ type Server struct {
 	// usage is nil when no Redis is configured.
 	usage    *usage.Service
 	selftest *selftest.Runner
+	// tenantPage lets tenants sign in with an API key to see their own usage.
+	tenantPage  bool
+	keyFailures keyFailures
 }
 
 // New builds the API. usage may be nil, which turns usage monitoring off.
-func New(st *store.Store, sy *syncer.Syncer, usage *usage.Service, selftest *selftest.Runner, adminToken, uiDir string) *Server {
-	return &Server{st: st, sy: sy, usage: usage, selftest: selftest, adminToken: adminToken, uiDir: uiDir}
+func New(st *store.Store, sy *syncer.Syncer, usage *usage.Service, selftest *selftest.Runner, adminToken, uiDir string, tenantPage bool) *Server {
+	return &Server{st: st, sy: sy, usage: usage, selftest: selftest, adminToken: adminToken, uiDir: uiDir, tenantPage: tenantPage}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -40,6 +43,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/docs", s.listDocs)
 	api.HandleFunc("GET /api/v1/docs/text/{name...}", s.readDoc)
 	api.HandleFunc("GET /api/v1/usage", s.getUsage)
+	api.HandleFunc("GET /api/v1/usage/history", s.usageHistory)
 	api.HandleFunc("POST /api/v1/tenants/{id}/quotas/{model_id}/reset", s.resetUsage)
 
 	api.HandleFunc("GET /api/v1/clusters", s.listClusters)
@@ -80,6 +84,8 @@ func (s *Server) Handler() http.Handler {
 
 	root := http.NewServeMux()
 	root.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+	// A tenant's own usage, by one of its API keys and not the admin token.
+	root.Handle("GET /api/v1/my/usage", s.tenantAuth(http.HandlerFunc(s.getMyUsage)))
 	root.Handle("/api/", s.auth(s.audit(api)))
 	root.HandleFunc("/", s.ui)
 	return root

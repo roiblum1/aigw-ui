@@ -60,7 +60,7 @@ func (s *Syncer) ApplyPrices(ctx context.Context) (int, error) {
 func priceLine(a store.AppliedPrice, now time.Time) string {
 	p := a.Price
 	line := fmt.Sprintf("%s now costs %s for a million input tokens, %s cached and %s output.",
-		a.ModelName, Dollars(p.Input), Dollars(p.Cached), Dollars(p.Output))
+		a.ModelName, render.Dollars(p.Input), render.Dollars(p.Cached), render.Dollars(p.Output))
 	if a.First {
 		line += " It is counted in money from now on: its limits were converted at the input price, and it is in dry-run, so nobody is refused until that is switched off."
 	}
@@ -68,14 +68,4 @@ func priceLine(a store.AppliedPrice, now time.Time) string {
 		line += fmt.Sprintf(" The prices were due %s ago, so the counters of the running windows hold amounts at the old and the new prices.", late.Round(time.Minute))
 	}
 	return line
-}
-
-// Dollars writes an amount of credits as money, with as many decimals as it
-// needs and at least two.
-func Dollars(credits int64) string {
-	s := fmt.Sprintf("%d.%05d", credits/render.CreditsPerDollar, credits%render.CreditsPerDollar)
-	for strings.HasSuffix(s, "0") && len(s)-strings.IndexByte(s, '.') > 3 {
-		s = s[:len(s)-1]
-	}
-	return "$" + s
 }

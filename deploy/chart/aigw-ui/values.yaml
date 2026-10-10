@@ -26,6 +26,12 @@ config:
   # to be moved (0.5 to 1). Needs redis.url.
   overageInterval: 15s
   overageThreshold: "0.9"
+  # How often the usage counters are read to keep the usage history, which
+  # the charts and the tenants' own page show. "0" keeps none. Needs redis.url.
+  usageHistoryInterval: 1m
+  # Lets a tenant open /my-usage and sign in with one of its API keys to see
+  # its own budgets and usage. It sees nothing of another tenant.
+  tenantPage: true
   # The priority of the request class "best-effort", which the hub creates
   # next to each model's InferencePool for a model in best-effort mode. A
   # request without a class has priority 0; below 0 is dropped first.

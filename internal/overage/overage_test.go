@@ -28,6 +28,16 @@ func (f *fake) StartOverage(_ context.Context, modelID, tenantID string, until t
 	return true, nil
 }
 
+func (f *fake) CapOverage(_ context.Context, modelID, tenantID string) (bool, error) {
+	for i, o := range f.active {
+		if o.ModelID == modelID && o.TenantID == tenantID && o.CappedAt == nil {
+			f.active[i].CappedAt = &o.Until
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (f *fake) Report(context.Context, string) (usage.Report, error) {
 	return usage.Report{Quotas: f.quotas}, f.redis
 }
@@ -160,5 +170,36 @@ func TestFirstTickSyncsOnce(t *testing.T) {
 	s.Tick(context.Background())
 	if len(f.changes) != 0 {
 		t.Errorf("synced without a best-effort model: %v", f.changes)
+	}
+}
+
+// A moved tenant that reaches the model's limit on best-effort use is taken
+// off the best-effort route once, and stays in its period.
+func TestTickCapsBestEffort(t *testing.T) {
+	f, s := setup()
+	limit := int64(50)
+	f.models[0].BestEffortLimit = &limit
+	q := quota("team-a", 95, 100, "1h")
+	f.quotas = []usage.Quota{q}
+	s.Tick(context.Background())
+
+	q.OverageUsed = 49
+	f.quotas, f.changes = []usage.Quota{q}, nil
+	s.Tick(context.Background())
+	if len(f.changes) != 0 || f.active[0].CappedAt != nil {
+		t.Errorf("capped below the limit: %v", f.changes)
+	}
+
+	q.OverageUsed = 50
+	f.quotas = []usage.Quota{q}
+	s.Tick(context.Background())
+	if len(f.changes) != 1 || !strings.Contains(f.changes[0], "team-a on glm has used 50 tokens as best-effort") || f.active[0].CappedAt == nil {
+		t.Errorf("changes = %v, want the tenant capped", f.changes)
+	}
+
+	f.changes = nil
+	s.Tick(context.Background())
+	if len(f.changes) != 0 || !f.in("team-a") {
+		t.Errorf("a second look changed something: %v", f.changes)
 	}
 }

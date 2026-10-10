@@ -76,6 +76,10 @@ func (s *Store) ListKeys(ctx context.Context, tenantID string) ([]APIKey, error)
 	return list(ctx, s, scanKey, `SELECT `+keyColumns+` FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC`, tenantID)
 }
 
+// keyPrefixLen is how much of a key is stored in the clear, to show which
+// key a row is.
+const keyPrefixLen = 9
+
 // keyColumns is what scanKey reads. The key itself is never among them.
 const keyColumns = `id, tenant_id, name, client_id, key_prefix, revoked_at, created_at`
 
@@ -104,7 +108,7 @@ func (s *Store) CreateKey(ctx context.Context, tenantID, name string) (APIKey, s
 	}
 	k, err := scanKey(s.db.QueryRow(ctx,
 		`INSERT INTO api_keys (tenant_id, name, client_id, key_prefix, key_enc) VALUES ($1, $2, $3, $4, $5)
-		 RETURNING `+keyColumns, tenantID, name, clientID, plain[:9], enc))
+		 RETURNING `+keyColumns, tenantID, name, clientID, plain[:keyPrefixLen], enc))
 	return k, plain, mapErr(err)
 }
 
