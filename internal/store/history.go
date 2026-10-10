@@ -112,6 +112,7 @@ func (s *Store) UsageHistory(ctx context.Context, from time.Time, step, tenantID
 	return list(ctx, s, func(r scanner) (UsagePoint, error) {
 		var p UsagePoint
 		err := r.Scan(&p.At, &p.TenantID, &p.TenantSlug, &p.ModelID, &p.ModelName, &p.Unit, &p.Used, &p.BestEffort)
+		p.At = p.At.UTC()
 		return p, err
 	}, `SELECT date_trunc($2, u.hour, 'UTC') AS at, u.tenant_id, t.slug, u.model_id, m.name, u.unit, sum(u.used)::bigint, sum(u.best_effort)::bigint
 		FROM usage_hours u JOIN tenants t ON t.id = u.tenant_id JOIN models m ON m.id = u.model_id

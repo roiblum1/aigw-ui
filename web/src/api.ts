@@ -92,6 +92,8 @@ export interface Model {
   spent_mode: SpentMode;
   /** Tenants without a quota on the model are served as best-effort too. */
   best_effort_unlimited: boolean;
+  /** The most a tenant may use as best-effort in one period, or null. */
+  best_effort_limit: number | null;
   /** Differences between the sites that serve the model. */
   warnings: string[];
   /** What the model's limits and usage are counted in. */
@@ -270,6 +272,10 @@ export interface UsageQuota {
   counters: { backend: string; clusters: string[]; used: number; overage?: boolean }[];
   /** Set while the tenant's requests for the model are served as best-effort. */
   best_effort_until?: string;
+  /** The most the model lets a tenant use as best-effort in one period. */
+  best_effort_limit?: number;
+  /** The tenant reached that limit and is refused until the period ends. */
+  best_effort_capped?: boolean;
   /** What limit, used and overage_used are counted in. */
   unit: Unit;
   /** The model's prices are being tried out: counted, nobody refused. */
@@ -298,6 +304,60 @@ export interface UsageReport {
   quotas: UsageQuota[];
   pools: UsagePool[];
   hint?: string;
+}
+
+/** What one tenant used of one model in one hour or day. */
+export interface UsagePoint {
+  at: string;
+  tenant_id: string;
+  tenant_slug: string;
+  model_id: string;
+  model_name: string;
+  unit: Unit;
+  /** Within the tenant's budget. */
+  used: number;
+  /** As best-effort, after the budget was spent. */
+  best_effort: number;
+}
+
+export type Step = "hour" | "day";
+
+export interface UsageHistory {
+  /** The start of the first step. Steps without usage are left out of points. */
+  from: string;
+  step: Step;
+  points: UsagePoint[];
+}
+
+/** A tenant's budget on one model, as the tenant sees it. */
+export interface MyBudget {
+  model_name: string;
+  unit: Unit;
+  limit: number;
+  window: Window;
+  used: number;
+  resets_at: string;
+  /** False while the budget is only counted and nobody is refused. */
+  enforced: boolean;
+  best_effort_used: number;
+  best_effort_until?: string;
+  best_effort_limit?: number;
+  best_effort_capped?: boolean;
+}
+
+/** What a tenant sees of itself after signing in with one of its keys. */
+export interface MyUsage {
+  tenant: string;
+  display_name: string;
+  at: string;
+  usage_enabled: boolean;
+  budgets: MyBudget[];
+  /** Credits for a million tokens. */
+  prices: { model_name: string; price_input: number; price_cached: number; price_output: number }[];
+  days_from: string;
+  days: UsagePoint[];
+  hours_from: string;
+  hours: UsagePoint[];
 }
 
 export interface ProbeResult {
@@ -400,6 +460,9 @@ export const api = {
   resetUsage: (tenantId: string, modelId: string) =>
     request<{ counters: number; deleted: number }>("POST", `/tenants/${tenantId}/quotas/${modelId}/reset`),
   usage: (tenantId?: string) => request<UsageReport>("GET", "/usage" + (tenantId ? `?tenant_id=${tenantId}` : "")),
+  usageHistory: (step: Step, days: number) => request<UsageHistory>("GET", `/usage/history?step=${step}&days=${days}`),
+  /** A tenant's own usage, by one of its API keys. */
+  myUsage: (key: string) => request<MyUsage>("GET", "/my/usage", undefined, key),
 
   clusters: () => request<Cluster[]>("GET", "/clusters"),
   createCluster: (c: ClusterInput) => request<Cluster>("POST", "/clusters", c),
@@ -416,8 +479,8 @@ export const api = {
   updateModel: (id: string, m: ModelInput) => request<{ id: string }>("PUT", `/models/${id}`, m),
   deleteModel: (id: string) => request<void>("DELETE", `/models/${id}`),
   setModelFleet: (id: string, enabled: boolean) => request<void>("PUT", `/models/${id}/fleet`, { enabled }),
-  setModelSpent: (id: string, mode: SpentMode, unlimited: boolean) =>
-    request<void>("PUT", `/models/${id}/spent`, { mode, best_effort_unlimited: unlimited }),
+  setModelSpent: (id: string, mode: SpentMode, unlimited: boolean, limit: number | null) =>
+    request<void>("PUT", `/models/${id}/spent`, { mode, best_effort_unlimited: unlimited, best_effort_limit: limit }),
   prices: (id: string) => request<Price[]>("GET", `/models/${id}/prices`),
   setPrices: (id: string, p: PriceInput) => request<Price[]>("PUT", `/models/${id}/prices`, p),
   deletePendingPrices: (id: string) => request<void>("DELETE", `/models/${id}/prices/pending`),

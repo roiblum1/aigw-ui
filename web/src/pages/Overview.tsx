@@ -2,6 +2,7 @@ import { Boxes, Gauge, KeyRound, Server, Users, type LucideIcon } from "lucide-r
 import { api } from "../api";
 import { ErrorBanner, PageHeader, StatusBadge, formatTime, useLoad } from "../components";
 import Dashboard from "./Dashboard";
+import History from "./History";
 
 function Stat(props: { label: string; value: number; icon: LucideIcon; note?: string; alert?: boolean }) {
   const Icon = props.icon;
@@ -44,6 +45,7 @@ export default function Overview() {
         </div>
       )}
       <Dashboard />
+      <History />
       {data && data.clusters.length > 0 && (
         <section className="card">
           <h2>Cluster sync</h2>

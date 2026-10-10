@@ -2,7 +2,7 @@
 // framework to install.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatAmount, formatDollars, formatNumber, limitText, limitValue } from "./money.ts";
+import { formatAmount, formatDollars, formatNumber, formatPrice, limitText, limitValue } from "./money.ts";
 
 test("credits are shown as dollars", () => {
   assert.equal(formatDollars(0), "$0.00");
@@ -37,4 +37,9 @@ test("a limit comes back from the field as it went in", () => {
   }
   assert.equal(limitText(1_250_000, "credits"), "12.5");
   assert.equal(limitText(2_000_000, "tokens"), "2000000");
+});
+
+test("a price keeps the decimals it has", () => {
+  assert.equal(formatPrice(11_574), "$0.11574");
+  assert.equal(formatPrice(250_000), "$2.50");
 });
