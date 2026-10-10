@@ -50,20 +50,12 @@ func (s *Store) AddAudit(ctx context.Context, e AuditEntry) error {
 // ListAudit returns the newest entries first. before, when not 0, limits it
 // to entries older than that ID, for paging.
 func (s *Store) ListAudit(ctx context.Context, limit int, before int64) ([]AuditEntry, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT id, at, actor, on_behalf_of, method, path, status, action, summary, remote_addr, forwarded_for, user_agent, duration_ms
-		 FROM audit_log WHERE $2 = 0 OR id < $2 ORDER BY id DESC LIMIT $1`, limit, before)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (AuditEntry, error) {
+	return list(ctx, s, func(r scanner) (AuditEntry, error) {
 		var e AuditEntry
 		err := r.Scan(&e.ID, &e.At, &e.Actor, &e.OnBehalfOf, &e.Method, &e.Path, &e.Status, &e.Action, &e.Summary,
 			&e.RemoteAddr, &e.ForwardedFor, &e.UserAgent, &e.DurationMS)
 		return e, err
-	})
-	if entries == nil {
-		entries = []AuditEntry{}
-	}
-	return entries, err
+	},
+		`SELECT id, at, actor, on_behalf_of, method, path, status, action, summary, remote_addr, forwarded_for, user_agent, duration_ms
+		 FROM audit_log WHERE $2 = 0 OR id < $2 ORDER BY id DESC LIMIT $1`, limit, before)
 }

@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 
 	"aigw-ui/internal/store"
 )
@@ -66,3 +68,36 @@ var (
 )
 
 func validWindow(w string) bool { return w == "1m" || w == "1h" || w == "1d" }
+
+// maxListLimit is the most entries a list answers with in one request.
+const maxListLimit = 500
+
+// queryLimit reads ?limit=, the number of entries a list should return.
+// Without the parameter it is def.
+func queryLimit(r *http.Request, def int) (int, error) {
+	v := r.URL.Query().Get("limit")
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > maxListLimit {
+		return 0, invalid("limit must be a number from 1 to %d", maxListLimit)
+	}
+	return n, nil
+}
+
+// listLimited answers with the newest entries of a list, as many as ?limit=
+// asks for, or def.
+func listLimited[T any](w http.ResponseWriter, r *http.Request, def int, list func(context.Context, int) ([]T, error)) {
+	limit, err := queryLimit(r, def)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	out, err := list(r.Context(), limit)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}

@@ -259,7 +259,7 @@ to `standard` by itself.
 1. Every 15 seconds the server reads the counters the Usage page reads. A
    tenant that has used 90% of its quota on the model is recorded as "in
    overage" until the end of its window.
-2. A sync then lists the tenant in a second entry route, `fleet-<model>-be`.
+2. A sync then lists the tenant in a second entry route, `fleetbe-<model>`.
    That route matches the model *and* the tenant's client ID, which makes it
    more specific than the model's entry route, so it wins for this tenant.
 3. Its backend sets the header `x-llm-d-inference-objective: best-effort`.
@@ -291,8 +291,14 @@ to `standard` by itself.
   the route, and a patch for a route that does not exist is reported as not
   programmed.
 - *At most 200 tenants per model.* The list is one regular expression in the
-  gateway's route table. Above 200, the first 200 by name are moved and the
-  model's row shows a warning.
+  gateway's route table. Above 200, the tenants whose budget is spent are
+  listed first, then tenants without a quota, and the model's row shows a
+  warning.
+- *One sync per look.* However many tenants moved in the same 15 seconds,
+  the Activity page gets one line for them and the clusters one sync. The
+  periods themselves are on the Usage page.
+- *A sync after every start.* A period can end while the server is not
+  running. It cannot know, so its first look has the clusters synced once.
 - *A changed quota or a reset ends it.* The tenant has a new budget, so it
   is judged against that from the start.
 - *Every cluster gets the same list.* The fleet revision covers it, so the

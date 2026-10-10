@@ -5,15 +5,21 @@ import (
 	"net/http"
 	"time"
 
+	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/usage"
 )
 
-// bestEffort reports whether the model moves a tenant past its budget to
-// best-effort and the server can do the moving.
-func (t *test) bestEffort() bool {
-	return t.model.Fleet && t.model.SpentMode == store.SpentBestEffort && t.r.overage != nil
+// hasBestEffortRoute reports whether the cluster under test gets the model's
+// best-effort route. A cluster outside the fleet has only its own route for
+// the model, and refuses a tenant past its budget whatever the model says.
+func (t *test) hasBestEffortRoute() bool {
+	return t.cluster.FleetEnabled && t.model.Fleet && t.model.SpentMode == store.SpentBestEffort
 }
+
+// bestEffort reports whether a tenant past its budget is moved to
+// best-effort on this cluster and the server can do the moving.
+func (t *test) bestEffort() bool { return t.hasBestEffortRoute() && t.r.overage != nil }
 
 // quota returns the temporary tenant's usage on the model.
 func (t *test) quota() (usage.Quota, error) {
@@ -38,6 +44,8 @@ func (t *test) overage() (string, string) {
 	switch {
 	case t.model.SpentMode != store.SpentBestEffort:
 		return Skipped, "The model refuses a tenant past its budget. That is the step before this one."
+	case !t.hasBestEffortRoute():
+		return Skipped, "This cluster has no entry route for the model, so it has no best-effort route either. It refuses a tenant past its budget, which the step before this one checks."
 	case t.r.overage == nil || t.r.usage == nil:
 		return Skipped, "The server has no Redis configured, so it cannot see that a budget is spent."
 	case t.key == "":
@@ -91,5 +99,5 @@ func (t *test) overage() (string, string) {
 			break
 		}
 	}
-	return Failed, fmt.Sprintf("After %d seconds the tenant's requests did not show up on the best-effort route: %s. Check that the route %s is accepted on the cluster and that it wins over the model's entry route.", int(wait.Seconds()), last, "fleet-"+t.model.Slug+"-be")
+	return Failed, fmt.Sprintf("After %d seconds the tenant's requests did not show up on the best-effort route: %s. Check that the route %s is accepted on the cluster and that it wins over the model's entry route.", int(wait.Seconds()), last, render.BestEffortName(t.model.Slug))
 }

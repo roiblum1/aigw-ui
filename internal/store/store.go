@@ -162,3 +162,21 @@ func (s *Store) Overview(ctx context.Context) (Overview, error) {
 		Scan(&o.Clusters, &o.ClustersError, &o.Models, &o.Tenants, &o.ActiveKeys, &o.Quotas)
 	return o, err
 }
+
+// scanner is a row a value can be read from: one of several, or the single
+// row of QueryRow.
+type scanner interface{ Scan(dest ...any) error }
+
+// list runs a query and reads every row with scan. The result is never nil,
+// so the API answers [] and not null for a list without entries.
+func list[T any](ctx context.Context, s *Store, scan func(scanner) (T, error), query string, args ...any) ([]T, error) {
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (T, error) { return scan(r) })
+	if out == nil {
+		out = []T{}
+	}
+	return out, mapErr(err)
+}

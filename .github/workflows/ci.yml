@@ -28,6 +28,22 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The store's tests run against a real Postgres, the same major version
+    # the chart installs. Each test creates and drops a database of its own.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      STORE_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 
@@ -44,8 +60,16 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Unit tests
-        run: go test ./...
+      - name: No repeated code
+        run: hack/check-duplication.sh
+
+      # -race also finds two goroutines using the same value without a lock.
+      - name: Unit tests and store tests
+        run: go test -race ./...
+
+      - name: The store tests did run
+        run: |
+          go test ./internal/store/ -run TestMigrationsApplyOnce -count=1 -v | grep -q -- "--- PASS: TestMigrationsApplyOnce"
 
       - name: Tests against a real Kubernetes API server
         run: hack/test-apiserver.sh
@@ -63,8 +87,8 @@ jobs:
           npx tsc --noEmit
           npm run build
 
-      - name: Lint the chart
-        run: helm lint deploy/chart/aigw-ui
+      - name: Lint and render the chart
+        run: hack/check-chart.sh
 
   image:
     if: github.event_name == 'push'

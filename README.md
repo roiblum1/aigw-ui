@@ -64,9 +64,16 @@ Open http://localhost:8080 and sign in with `ADMIN_TOKEN`. For UI work, run
 ```sh
 go test ./...                # unit tests
 hack/test-apiserver.sh       # tests that need a real Kubernetes API server; starts a throwaway one
+hack/check-duplication.sh    # fails when the Go code repeats a block of about 15 lines
+hack/check-chart.sh          # lints the chart and renders it the ways it is installed
+
+# The store's tests need a Postgres they may create databases in. Each test
+# creates one and drops it again. Without the variable they are skipped.
+STORE_TEST_DATABASE_URL=postgres://postgres:dev@127.0.0.1:55432/postgres go test ./internal/store/
 ```
 
-The GitHub workflow runs both on every pull request and push, and pushes the
+The GitHub workflow runs all of these on every pull request and push, the Go
+tests with the race detector and a Postgres of its own, and pushes the
 image to `ghcr.io/roiblum1/aigw-ui`. To release: set the version in
 `deploy/chart/aigw-ui/Chart.yaml`, write `docs/release-notes/v<version>.md`,
 list it in `docs/release-notes/README.md`, and push the tag `v<version>`. The

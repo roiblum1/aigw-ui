@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -36,30 +35,20 @@ func (s *Store) SetModelSpentMode(ctx context.Context, id, mode string, unlimite
 const overageSelect = `SELECT o.model_id, m.name, o.tenant_id, t.slug, o.since, o.until, o.until > now()
 	FROM overage o JOIN models m ON m.id = o.model_id JOIN tenants t ON t.id = o.tenant_id`
 
-func (s *Store) listOverage(ctx context.Context, query string, args ...any) ([]Overage, error) {
-	rows, err := s.db.Query(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Overage, error) {
-		var o Overage
-		err := r.Scan(&o.ModelID, &o.ModelName, &o.TenantID, &o.TenantSlug, &o.Since, &o.Until, &o.Active)
-		return o, err
-	})
-	if out == nil {
-		out = []Overage{}
-	}
-	return out, err
+func scanOverage(r scanner) (Overage, error) {
+	var o Overage
+	err := r.Scan(&o.ModelID, &o.ModelName, &o.TenantID, &o.TenantSlug, &o.Since, &o.Until, &o.Active)
+	return o, err
 }
 
 // ActiveOverage returns the overage periods that have not ended.
 func (s *Store) ActiveOverage(ctx context.Context) ([]Overage, error) {
-	return s.listOverage(ctx, overageSelect+` WHERE o.until > now() ORDER BY m.name, t.slug`)
+	return list(ctx, s, scanOverage, overageSelect+` WHERE o.until > now() ORDER BY m.name, t.slug`)
 }
 
 // ListOverage returns the newest overage periods, running and ended.
 func (s *Store) ListOverage(ctx context.Context, limit int) ([]Overage, error) {
-	return s.listOverage(ctx, overageSelect+` ORDER BY o.since DESC LIMIT $1`, limit)
+	return list(ctx, s, scanOverage, overageSelect+` ORDER BY o.since DESC LIMIT $1`, limit)
 }
 
 // StartOverage records that a tenant is served as best-effort on a model
@@ -80,32 +69,34 @@ func (s *Store) EndOverage(ctx context.Context, modelID, tenantID string) (bool,
 }
 
 // BestEffortTenants returns, for every model in best-effort mode, the slugs
-// of the tenants whose requests go to the model's best-effort route, sorted:
-// the tenants in a running overage period and, when the model says so, the
-// tenants without a quota of their own on it.
+// of the tenants whose requests go to the model's best-effort route: first
+// the tenants in a running overage period, then, when the model says so,
+// the tenants without a quota of their own on it. Each group is sorted. The
+// route lists a limited number of tenants, and a tenant that was moved
+// because its budget is spent must not lose its place to one without a
+// quota.
 func (s *Store) BestEffortTenants(ctx context.Context) (map[string][]string, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT o.model_id, t.slug FROM overage o
+		`SELECT o.model_id, t.slug, 0 AS place FROM overage o
 		   JOIN tenants t ON t.id = o.tenant_id JOIN models m ON m.id = o.model_id
 		  WHERE o.until > now() AND t.enabled AND m.fleet AND m.spent_mode = 'best-effort'
 		 UNION
-		 SELECT m.id, t.slug FROM models m CROSS JOIN tenants t
+		 SELECT m.id, t.slug, 1 FROM models m CROSS JOIN tenants t
 		  WHERE m.fleet AND m.spent_mode = 'best-effort' AND m.best_effort_unlimited AND t.enabled
-		    AND NOT EXISTS (SELECT 1 FROM quotas q WHERE q.model_id = m.id AND q.tenant_id = t.id)`)
+		    AND NOT EXISTS (SELECT 1 FROM quotas q WHERE q.model_id = m.id AND q.tenant_id = t.id)
+		 ORDER BY 1, 3, 2`)
 	if err != nil {
-		return nil, err
+		return nil, mapErr(err)
 	}
 	defer rows.Close()
 	out := map[string][]string{}
 	for rows.Next() {
 		var modelID, slug string
-		if err := rows.Scan(&modelID, &slug); err != nil {
-			return nil, err
+		var place int
+		if err := rows.Scan(&modelID, &slug, &place); err != nil {
+			return nil, mapErr(err)
 		}
 		out[modelID] = append(out[modelID], slug)
 	}
-	for id := range out {
-		sort.Strings(out[id])
-	}
-	return out, rows.Err()
+	return out, mapErr(rows.Err())
 }
