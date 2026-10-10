@@ -72,7 +72,7 @@ func Counters(s State) []Counter {
 				rule := "rule-" + strconv.Itoa(i) + "-" + ClientIDHeader + "|" + TenantClientIDPattern(q.TenantSlug) + "-match-0"
 				out = append(out, Counter{
 					ModelSlug: m.Slug, TenantSlug: q.TenantSlug, Backend: backend,
-					Limit: q.Limit, Window: q.Window, Shadow: q.Shadow || overage, Overage: overage,
+					Limit: q.Limit, Window: q.Window, Shadow: q.Shadow || overage || m.DryRun, Overage: overage,
 					stem: prefix + rule + "_" + rule + "_",
 				})
 			}

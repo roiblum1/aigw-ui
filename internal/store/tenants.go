@@ -120,9 +120,11 @@ func (s *Store) RevokeKey(ctx context.Context, id string) (string, error) {
 func (s *Store) ListQuotas(ctx context.Context, tenantID string) ([]Quota, error) {
 	return list(ctx, s, func(r scanner) (Quota, error) {
 		var q Quota
-		err := r.Scan(&q.ID, &q.TenantID, &q.ModelID, &q.ModelName, &q.TokenLimit, &q.Window, &q.Shadow)
+		err := r.Scan(&q.ID, &q.TenantID, &q.ModelID, &q.ModelName, &q.TokenLimit, &q.Window, &q.Shadow, &q.Unit)
 		return q, err
-	}, `SELECT q.id, q.tenant_id, q.model_id, m.name, q.token_limit, q.window_size, q.shadow
+	}, `SELECT q.id, q.tenant_id, q.model_id, m.name, q.token_limit, q.window_size, q.shadow,
+	           CASE WHEN EXISTS (SELECT 1 FROM model_prices p WHERE p.model_id = m.id AND p.applied_at IS NOT NULL)
+	                THEN '`+UnitCredits+`' ELSE '`+UnitTokens+`' END
 	    FROM quotas q JOIN models m ON m.id = q.model_id WHERE q.tenant_id = $1 ORDER BY m.name`, tenantID)
 }
 

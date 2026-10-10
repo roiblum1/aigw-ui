@@ -200,7 +200,7 @@ func (t *test) apply() (string, string) {
 	if len(res.Changes) == 0 {
 		return Failed, "The sync changed nothing on the cluster, so the tenant's quota was not applied. Is the model still served there?"
 	}
-	return Passed, "Tenant " + slug + " with a quota of 1 token per hour. On the cluster: " + describe(res.Changes) + "."
+	return Passed, "Tenant " + slug + " with a quota of 1 " + unitName(t.model.Unit) + " per hour. On the cluster: " + describe(res.Changes) + "."
 }
 
 // sync applies the desired state to the cluster under test only, and logs it
@@ -318,4 +318,12 @@ func (t *test) cleanup() {
 		detail += " On the cluster: " + describe(res.Changes) + "."
 	}
 	t.set(stepCleanup, Passed, detail)
+}
+
+// unitName is one of what a model's quotas are counted in.
+func unitName(unit string) string {
+	if unit == store.UnitCredits {
+		return "credit"
+	}
+	return "token"
 }

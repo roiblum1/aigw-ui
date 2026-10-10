@@ -74,6 +74,10 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 		}
 	}
 
+	if err := s.addPrices(ctx, &st, index); err != nil {
+		return st, err
+	}
+
 	rows, err = s.db.Query(ctx,
 		`SELECT q.model_id, t.slug, q.slot, q.token_limit, q.window_size, q.shadow
 		 FROM quotas q JOIN tenants t ON t.id = q.tenant_id WHERE t.enabled`)
@@ -230,4 +234,32 @@ func (s *Store) CurrentFleetRevision(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return render.FleetRevision(st), nil
+}
+
+// addPrices gives every priced model the cost expression of its prices, in
+// place of one that was typed in, and its dry-run setting.
+func (s *Store) addPrices(ctx context.Context, st *render.State, index map[string]int) error {
+	prices, err := s.modelPrices(ctx)
+	if err != nil || len(prices.current) == 0 {
+		return err
+	}
+	rows, err := s.db.Query(ctx, `SELECT id FROM models WHERE price_dry_run`)
+	if err != nil {
+		return err
+	}
+	dryRun, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	for id, p := range prices.current {
+		if i, ok := index[id]; ok {
+			st.Models[i].CostExpression = p.Render().Expression()
+		}
+	}
+	for _, id := range dryRun {
+		if i, ok := index[id]; ok {
+			st.Models[i].DryRun = prices.current[id].AppliedAt != nil
+		}
+	}
+	return nil
 }

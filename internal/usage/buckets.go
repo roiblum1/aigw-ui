@@ -17,7 +17,11 @@ type bucket struct {
 	limit                int64
 	window               string
 	shadow               bool
-	keys                 []*key
+	// unit is what limit and the counters are in. dryRun is set for a model
+	// whose prices are being tried out: nobody is refused there.
+	unit   string
+	dryRun bool
+	keys   []*key
 }
 
 // key is one Redis key and the clusters that count in it.
@@ -81,6 +85,7 @@ func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) (
 				b = &bucket{
 					tenantID: id, tenantSlug: ct.TenantSlug, modelID: model.ID, modelName: model.Name,
 					limit: ct.Limit, window: ct.Window, shadow: ct.Shadow,
+					unit: model.Unit, dryRun: model.PriceDryRun,
 				}
 				byID[bucketID{ct.TenantSlug, ct.ModelSlug}] = b
 				out = append(out, b)

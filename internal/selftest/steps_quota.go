@@ -36,7 +36,7 @@ func (t *test) counter() (string, string) {
 					where = append(where, c.Backend)
 				}
 			}
-			return charged(q.Used, t.first, t.model.CostExpression, strings.Join(where, ", "))
+			return charged(q.Used, t.first, t.model.Cost(), strings.Join(where, ", "))
 		}
 		// The key can reach the gateway before the tenant's rule reaches
 		// the rate limit service. The first request is then answered and
@@ -64,6 +64,9 @@ func (t *test) limit() (string, string) {
 	if t.key == "" {
 		return Skipped, "Without API keys the gateway cannot tell tenants apart, so a tenant quota cannot be tested."
 	}
+	if t.model.PriceDryRun {
+		return Skipped, "The model's prices are in dry-run: every tenant is counted and nobody is refused."
+	}
 	if t.bestEffort() {
 		return Skipped, "The model serves a tenant past its budget as best-effort and does not refuse it. The next step tests that."
 	}
@@ -76,7 +79,7 @@ func (t *test) limit() (string, string) {
 			last = err.Error()
 		case res.Status == http.StatusTooManyRequests:
 			t.refused = true
-			return Passed, "Refused with HTTP 429 once the 1-token quota was used."
+			return Passed, "Refused with HTTP 429 once the quota of 1 was used."
 		case res.Status == http.StatusOK:
 			last = answer(res)
 			// In Shared mode a tenant over its own quota goes on while the

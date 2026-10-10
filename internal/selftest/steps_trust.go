@@ -26,7 +26,7 @@ func (t *test) clientID() (string, string) {
 	case !t.counted:
 		return Skipped, "Needs a counted request first."
 	}
-	if !t.bestEffort() {
+	if !t.bestEffort() && !t.model.PriceDryRun {
 		// The tenant's quota is spent, so the request would be refused.
 		if !t.r.usage.CanReset() {
 			return Skipped, "The tenant's quota is spent and resetting usage is turned off (redis.allowReset)."
