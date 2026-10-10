@@ -133,14 +133,29 @@ price for a prompt another tenant sent first.
 - What a tenant saved through cached prompts. The counter holds one total.
 - Months. The gateway's longest window is a day.
 
-## Not tested
+## Tested
 
-Prices have run on the hub alone: the database, the rendered expression
-evaluated with the gateway's CEL library, and the pages in a browser. Not
-run:
+On OpenShift 4.22 with Envoy Gateway 1.9.1 and AI Gateway 1.1.0, one site,
+with a stand-in for the model server that reports a repeated prompt as
+cached. Prices were 10 credits for an input token, 1 for a cached one and
+40 for an output token.
 
-- a gateway charging a request by a rendered price expression;
-- an API server or a gateway accepting the `QuotaPolicy` of a priced model;
-- dry-run on a gateway;
-- the server making the change at 00:00 UTC by itself. In the test the
-  change was made at a restart.
+| Request | Cost | Counter grew by |
+|---|---|---|
+| 100 prompt tokens, none cached, 1 output | 1040 | 1041 |
+| The same prompt, 96 cached | 176 | 177 |
+| Streamed, the client asks for usage | 540 | 541 |
+| Streamed, the client does not ask, 48 of 50 cached | 108 | 109 |
+
+- Two tenants at once: each counter moved for its own requests only.
+- In dry-run a tenant at 5742 of a limit of 3000 was still answered.
+- With dry-run off that tenant got 429, and a tenant within its limit was
+  answered.
+- The self-test passes on a priced model.
+
+Not tested:
+
+- a real vLLM, and so real cached counts;
+- the server making the change at 00:00 UTC by itself. The prices in the
+  test started at once, on a model without tenant quotas;
+- the conversion of limits on a gateway. It ran against the database only.
