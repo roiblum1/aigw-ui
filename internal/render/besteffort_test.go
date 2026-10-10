@@ -318,3 +318,47 @@ func TestBestEffortNamesDoNotCollide(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+// A model in best-effort mode gets the request class next to each of its
+// pools on the cluster: one per namespace, with a priority below that of a
+// request without a class.
+func TestBestEffortClassPerPoolNamespace(t *testing.T) {
+	s := State{Namespace: "ai-gateway", Models: []Model{
+		{Name: "glm", Slug: "glm", BestEffortPools: []Pool{
+			{Namespace: "glm", Name: "glm-inference-pool", Group: "inference.networking.k8s.io"},
+			{Namespace: "glm", Name: "glm-b-inference-pool", Group: "inference.networking.k8s.io"},
+		}},
+		{Name: "qwen", Slug: "qwen", BestEffortPools: []Pool{{Namespace: "qwen", Name: "qwen-inference-pool", Group: "inference.networking.x-k8s.io"}}},
+		{Name: "strict", Slug: "strict"},
+	}}
+	var classes []*unstructured.Unstructured
+	for _, o := range Objects(s) {
+		if o.GetKind() == ObjectiveKind {
+			classes = append(classes, o)
+		}
+	}
+	if len(classes) != 2 {
+		t.Fatalf("%d classes, want one per namespace", len(classes))
+	}
+	glm := find(t, classes, ObjectiveKind, "best-effort")
+	if glm.GetNamespace() != "glm" || glm.GetLabels()[ManagedLabel] != ManagedValue {
+		t.Errorf("class in %q with labels %v", glm.GetNamespace(), glm.GetLabels())
+	}
+	spec := glm.Object["spec"].(map[string]any)
+	ref := spec["poolRef"].(map[string]any)
+	// Two pools share the namespace and a class is found by name: the first
+	// pool by name gets it.
+	if spec["priority"] != int64(-1) || ref["name"] != "glm-b-inference-pool" || ref["kind"] != "InferencePool" {
+		t.Errorf("spec = %v", spec)
+	}
+	if got := classes[1].Object["spec"].(map[string]any)["poolRef"].(map[string]any)["group"]; got != "inference.networking.x-k8s.io" {
+		t.Errorf("the second class points at group %v, want the pool's own", got)
+	}
+
+	s.Fleet.BestEffortPriority = -10
+	for _, o := range Objects(s) {
+		if o.GetKind() == ObjectiveKind && o.Object["spec"].(map[string]any)["priority"] != int64(-10) {
+			t.Errorf("priority = %v, want the configured -10", o.Object["spec"].(map[string]any)["priority"])
+		}
+	}
+}

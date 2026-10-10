@@ -120,8 +120,12 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, found []kube.ModelCapacity) {
 	reported := make([]store.Capacity, 0, len(found))
 	for _, f := range found {
-		reported = append(reported, store.Capacity{Model: f.Model, Capacity: f.Capacity, Step: f.Step, Detail: f.Detail,
-			Revision: f.Revision, MaxModelLen: f.MaxModelLen, Known: f.Known})
+		c := store.Capacity{Model: f.Model, Capacity: f.Capacity, Step: f.Step, Detail: f.Detail,
+			Revision: f.Revision, MaxModelLen: f.MaxModelLen, Known: f.Known}
+		for _, p := range f.Pools {
+			c.Pools = append(c.Pools, store.Pool{Namespace: p.Namespace, Name: p.Name, Group: p.Group})
+		}
+		reported = append(reported, c)
 	}
 	if err := s.st.ApplyCapacity(ctx, c.ID, reported); err != nil {
 		slog.Error("store model capacity", "cluster", c.Name, "err", err)

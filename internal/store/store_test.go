@@ -305,3 +305,62 @@ func TestBestEffortTenantsOrder(t *testing.T) {
 		t.Errorf("tenants = %v, want only zeta", got[glm])
 	}
 }
+
+// The pools a cluster reports for a model are kept with the model's
+// endpoint there. They reach the rendered state only while the model is in
+// best-effort mode, and go when the cluster stops serving the model.
+func TestPoolsOfABestEffortModel(t *testing.T) {
+	s, ctx := open(t)
+	cluster, err := s.CreateCluster(ctx, Cluster{Name: "site1-a", Namespace: "ai-gateway", GatewayName: "gw", PeerPort: 8443}, []byte("kubeconfig"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	glm, err := s.CreateModel(ctx, ModelInput{Name: "glm", DefaultLimit: 1, DefaultWindow: "1d",
+		Endpoints: []Endpoint{{ClusterID: cluster.ID, Host: "glm.glm.svc", Port: 8000}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := Pool{Namespace: "glm", Name: "glm-inference-pool", Group: "inference.networking.k8s.io"}
+	report := func(pools ...Pool) {
+		t.Helper()
+		reported := []Capacity{{Model: "glm", Capacity: 2, Step: 1, Known: true, Pools: pools}}
+		if len(pools) == 0 {
+			reported = nil
+		}
+		if err := s.ApplyCapacity(ctx, cluster.ID, reported); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rendered := func() int {
+		t.Helper()
+		st, err := s.RenderStateWithoutKeys(ctx, cluster.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(st.Models[0].BestEffortPools)
+	}
+
+	report(pool)
+	models, err := s.ListModels(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := models[0].Endpoints[0].Capacity.Pools; len(got) != 1 || got[0] != pool {
+		t.Fatalf("stored pools = %+v, want %+v", got, pool)
+	}
+	if rendered() != 0 {
+		t.Error("a model that refuses a spent budget is rendered with a pool for the class")
+	}
+
+	if _, err := s.db.Exec(ctx, `UPDATE models SET fleet = true, spent_mode = 'best-effort' WHERE id = $1`, glm); err != nil {
+		t.Fatal(err)
+	}
+	if rendered() != 1 {
+		t.Error("a best-effort model is rendered without its pool")
+	}
+
+	report()
+	if rendered() != 0 {
+		t.Error("the pool is still rendered after the cluster stopped serving the model")
+	}
+}

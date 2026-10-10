@@ -28,10 +28,28 @@ func (s *Server) modelWarnings(m store.Model, fleet, peers map[string]bool, best
 	if m.SpentMode == store.SpentBestEffort && s.usage != nil && !s.sy.Auto() {
 		warnings = append(warnings, "Auto sync is off, so a tenant past its budget is only moved to best-effort, and back, when someone presses Sync. Until then it is refused.")
 	}
+	if m.SpentMode == store.SpentBestEffort {
+		if missing := withoutPool(m); len(missing) > 0 {
+			warnings = append(warnings, "No InferencePool was found for this model on "+strings.Join(missing, ", ")+", so the request class best-effort is not created there. A request sent as best-effort is served there like any other. The model's LLMInferenceService needs a scheduler (spec.router.scheduler).")
+		}
+	}
 	if m.Fleet && !s.st.FleetConfigured() {
 		warnings = append(warnings, "The server has no FLEET_DOMAIN or FLEET_PEER_SNI set, so the entry route is left as it is on the clusters and gets no weight changes.")
 	}
 	return warnings
+}
+
+// withoutPool returns the clusters that serve the model without an
+// InferencePool, sorted.
+func withoutPool(m store.Model) []string {
+	var out []string
+	for _, e := range m.Endpoints {
+		if e.Capacity.Serving && len(e.Capacity.Pools) == 0 {
+			out = append(out, e.ClusterName)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // recipeWarnings reports differences between the sites that serve a model

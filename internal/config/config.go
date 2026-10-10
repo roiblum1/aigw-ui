@@ -104,6 +104,10 @@ func Load() (*Config, error) {
 	if err != nil || c.OverageThreshold < 0.5 || c.OverageThreshold > 1 {
 		return nil, errors.New("OVERAGE_THRESHOLD must be a number from 0.5 to 1 such as 0.9")
 	}
+	c.Fleet.BestEffortPriority, err = strconv.ParseInt(envOr("BEST_EFFORT_PRIORITY", strconv.Itoa(render.DefaultBestEffortPriority)), 10, 32)
+	if err != nil || c.Fleet.BestEffortPriority >= 0 {
+		return nil, errors.New("BEST_EFFORT_PRIORITY must be a whole number below 0 such as -1")
+	}
 	return c, nil
 }
 
