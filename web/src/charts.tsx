@@ -62,7 +62,7 @@ export function Donut(props: { slices: Slice[]; title: string; center: string; s
   );
 }
 
-export function Legend({ slices, unit }: { slices: Slice[]; unit?: string }) {
+export function Legend({ slices, unit, format = fmt }: { slices: Slice[]; unit?: string; format?: (n: number) => string }) {
   return (
     <ul className="legend">
       {slices.map((s) => (
@@ -72,7 +72,7 @@ export function Legend({ slices, unit }: { slices: Slice[]; unit?: string }) {
             {s.label}
           </span>
           <span className="legend-value">
-            {fmt(s.value)}
+            {format(s.value)}
             {unit}
           </span>
         </li>
@@ -81,7 +81,7 @@ export function Legend({ slices, unit }: { slices: Slice[]; unit?: string }) {
   );
 }
 
-/** Tokens per minute over the samples taken while this page has been open. */
+/** Usage per minute over the samples taken while this page has been open. */
 export function RateChart({ points }: { points: number[] }) {
   if (points.length < 2) return <p className="detail">Collecting… the first reading appears after a few seconds.</p>;
   const max = Math.max(...points, 1);
@@ -92,14 +92,15 @@ export function RateChart({ points }: { points: number[] }) {
   const start = w - (points.length - 1) * step;
   const xy = points.map((p, i) => `${(start + i * step).toFixed(1)},${(h - 4 - (p / max) * (h - 12)).toFixed(1)}`);
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="rate" role="img" aria-label="Tokens per minute while this page has been open" preserveAspectRatio="none">
+    <svg viewBox={`0 0 ${w} ${h}`} className="rate" role="img" aria-label="Usage per minute while this page has been open" preserveAspectRatio="none">
       <polygon points={`${start},${h} ${xy.join(" ")} ${w},${h}`} fill="var(--chart-1)" opacity="0.15" />
       <polyline points={xy.join(" ")} fill="none" stroke="var(--chart-1)" strokeWidth="1.8" vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }
 
-export function Bar(props: { label: string; used: number; limit: number; note?: string }) {
+export function Bar(props: { label: string; used: number; limit: number; note?: string; format?: (n: number) => string }) {
+  const format = props.format ?? fmt;
   const ratio = props.limit > 0 ? props.used / props.limit : 0;
   const level = ratio >= 1 ? "full" : ratio >= 0.8 ? "high" : "ok";
   return (
@@ -114,7 +115,7 @@ export function Bar(props: { label: string; used: number; limit: number; note?: 
         <span style={{ width: `${Math.min(ratio * 100, 100)}%` }} />
       </div>
       <div className="detail">
-        {fmt(props.used)} of {fmt(props.limit)}
+        {format(props.used)} of {format(props.limit)}
         {props.note}
       </div>
     </div>

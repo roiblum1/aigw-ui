@@ -234,6 +234,14 @@ Clients send the key as `Authorization: Bearer sk-...`.
 
 A quota is one budget for the tenant on that model across all sites.
 
+**Prices.** **Prices** in a model's row sets what a million tokens of the
+model cost: input, cached input and output. The model's quotas and usage
+are then shown and entered in dollars, and a prompt answered from the
+prefix cache costs less. Prices start at the next 00:00 UTC, and the model
+starts in dry-run: counted, nobody refused. A model with prices shows
+**priced**, and **dry-run** while that is on. See
+[charging by cost](pricing.md).
+
 ## Letting tenants use what others leave unused
 
 The gateway has no setting that moves unused tokens from one tenant to

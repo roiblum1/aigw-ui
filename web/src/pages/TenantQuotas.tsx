@@ -1,11 +1,12 @@
 import { useState, type FormEvent } from "react";
-import { api, type Model, type Quota, type Tenant, type UsageReport, type Window } from "../api";
-import { WindowSelect, formatTokens, windowLabel } from "../components";
+import { api, type Model, type Quota, type Tenant, type Unit, type UsageReport, type Window } from "../api";
+import { LimitInput, WindowSelect, formatAmount, limitText, limitValue, windowLabel } from "../components";
 import { UsageMeter, confirmReset } from "./Usage";
 
 /** The quota being changed in its row: the model stays, the budget is edited. */
 interface Edit {
   id: string;
+  /** Tokens, or dollars for a model with prices. */
   limit: string;
   window: Window;
 }
@@ -38,11 +39,12 @@ export default function TenantQuotas(props: {
   const usageOf = (modelId: string) => usage?.quotas.find((u) => u.model_id === modelId);
   const withQuota = new Set(quotas.map((q) => q.model_id));
   const free = props.models.filter((m) => !withQuota.has(m.id));
+  const addedUnit: Unit = props.models.find((m) => m.id === added.model_id)?.unit ?? "tokens";
 
   const add = (e: FormEvent) => {
     e.preventDefault();
     act(async () => {
-      await api.setQuota(tenant.id, added.model_id, Number(added.limit), added.window, added.shadow);
+      await api.setQuota(tenant.id, added.model_id, limitValue(added.limit, addedUnit), added.window, added.shadow);
       setAdded({ model_id: "", limit: "", window: added.window, shadow: false });
     });
   };
@@ -51,20 +53,27 @@ export default function TenantQuotas(props: {
     e.preventDefault();
     if (!edit) return;
     act(async () => {
-      await api.setQuota(tenant.id, q.model_id, Number(edit.limit), edit.window, q.shadow);
+      await api.setQuota(tenant.id, q.model_id, limitValue(edit.limit, q.unit), edit.window, q.shadow);
       setEdit(null);
     });
   };
 
   return (
     <section className="card">
-      <h2>Token quotas</h2>
-      <p className="hint">One budget per model, counted across every site.</p>
+      <h2>Quotas</h2>
+      <p className="hint">
+        One budget per model, counted across every site. A model with prices is counted in dollars, any other in
+        tokens.
+      </p>
       {free.length === 0 ? (
         props.models.length > 0 && <p className="hint">Every model has a quota. Change one with Edit in its row.</p>
       ) : (
         <form className="inline-form" onSubmit={add}>
-          <select required value={added.model_id} onChange={(e) => setAdded({ ...added, model_id: e.target.value })}>
+          <select
+            required
+            value={added.model_id}
+            onChange={(e) => setAdded({ ...added, model_id: e.target.value, limit: "" })}
+          >
             <option value="">Add a quota for…</option>
             {free.map((m) => (
               <option key={m.id} value={m.id} disabled={!m.quota_capable}>
@@ -73,14 +82,7 @@ export default function TenantQuotas(props: {
               </option>
             ))}
           </select>
-          <input
-            required
-            type="number"
-            min={1}
-            placeholder="Tokens"
-            value={added.limit}
-            onChange={(e) => setAdded({ ...added, limit: e.target.value })}
-          />
+          <LimitInput unit={addedUnit} value={added.limit} onChange={(limit) => setAdded({ ...added, limit })} />
           <WindowSelect value={added.window} onChange={(w) => setAdded({ ...added, window: w })} />
           <label className="check" title="Usage is counted against this quota, but it never rejects a request.">
             <input
@@ -117,21 +119,19 @@ export default function TenantQuotas(props: {
                   <td>
                     {editing ? (
                       <form id={`quota-${q.id}`} className="inline-form quota-edit" onSubmit={(e) => save(e, q)}>
-                        <input
-                          required
+                        <LimitInput
                           autoFocus
-                          type="number"
-                          min={1}
-                          aria-label={`Tokens for ${q.model_name}`}
+                          unit={q.unit}
+                          label={`Limit for ${q.model_name}`}
                           value={editing.limit}
-                          onChange={(e) => setEdit({ ...editing, limit: e.target.value })}
+                          onChange={(limit) => setEdit({ ...editing, limit })}
                           onKeyDown={(e) => e.key === "Escape" && setEdit(null)}
                         />
                         <WindowSelect value={editing.window} onChange={(w) => setEdit({ ...editing, window: w })} />
                       </form>
                     ) : (
                       <>
-                        {formatTokens(q.token_limit)} per {windowLabel[q.window]}
+                        {formatAmount(q.token_limit, q.unit)} per {windowLabel[q.window]}
                         {q.shadow && " "}
                         {q.shadow && (
                           <span className="tag warn" title="Counted, but requests are not rejected by this quota.">
@@ -156,7 +156,7 @@ export default function TenantQuotas(props: {
                       <>
                         <button
                           disabled={busy}
-                          onClick={() => setEdit({ id: q.id, limit: String(q.token_limit), window: q.window })}
+                          onClick={() => setEdit({ id: q.id, limit: limitText(q.token_limit, q.unit), window: q.window })}
                         >
                           Edit
                         </button>

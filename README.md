@@ -87,6 +87,7 @@ The same documents are in the website, on the **Docs** page.
 |---|---|
 | [docs/how-it-works.md](docs/how-it-works.md) | What each action does, how, and why it was built that way |
 | [docs/user-guide.md](docs/user-guide.md) | Using the UI: clusters, models, tenants, keys, quotas |
+| [docs/pricing.md](docs/pricing.md) | Prices per model: quotas and usage in dollars, cached prompts charged less, dry-run |
 | [docs/optimization.md](docs/optimization.md) | Shared pool and best-effort: two ways to serve a tenant past its quota, side by side |
 | [docs/platform-architecture.md](docs/platform-architecture.md) | The design of the whole multi-site platform, with diagrams, and what of it is built |
 | [docs/architecture.md](docs/architecture.md) | Components, data flows, what is applied to the clusters |

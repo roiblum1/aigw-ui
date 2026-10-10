@@ -333,6 +333,35 @@ class until the window ends. `best_effort_unlimited` does the same, all the
 time, for tenants that have no quota on the model. See
 [how it works](how-it-works.md#best-effort-when-a-budget-is-spent).
 
+### Prices
+
+A model with prices is counted in credits of $0.00001 in place of tokens.
+See [charging by cost](pricing.md).
+
+| Method | Path | Body | Result |
+|---|---|---|---|
+| GET | `/models/{id}/prices` | | Every set of prices, newest first |
+| PUT | `/models/{id}/prices` | `{"input_usd", "cached_usd", "output_usd", "now", "note"}` | The list. Replaces prices that were waiting |
+| DELETE | `/models/{id}/prices/pending` | | 204. 404 when none were waiting |
+| PUT | `/models/{id}/prices/dry-run` | `{"enabled"}` | 204. 409 for a model without prices in use |
+
+- The three prices are dollars for a million tokens. They are stored as
+  whole credits, so $0.11574 is 11574. `cached_usd` cannot be above
+  `input_usd`.
+- Prices start at the next 00:00 UTC. `"now": true` starts them at once
+  and is answered with 409 for a model that has tenant quotas.
+- A set of prices carries `effective_at` and `applied_at`, which is null
+  while it waits.
+
+A model carries `unit` (`tokens` or `credits`), `prices`, `pending_prices`
+and `price_dry_run`. For a model in credits, `default_limit`, a quota's
+`token_limit` and every amount in the usage report are credits. The
+fields keep their names. Quotas and the usage report carry `unit` too, and
+the usage report `dry_run` while nobody is refused.
+
+`default_limit` and `token_limit` can be at most 4294967295, in either
+unit. The gateway cannot count further in one window.
+
 ## Tenants, keys and quotas
 
 | Method | Path | Body | Result |

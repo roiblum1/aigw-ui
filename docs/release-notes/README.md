@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.10.0](v0.10.0.md) | not released yet | Prices per model: quotas and usage in dollars, cached prompts charged less, dry-run |
 | [0.9.2](v0.9.2.md) | not released yet | Cost expressions checked by the gateway's rules, two new self-test steps, `kv_transfer_params` removed from requests |
 | [0.9.1](v0.9.1.md) | not released yet | Fixes for best-effort mode from a review, code split by responsibility, more tests |
 | [0.9.0](v0.9.0.md) | not released yet | A model can serve a tenant past its budget as best-effort; a new quota reaches the proxy without another change |

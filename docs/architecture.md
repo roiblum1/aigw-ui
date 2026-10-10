@@ -408,6 +408,26 @@ adds the same action and summary it writes to the task log. The task log
 answers "did it reach the clusters"; the audit log answers "who asked, and
 what did the server say". Bodies are not stored.
 
+## Prices
+
+`model_prices` holds every set of prices of a model, in credits for a
+million tokens, with the day it starts and when the server began using it.
+The newest applied row is the one in use.
+
+- `syncer.RunPrices` wakes at every 00:00 UTC and once at start. It applies
+  the rows whose day has come in one transaction and queues one sync. For a
+  model's first prices the same transaction converts `default_limit` and
+  every `token_limit` and sets `price_dry_run`.
+- `render.Prices.Expression` returns the cost expression. `store` puts it
+  in `render.Model.CostExpression` in place of a typed one, so the renderer
+  itself knows nothing about prices.
+- In dry-run every tenant rule is rendered with `shadowMode` and the
+  default bucket with the largest limit. The usage report marks those
+  quotas, and the overage loop skips them as it skips any shadow quota.
+- `internal/costcel` evaluates the rendered expression in the tests, with
+  the gateway's CEL environment, so a change to it that the gateway would
+  refuse fails a test.
+
 ## Self-test
 
 The self-test runs in the background in the server. It creates a tenant

@@ -163,6 +163,29 @@ tokens a request is charged, for example output tokens counted four times.
 therefore refused as soon as the model has any quota, in place of drawing
 from an unlimited pool.
 
+### Prices
+
+**What it does.** A model with prices is counted in money. A request is
+charged by its prompt tokens, the part of them that came from the prefix
+cache, and its output tokens, each at its own price.
+
+**How.** The server writes a cost expression from the three prices into the
+model's `QuotaPolicy`. The gateway evaluates it for every answered request
+and adds the result to the tenant's counter. Limits and counters are in
+credits of $0.00001.
+
+**Why.**
+
+- **The gateway computes the cost**, so no request passes through the hub
+  and nothing has to be reconciled later.
+- **Prices start at 00:00 UTC** because a counter does not know what its
+  amounts were charged at. At that moment every window starts from zero.
+- **A model starts in dry-run** because its limits were converted from
+  tokens by a rule of thumb. Nobody should be refused by a figure no one
+  has looked at.
+
+See [charging by cost](pricing.md).
+
 ### Entry route
 
 **What it does.** With it on, any site's gateway takes a request for the

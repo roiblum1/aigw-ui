@@ -244,6 +244,11 @@
     grid-template-columns: 1fr 1fr;
     gap: 0 14px;
   }
+  .grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0 14px;
+  }
   .check {
     display: flex;
     gap: 9px;
@@ -612,6 +617,7 @@
 
   @media (max-width: 640px) {
     .grid-2,
+    .grid-3,
     .endpoint-fields {
       grid-template-columns: 1fr;
     }

@@ -1,7 +1,18 @@
 import { useState } from "react";
 import { Activity } from "lucide-react";
 import { api, type UsageQuota } from "../api";
-import { Empty, ErrorBanner, PageHeader, formatTime, useAction, useLoad, usePolling, windowLabel } from "../components";
+import {
+  Empty,
+  ErrorBanner,
+  PageHeader,
+  formatAmount,
+  formatNumber,
+  formatTime,
+  useAction,
+  useLoad,
+  usePolling,
+  windowLabel,
+} from "../components";
 
 export const REFRESH_MS = 5000;
 
@@ -36,8 +47,13 @@ export function UsageMeter({ q }: { q: UsageQuota }) {
         <span style={{ width: `${Math.min(percent, 100)}%` }} />
       </div>
       <div className="detail">
-        {q.used.toLocaleString("en-US")} of {q.limit.toLocaleString("en-US")} tokens ({percent}%)
+        {formatNumber(q.used, q.unit)} of {formatAmount(q.limit, q.unit)} ({percent}%)
       </div>
+      {q.dry_run && (
+        <span className="tag warn" title="The model's prices are being tried out. The tenant is counted and not refused.">
+          dry-run
+        </span>
+      )}
       {q.best_effort_until && (
         <span
           className="tag warn"
@@ -47,7 +63,9 @@ export function UsageMeter({ q }: { q: UsageQuota }) {
         </span>
       )}
       {q.overage_used > 0 && (
-        <div className="detail">{q.overage_used.toLocaleString("en-US")} tokens used as best-effort</div>
+        <div className="detail">
+          {formatAmount(q.overage_used, q.unit)} used as best-effort{q.unit === "credits" && ", not charged"}
+        </div>
       )}
     </div>
   );
@@ -57,8 +75,8 @@ export function UsageMeter({ q }: { q: UsageQuota }) {
 export function confirmReset(q: UsageQuota): boolean {
   return confirm(
     `Reset the usage of ${q.tenant_slug} on ${q.model_name}?\n\n` +
-      `${q.used.toLocaleString("en-US")} tokens used in this window go back to 0 on every cluster. ` +
-      `The limit stays at ${q.limit.toLocaleString("en-US")}.`,
+      `${formatAmount(q.used, q.unit)} used in this window go back to 0 on every cluster. ` +
+      `The limit stays at ${formatAmount(q.limit, q.unit)}.`,
   );
 }
 
@@ -68,7 +86,7 @@ function Counters({ q }: { q: UsageQuota }) {
     <div className="detail">
       {q.counters.map((c) => (
         <div key={c.backend} title={`Clusters: ${c.clusters.join(", ")}`}>
-          <span className="mono">{c.backend}</span>: {c.used.toLocaleString("en-US")}
+          <span className="mono">{c.backend}</span>: {formatNumber(c.used, q.unit)}
           {c.overage && " (best-effort)"}
         </div>
       ))}
@@ -103,7 +121,7 @@ export default function Usage() {
     <>
       <PageHeader
         title="Usage"
-        subtitle="Tokens each tenant has used in the current window, read from the rate limit counters in Redis."
+        subtitle="What each tenant has used in the current window, read from the rate limit counters in Redis. In dollars for a model with prices, in tokens for any other."
       >
         {data?.enabled && (
           <>
