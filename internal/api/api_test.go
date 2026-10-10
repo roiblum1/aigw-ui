@@ -90,14 +90,21 @@ func TestModelUpdateKeepsOmittedFields(t *testing.T) {
 
 func TestValidCostExpression(t *testing.T) {
 	for _, ok := range []string{
-		"", "total_tokens", "input_tokens + cached_input_tokens / 10u + output_tokens * 6u",
+		"", "total_tokens", "input_tokens + output_tokens * 4u",
+		"(cached_input_tokens <= input_tokens ? 10u * (input_tokens - cached_input_tokens) + cached_input_tokens : 10u * input_tokens) + 40u * output_tokens",
 		"uint(double(cached_input_tokens) * 0.1) + (output_tokens*4u)",
 	} {
 		if err := validCostExpression(ok); err != nil {
 			t.Errorf("%q: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"tokens", "input_tokens; drop", "(input_tokens", "input_tokens)", `model == "x"`, "Input_tokens"} {
+	for _, bad := range []string{
+		"tokens", "input_tokens; drop", "(input_tokens", "input_tokens)", "Input_tokens",
+		// What the gateway refuses: a number without u, and a result that is
+		// not a whole number.
+		"input_tokens * 10", "input_tokens * 0.5", "double(input_tokens) * 0.5",
+		strings.Repeat("input_tokens + ", 80) + "1u",
+	} {
 		if err := validCostExpression(bad); err == nil {
 			t.Errorf("%q should be rejected", bad)
 		}

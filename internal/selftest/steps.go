@@ -23,6 +23,8 @@ const (
 	stepLimit   = "limit"
 	stepOverage = "overage"
 	stepReset   = "reset"
+	stepSpoof   = "client-id"
+	stepCached  = "cached-tokens"
 	stepSticky  = "sticky"
 	stepFleet   = "fleet-revision"
 	stepCleanup = "cleanup"
@@ -38,6 +40,8 @@ func plan() []Step {
 		{ID: stepLimit, Title: "A request over the quota is refused", Status: Pending},
 		{ID: stepOverage, Title: "A tenant past its budget is served as best-effort", Status: Pending},
 		{ID: stepReset, Title: "A usage reset lets the tenant through again", Status: Pending},
+		{ID: stepSpoof, Title: "A client cannot choose its tenant", Status: Pending},
+		{ID: stepCached, Title: "The model reports cached prompt tokens", Status: Pending},
 		{ID: stepSticky, Title: "A conversation stays on one site", Status: Pending},
 		{ID: stepFleet, Title: "The cluster has the fleet's current entry routes", Status: Pending},
 		{ID: stepCleanup, Title: "The temporary tenant is removed", Status: Pending},
@@ -75,8 +79,11 @@ type test struct {
 	key    string        // its API key; empty when the cluster does not enforce keys
 	// counted and refused remember what earlier steps found out.
 	counted, refused bool
-	// firstTokens is what the first answered request used.
-	firstTokens int64
+	// first is the first answered request, the one the counter step looks for.
+	first gateway.ChatResult
+	// answered counts the answered requests, and last is the latest of them.
+	answered int
+	last     gateway.ChatResult
 }
 
 func (t *test) set(id, status, detail string) { t.r.set(t.run, id, status, detail) }
@@ -99,6 +106,8 @@ func (t *test) steps() {
 		{stepLimit, t.limit, false},
 		{stepOverage, t.overage, false},
 		{stepReset, t.reset, false},
+		{stepSpoof, t.clientID, false},
+		{stepCached, t.cachedTokens, false},
 		{stepSticky, t.sticky, false},
 		{stepFleet, t.fleetRevision, false},
 	} {
@@ -122,12 +131,22 @@ func (t *test) wait() bool {
 }
 
 func (t *test) chat(key string) (gateway.ChatResult, error) {
-	return gateway.Chat(t.ctx, t.cluster.GatewayURL, key, t.model.Name)
+	return t.noted(gateway.Chat(t.ctx, t.cluster.GatewayURL, key, t.model.Name))
 }
 
 // chatWith sends a request as the temporary tenant with extra headers.
 func (t *test) chatWith(headers map[string]string) (gateway.ChatResult, error) {
-	return gateway.ChatWith(t.ctx, t.cluster.GatewayURL, t.key, t.model.Name, headers)
+	return t.noted(gateway.ChatWith(t.ctx, t.cluster.GatewayURL, t.key, t.model.Name, headers))
+}
+
+// noted remembers an answered request. Every request of a run has the same
+// prompt, so any answer after the first can be a hit in the prefix cache.
+func (t *test) noted(res gateway.ChatResult, err error) (gateway.ChatResult, error) {
+	if err == nil && res.Status == http.StatusOK {
+		t.answered++
+		t.last = res
+	}
+	return res, err
 }
 
 func (t *test) gateway() (string, string) {
@@ -229,7 +248,7 @@ func (t *test) firstRequest() (string, string) {
 		case err != nil:
 			last, lastStatus = err.Error(), 0
 		case res.Status == http.StatusOK:
-			t.firstTokens = res.Tokens
+			t.first = res
 			detail := fmt.Sprintf("Answered %d seconds after the sync, %d tokens used.", int(time.Since(start).Seconds()), res.Tokens)
 			if t.key == "" {
 				detail += " The cluster does not enforce API keys, so the request was sent without one."

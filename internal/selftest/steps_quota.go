@@ -36,10 +36,7 @@ func (t *test) counter() (string, string) {
 					where = append(where, c.Backend)
 				}
 			}
-			if twice, detail := chargedTwice(q.Used, t.firstTokens, t.model.CostExpression); twice {
-				return Failed, detail
-			}
-			return Passed, fmt.Sprintf("%d tokens counted for the tenant on %s, for one request that used %d. The counter names the Usage page computes are right.", q.Used, strings.Join(where, ", "), t.firstTokens)
+			return charged(q.Used, t.first, t.model.CostExpression, strings.Join(where, ", "))
 		}
 		// The key can reach the gateway before the tenant's rule reaches
 		// the rate limit service. The first request is then answered and
@@ -49,7 +46,7 @@ func (t *test) counter() (string, string) {
 		if !again && time.Since(start) > counterWait/2 {
 			again = true
 			if res, err := t.chat(t.key); err == nil && res.Status == http.StatusOK {
-				t.firstTokens = res.Tokens
+				t.first = res
 			}
 		}
 		if !t.wait() {

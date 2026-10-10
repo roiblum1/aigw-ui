@@ -59,8 +59,9 @@ adding a cluster never breaks existing clients.
 
 **Self-test.** Applying an object only proves the cluster stored it. The
 self-test proves the gateway acts on it. It adds a temporary tenant with a key
-and a quota of 1 token per hour on one model, sends a few one-token requests
-through the gateway, and removes the tenant again. It takes about a minute.
+and a quota of 1 token per hour on one model, sends a few requests with a
+one-token answer through the gateway, and removes the tenant again. It takes
+about a minute. Every request has the same prompt of about 300 tokens.
 
 | Step | What a pass proves |
 |---|---|
@@ -71,14 +72,22 @@ through the gateway, and removes the tenant again. It takes about a minute.
 | The tokens are counted where the Usage page reads them | The Usage page looks at the right counters |
 | A request over the quota is refused | The quota is enforced |
 | A usage reset lets the tenant through again | **Reset usage** works on this gateway |
+| A client cannot choose its tenant | A request that names another client ID in `x-aigw-client-id` is still counted for the tenant of its key. A failure means a client can spend another tenant's budget |
+| The model reports cached prompt tokens | The answer to a repeated prompt says how much came from the prefix cache. **Unclear** when the model does not report it, or reports none |
 | A conversation stays on one site | Three requests with one session ID are served by the same site, as named in the `x-llm-served-by` response header. It also lists where ten other session IDs landed. Skipped unless the model has an entry route on this cluster. It raises the temporary quota and sends 13 small requests |
 | The cluster has the fleet's current entry routes | The cluster's fleet revision is the fleet's. Skipped outside the fleet |
 
-The counter step also fails when the counter holds twice what the first
-request used or more: with an entry route a request passes two gateways, and
-only the entry may charge it. It cannot tell for a model with a cost
-expression.
 | The temporary tenant is removed | Nothing is left behind |
+
+The counter step compares the counter with what the first request should
+cost: its total tokens, or the model's cost expression over its token
+counts. The gateway counts 1 more than that, for the check before the
+request. The step fails in two cases:
+
+- The counter holds 1 and the request cost more. The request is counted and
+  its cost is not, so a quota would never be used up.
+- The counter holds twice the cost or more. With an entry route a request
+  passes two gateways, and only the entry may charge it.
 
 A step is **Unclear** when it cannot give an answer. The usual case: the
 model's shared pool still has tokens, so a tenant over its quota is not
@@ -124,6 +133,26 @@ for the other way to use it.
 such as `input_tokens + output_tokens * 4u` makes output tokens cost four
 times as much against every quota on the model. Number literals need the `u`
 suffix. Changing it does not reset what tenants have already used.
+
+The hub checks the expression by the gateway's own rules before it saves it,
+because the gateway does not refuse a bad one: it logs it and then charges
+nothing. The result has to be a whole number.
+
+To charge a prompt answered from the model's prefix cache less, subtract the
+cached part first. `input_tokens` includes it:
+
+```
+(cached_input_tokens <= input_tokens
+  ? 10u * (input_tokens - cached_input_tokens) + cached_input_tokens
+  : 10u * input_tokens) + 40u * output_tokens
+```
+
+This counts in tenths of a token: a cached prompt token costs a tenth of an
+uncached one, and an output token four times as much. Quotas on the model
+are then in tenths of a token too. The comparison is there for a cached count
+larger than the prompt, which would otherwise be an error and leave the
+request uncharged. The model has to report cached tokens for this to have
+any effect; the self-test shows whether it does.
 
 Deleting a model removes its quotas from every cluster. A discovered model
 comes back on the next poll, without its quotas.

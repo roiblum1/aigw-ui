@@ -20,21 +20,6 @@ const (
 	stickyLimit = 1_000_000
 )
 
-// chargedTwice reports whether the counter holds more than one request can
-// explain. With the entry route a request passes two gateways, the entry and
-// the serving site, and only the entry may charge it.
-//
-// It cannot tell with a cost expression: the counter then holds a computed
-// amount, not total_tokens.
-func chargedTwice(counted, request int64, costExpression string) (bool, string) {
-	if request <= 0 || costExpression != "" || counted < 2*request {
-		return false, ""
-	}
-	return true, fmt.Sprintf("%d tokens were counted for one request that used %d. The request is charged more than once: "+
-		"the serving site's own route for the model is still attached to the client listener or to the whole Gateway, so its backend keeps a quota. "+
-		"Attach that route to the peer listener alone.", counted, request)
-}
-
 // stickiness judges where the requests of one conversation were served.
 // servedBy holds the site each answered request named, "" when it named none.
 func stickiness(servedBy []string) (string, string) {

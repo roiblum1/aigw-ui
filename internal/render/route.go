@@ -23,16 +23,30 @@ func backend(s State, m Model) *unstructured.Unstructured {
 
 func aiServiceBackend(s State, m Model) *unstructured.Unstructured {
 	u := object(aigwAPI, "AIServiceBackend", s.Namespace, m.Slug)
-	u.Object["spec"] = map[string]any{
+	u.Object["spec"] = serviceBackendSpec(m.Slug)
+	return u
+}
+
+// serviceBackendSpec is the spec of an AIServiceBackend in front of the
+// Backend of that name.
+func serviceBackendSpec(backend string) map[string]any {
+	return map[string]any{
 		"schema": map[string]any{"name": "OpenAI"},
 		"backendRef": map[string]any{
 			"group": "gateway.envoyproxy.io",
 			"kind":  "Backend",
-			"name":  m.Slug,
+			"name":  backend,
 		},
+		"bodyMutation": map[string]any{"remove": clientOnlyFields()},
 	}
-	return u
 }
+
+// clientOnlyFields are the request fields the gateway takes out before the
+// model server sees them. kv_transfer_params is how the parts of a split
+// model server talk to each other. From a client it can crash vLLM up to
+// 0.29, and from 0.31 it sets the cached token count of the answer, which a
+// price for cached prompts would then follow.
+func clientOnlyFields() []any { return []any{"kv_transfer_params"} }
 
 func route(s State, m Model) *unstructured.Unstructured {
 	u := modelRoute(s.Namespace, m.Slug, m)

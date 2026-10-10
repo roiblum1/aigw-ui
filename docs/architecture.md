@@ -419,6 +419,22 @@ request to be refused, resets the counter, and expects an answer again. Then
 it deletes the tenant and syncs once more. Runs are kept in memory; the
 outcome is in the task log.
 
+The counter is compared with what the request should cost. The server
+evaluates the model's cost expression itself, with the CEL environment the
+gateway uses (`internal/costcel`), over the token counts in the answer. The
+gateway's count is that cost plus 1: the check before a request is a hit of 1
+on the same counter.
+
+Two steps check what a price for cached prompts would rest on. One resets
+the counter and sends a request with the tenant's key and a foreign
+`x-aigw-client-id`; the request must still be counted for the tenant, which
+proves the gateway replaces the header after it has checked the key. The
+other reads `usage.prompt_tokens_details.cached_tokens` from the answer to a
+repeated prompt.
+
+These are the server's own test requests. A client's request never passes
+through the server.
+
 ## Live usage
 
 The server reads token usage from the same Redis the gateways' quota rate

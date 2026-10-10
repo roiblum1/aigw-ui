@@ -1,6 +1,7 @@
 package render
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -302,5 +303,26 @@ func TestAuthPolicyTargetsClientListener(t *testing.T) {
 	one := target(State{Namespace: "ai-gateway", GatewayName: "ai-gateway", ClientListener: "https"})
 	if one["sectionName"] != "https" || one["kind"] != "Gateway" {
 		t.Errorf("listener set: %v", one)
+	}
+}
+
+// Every backend the hub renders takes kv_transfer_params out of a client's
+// request: with it a client sets the cached token count of its own answer.
+func TestServiceBackendsRemoveClientOnlyFields(t *testing.T) {
+	var seen int
+	for _, s := range []State{testState(), fleetState(), bestEffortState("team-a")} {
+		for _, o := range Objects(s) {
+			if o.GetKind() != "AIServiceBackend" {
+				continue
+			}
+			seen++
+			remove, _, _ := unstructured.NestedSlice(o.Object, "spec", "bodyMutation", "remove")
+			if !reflect.DeepEqual(remove, []any{"kv_transfer_params"}) {
+				t.Errorf("%s removes %v from the request body", o.GetName(), remove)
+			}
+		}
+	}
+	if seen < 4 {
+		t.Errorf("only %d backends rendered", seen)
 	}
 }
