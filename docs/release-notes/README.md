@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.12.2](v0.12.2.md) | not released yet | Docs corrected: what best-effort does under load; why a site is not chosen by its cache |
 | [0.12.1](v0.12.1.md) | not released yet | A new quota on a model from a cluster's own chart is counted at once |
 | [0.12.0](v0.12.0.md) | not released yet | Envoy AI Gateway 1.2.0: current API versions, keys in `x-api-key`, a self-test step for long prompts, measured performance |
 | [0.11.0](v0.11.0.md) | not released yet | Usage history with charts on the Overview, a page where a tenant sees its own usage, a limit on best-effort use |

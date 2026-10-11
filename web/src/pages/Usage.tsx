@@ -65,7 +65,7 @@ export function UsageMeter({ q }: { q: UsageQuota }) {
       {q.best_effort_until && !q.best_effort_capped && (
         <span
           className="tag warn"
-          title="The budget is spent. Requests are answered as best-effort: queued behind all others and dropped first when a site is full."
+          title="The budget is spent. Requests are answered as best-effort and counted apart from the budget. Whether they wait behind the others depends on each site's scheduler."
         >
           best-effort until {untilTime(q.best_effort_until)}
         </span>

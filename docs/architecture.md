@@ -233,6 +233,8 @@ The policy holds the routing:
   `ENABLE_FORWARD_USER_INFO_HEADERS` is on. A request is hashed on the ones
   it carries. The
   tenant and the key are not hashed: that would pin a customer to one site.
+  The site is not chosen by what it has cached; see
+  [cache-aware routing between sites](how-it-works.md#cache-aware-routing-between-sites).
 - **Zones:** exactly the endpoints of the `Backend`, in the same order,
   sorted by cluster name. A zone with an endpoint and no weight would get a
   weight of 1 from the gateway, and the hash table is built from the list, so
@@ -397,8 +399,13 @@ Seen on a test gateway (Envoy Gateway 1.9.1, AI Gateway 1.1.0): a tenant at
 seconds after; the serving site received `best-effort` for it and `standard`
 for another tenant, also when the client sent a class of its own; a usage
 reset put it back. Not seen there: a request going to a second site after a
-429, because the test fleet has one site, and a serving site dropping
-best-effort requests first, because it runs no real model.
+429, because the test fleet has one site.
+
+What the serving site does with the class is the scheduler's part. A real
+model (vLLM 0.29, KServe 0.21 with its default scheduler settings) that got
+more requests than it could serve treated `best-effort` and `standard`
+alike: nothing was refused and both waited in one queue. See
+[optimization.md](optimization.md#what-a-site-does-with-the-class).
 
 ## API-key policy and the peer listener
 

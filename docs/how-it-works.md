@@ -272,15 +272,72 @@ instance, which you declare on the `LLMInferenceService` with
   cluster would send the gateways several lists in a row, and every list
   moves conversations.
 
+### Cache-aware routing between sites
+
+A model server keeps the computed state of a prompt's beginning, the prefix
+or KV cache. A request that starts the same way and reaches the same replica
+skips that work, and with [prices](pricing.md) the tenant pays less for it.
+Routing decides how often that happens.
+
+**What is built.** Two levels, each with what it can know:
+
+| Level | Who decides | By what |
+|---|---|---|
+| Between sites | Each entry gateway | A hash of the session header. Every request of one conversation goes to one site |
+| Inside a site | The model's scheduler | The prompt itself. It sends a request to the replica that already holds its beginning |
+
+On a test model with two replicas, a repeated prompt was answered from the
+cache 15 times of 15 through the scheduler and 11 of 15 straight to the
+model's `Service`.
+
+**What is not built.** The entry gateway does not choose a site by what the
+sites have cached. It never looks at the prompt. So:
+
+- A request without a session header goes to a site by weight, a new one
+  each time, and finds its prefix only where it happened to be before.
+- A conversation that changes site starts cold there. That happens when its
+  site is drained, fails, or loses weight.
+- A long system prompt that many conversations share is computed once on
+  every site, and once per replica there, not once for the fleet.
+
+**Why not.**
+
+- *It needs something that reads every prompt at the entry and knows what
+  each site holds.* Inside a site the scheduler does both, for its own
+  replicas. There is no such part for several clusters in KServe 0.21 as we
+  deploy it. Writing one would put our code in the path of every prompt,
+  which this tool never does.
+- *The cache itself stays in its site.* A replica's KV cache, and LMCache's
+  memory and disk behind it, are local. Choosing "the site that has it" only
+  helps when the request can go there, and the hash already sends a
+  conversation back to where its cache is.
+- *What is left to gain is small.* Most cached tokens in a conversation are
+  its own earlier turns, which the session hash covers. The remainder is the
+  shared beginning of first turns, which every busy site has warm anyway.
+
+**If the hit rate between sites turns out low.** Measure first: per site,
+`vllm:prefix_cache_hits` over `vllm:prefix_cache_queries`, and the share of
+requests that carry no session header. Then, cheapest first:
+
+1. Make clients send a stable session header, and add its name to
+   `fleet.sessionHeader`. This fixes the common case.
+2. Keep weight changes rare. Each one moves conversations onto a cold cache.
+3. Only then look at a scheduler that spans clusters, or a cache tier the
+   sites share. Neither has been tried here.
+
 ### Best-effort when a budget is spent
 
 **What it does.** A model can be set to keep answering a tenant whose budget
-is spent. The tenant's requests are then sent as the class `best-effort`: a
-site serves them at once when it has room, queues them behind every other
-request when it has not, and drops them first. A site that has no room
-answers 429 and the request is tried at the next site. Tenants within their
-budget run as `standard`. When the quota's window ends, the tenant is back
-to `standard` by itself.
+is spent. The tenant's requests are then sent as the class `best-effort`
+and are counted apart from its budget. Tenants within their budget run as
+`standard`. When the quota's window ends, the tenant is back to `standard`
+by itself. If a site refuses a request with 429, it is tried at the next
+site.
+
+What a site does with the class is up to the model's scheduler there. With
+the settings KServe 0.21 ships, a model under more load than it could serve
+treated both classes alike. See
+[optimization.md](optimization.md#what-a-site-does-with-the-class).
 
 **How.**
 
