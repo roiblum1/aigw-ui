@@ -35,7 +35,8 @@ There are two modes, chosen per cluster by whether a Gateway URL is set.
 
 A model that the gateway lists but that has no `AIServiceBackend` (for example
 one served from an `InferencePool`) is shown with "no quota possible", and the
-API refuses a quota on it.
+API refuses a quota on it. A fleet model is the exception: its quota attaches to
+the entry backend the hub renders, so its sites may serve it from a pool only.
 
 If either source fails, the poll fails and nothing is changed. Saving the
 names without their backends would remove quota policies already in place.

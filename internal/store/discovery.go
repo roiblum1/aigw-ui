@@ -101,13 +101,15 @@ func (s *Store) SetDiscoveryError(ctx context.Context, clusterID, message string
 	return err
 }
 
-// QuotaCapable reports whether any cluster has something a quota on this model
-// can attach to: a manual endpoint, or a discovered AIServiceBackend.
+// QuotaCapable reports whether a quota on this model has something to attach
+// to: a manual endpoint or a discovered AIServiceBackend on some cluster, or
+// the entry backend this tool renders itself for a fleet model.
 func (s *Store) QuotaCapable(ctx context.Context, modelID string) (bool, error) {
 	var exists, capable bool
 	err := s.db.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM models WHERE id = $1),
-		        EXISTS (SELECT 1 FROM model_endpoints WHERE model_id = $1 AND (source = 'manual' OR jsonb_array_length(backends) > 0))`,
+		        EXISTS (SELECT 1 FROM models WHERE id = $1 AND fleet)
+		        OR EXISTS (SELECT 1 FROM model_endpoints WHERE model_id = $1 AND (source = 'manual' OR jsonb_array_length(backends) > 0))`,
 		modelID).Scan(&exists, &capable)
 	if err != nil {
 		return false, mapErr(err)
