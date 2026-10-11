@@ -71,6 +71,14 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 	// elsewhere holds the namespaces the anyNamespace kinds are in now.
 	elsewhere := map[string]bool{namespace: true}
 
+	// Before any policy is written: the gateway's controller looks at a
+	// route when its policy changes, and the mark has to be there by then.
+	for _, obj := range desired {
+		if err := c.markRoutes(ctx, namespace, obj, &res); err != nil {
+			return res, err
+		}
+	}
+
 	for _, obj := range desired {
 		if obj.GetNamespace() == "" {
 			obj = obj.DeepCopy()
@@ -102,6 +110,75 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 }
 
 func objectKey(kind, namespace, name string) string { return kind + "/" + namespace + "/" + name }
+
+// markRoutes copies the quota revision of a QuotaPolicy to the routes of the
+// cluster's own that send to the policy's backends. A new tenant rule only
+// reaches the proxy when the route is built again, and a changed policy
+// alone does not make that happen. This tool's own routes carry the revision
+// already. On a route somebody else renders, the annotation is the one thing
+// this tool writes.
+func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstructured.Unstructured, res *SyncResult) error {
+	revision := policy.GetAnnotations()[render.QuotaRevisionAnnotation]
+	if policy.GetKind() != "QuotaPolicy" || revision == "" {
+		return nil
+	}
+	if ns := policy.GetNamespace(); ns != "" {
+		namespace = ns
+	}
+	backends := map[string]bool{}
+	targets, _, _ := unstructured.NestedSlice(policy.Object, "spec", "targetRefs")
+	for _, t := range targets {
+		if ref, ok := t.(map[string]any); ok {
+			name, _ := ref["name"].(string)
+			backends[name] = true
+		}
+	}
+	gvr, _ := gvrFor("AIGatewayRoute")
+	routes, err := c.dyn.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if missingKind(err) {
+			return nil
+		}
+		return fmt.Errorf("list AIGatewayRoute in %s: %w", namespace, describe(err))
+	}
+	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{render.QuotaRevisionAnnotation: revision}}})
+	if err != nil {
+		return err
+	}
+	for _, route := range routes.Items {
+		if route.GetLabels()[render.ManagedLabel] == render.ManagedValue ||
+			route.GetAnnotations()[render.QuotaRevisionAnnotation] == revision || !sendsTo(route, backends) {
+			continue
+		}
+		_, err := c.dyn.Resource(gvr).Namespace(namespace).Patch(ctx, route.GetName(), types.MergePatchType, patch,
+			metav1.PatchOptions{FieldManager: fieldManager})
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("mark AIGatewayRoute %s/%s for its new quota rules: %w", namespace, route.GetName(), describe(err))
+		}
+		res.Changes = append(res.Changes, Change{Kind: "AIGatewayRoute", Namespace: namespace, Name: route.GetName(), Action: "updated"})
+	}
+	return nil
+}
+
+// sendsTo reports whether a rule of the route names one of the backends.
+func sendsTo(route unstructured.Unstructured, backends map[string]bool) bool {
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	for _, r := range rules {
+		rule, _ := r.(map[string]any)
+		refs, _, _ := unstructured.NestedSlice(rule, "backendRefs")
+		for _, b := range refs {
+			if ref, ok := b.(map[string]any); ok {
+				if name, _ := ref["name"].(string); backends[name] {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
 
 // apply writes one object with server-side apply and reports what that did:
 // "created", "updated", or "" when the object was already as desired.

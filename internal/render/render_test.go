@@ -335,3 +335,32 @@ func TestQuotaRevisionAnnotationIsReadByEnvoyGateway(t *testing.T) {
 		t.Errorf("%s: Envoy Gateway ignores this annotation", QuotaRevisionAnnotation)
 	}
 }
+
+// The policy of a model the cluster serves through its own routes carries
+// the quota revision, which the sync copies to those routes. A model this
+// tool routes itself has the revision on its route already.
+func TestQuotaPolicyOfADiscoveredModelCarriesTheRevision(t *testing.T) {
+	quota := []TenantQuota{{TenantSlug: "team-a", Slot: 0, Limit: 100, Window: "1d"}}
+	revisionOf := func(m Model) string {
+		for _, o := range Objects(State{Namespace: "gw", GatewayName: "g", Models: []Model{m}}) {
+			if o.GetKind() == "QuotaPolicy" {
+				return o.GetAnnotations()[QuotaRevisionAnnotation]
+			}
+		}
+		t.Fatalf("no QuotaPolicy for %s", m.Name)
+		return ""
+	}
+	found := Model{Name: "glm", Slug: "glm", DefaultLimit: 1, DefaultWindow: "1d", Quotas: quota, Existing: []Target{{Backend: "glm-a", Model: "glm"}}}
+	first := revisionOf(found)
+	if first == "" {
+		t.Fatal("the policy of a discovered model has no revision")
+	}
+	found.Quotas = append(found.Quotas, TenantQuota{TenantSlug: "team-b", Slot: 1, Limit: 100, Window: "1d"})
+	if revisionOf(found) == first {
+		t.Error("a new tenant rule did not change the revision")
+	}
+	own := Model{Name: "own", Slug: "own", Host: "h", Port: 80, UpstreamModel: "m", DefaultLimit: 1, DefaultWindow: "1d", Quotas: quota}
+	if got := revisionOf(own); got != "" {
+		t.Errorf("the policy of a model this tool routes has revision %q, want none", got)
+	}
+}
