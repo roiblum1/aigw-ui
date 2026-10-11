@@ -39,6 +39,8 @@ func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
 	byID := make(map[string]*Model, len(models))
 	for i := range models {
 		prices.priced(&models[i])
+		// A fleet model's quota attaches to the entry backend rendered for it.
+		models[i].QuotaCapable = models[i].Fleet
 		byID[models[i].ID] = &models[i]
 	}
 	rows, err = s.db.Query(ctx,

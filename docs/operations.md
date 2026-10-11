@@ -106,7 +106,7 @@ sign-in or API call.
 | No models appear | No `AIGatewayRoute` in the gateway namespace matches the model header exactly | Check `oc get aigatewayroutes -n <namespace>`; see [architecture.md](architecture.md) |
 | Discovery says `GET /v1/models returned 401 Unauthorized` | The gateway requires a key for its model list | Edit the cluster and set the API key for `/v1/models` |
 | Discovery says `read routes for the backends: ... forbidden` | The kubeconfig cannot list routes in all namespaces | Use a kubeconfig that can, or clear the Gateway URL |
-| A model shows "no quota possible" | It is served only from something other than an `AIServiceBackend` | Expected; a `QuotaPolicy` cannot target it |
+| A model shows "no quota possible" | It is served only from something other than an `AIServiceBackend` | Expected; a `QuotaPolicy` cannot target it. Turn the model into a fleet model to put quotas on it at the entry |
 | A cluster stays Pending | `config.autoSync` is off, or the last sync is still running | Press **Sync** |
 | A cluster shows Error after an outage | The last sync failed | Nothing: it is retried every `config.syncInterval` (5 minutes) |
 | Server logs `waiting for postgres` at start | The database is still starting | Normal on a fresh install; it waits up to two minutes |

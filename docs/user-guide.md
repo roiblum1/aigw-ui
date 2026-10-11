@@ -117,7 +117,7 @@ A discovered endpoint can also carry a warning:
 | Tag | Meaning |
 |---|---|
 | no quota here | That cluster does not serve the model from an `AIServiceBackend`, so a quota cannot be attached there |
-| no quota possible | No cluster can carry a quota for this model. Setting one is refused |
+| no quota possible | No cluster can carry a quota for this model and it is not a fleet model. Setting one is refused |
 | quota unverified | The route has no `modelNameOverride` for the backend. The gateway only documents quota matching against that field, so test that the quota takes effect |
 
 **Add a model by hand** when a model runs in a cluster but has no route yet.

@@ -436,7 +436,8 @@ unit. The gateway cannot count further in one window.
 
 `window` is `1m`, `1h` or `1d`. `PUT .../quotas` creates the quota or replaces
 the existing one for that model. It returns 400 when the model has nothing a
-quota can attach to (`"quota_capable": false` in `GET /models`).
+quota can attach to (`"quota_capable": false` in `GET /models`). A fleet model
+always has: the entry backend.
 
 `shadow` is optional. With `true` the quota is a dry run: usage is counted
 but the quota never rejects a request. Left out, a new quota is enforced and

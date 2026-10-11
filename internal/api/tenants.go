@@ -162,7 +162,7 @@ func (s *Server) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !capable {
-		fail(w, invalid("this model has no AIServiceBackend on any cluster, so a quota cannot be applied to it"))
+		fail(w, invalid("this model has no AIServiceBackend on any cluster and is not a fleet model, so a quota cannot be applied to it"))
 		return
 	}
 	id := r.PathValue("id")

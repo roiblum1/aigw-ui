@@ -98,7 +98,8 @@ type Model struct {
 	CostExpression string     `json:"cost_expression"`
 	CreatedAt      time.Time  `json:"created_at"`
 	Endpoints      []Endpoint `json:"endpoints"`
-	// QuotaCapable is false when no cluster has anything a quota can attach to.
+	// QuotaCapable is false when no cluster has anything a quota can attach to
+	// and the model is not a fleet model.
 	QuotaCapable bool `json:"quota_capable"`
 	// SiteWeights is the zone weight of every site listed for the model,
 	// the same on every cluster. SiteWeightsNote says why they were not

@@ -164,6 +164,29 @@ func TestTenantKeysAndQuotas(t *testing.T) {
 	}
 }
 
+// A model whose sites serve it only from an InferencePool has no backend of
+// its own for a quota. As a fleet model it can still carry one: the quota
+// attaches to the entry backend.
+func TestFleetModelCanCarryAQuota(t *testing.T) {
+	s, ctx := open(t)
+	for name, fleet := range map[string]bool{"pool-only": false, "pool-only-fleet": true} {
+		id := model(t, s, ctx, name, fleet)
+		capable, err := s.QuotaCapable(ctx, id)
+		if err != nil || capable != fleet {
+			t.Errorf("%s: QuotaCapable = %v, %v, want %v", name, capable, err, fleet)
+		}
+	}
+	models, err := s.ListModels(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range models {
+		if m.QuotaCapable != m.Fleet {
+			t.Errorf("%s: listed with quota_capable=%v, fleet=%v", m.Name, m.QuotaCapable, m.Fleet)
+		}
+	}
+}
+
 func TestSpentModeNeedsTheEntryRoute(t *testing.T) {
 	s, ctx := open(t)
 	plain := model(t, s, ctx, "plain", false)
