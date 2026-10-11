@@ -176,11 +176,16 @@ same lab, with vLLM limited to two requests at a time:
 | Flow control with the default saturation detector | Requests were answered, but in the order they arrived: 6 best-effort requests sent at 3 s were all answered before 6 standard requests sent at 5 s. vLLM's own queue held 12 requests, so the scheduler was not holding them back |
 | Flow control with `concurrency-detector`, `maxConcurrency: 2` | Broken: one request to an idle model waited 60 s and got 429 (`rejected-ttl-expired`). The scheduler released it, the proxy had no address for it, and the count of running requests never went down |
 
-So on KServe 0.21 with the endpoint picker v0.10.0 we have no settings that
-make best-effort wait behind the others. Do not copy either of the above to
-a model. What is left to try: the detector's thresholds, a newer endpoint
-picker, and the open upstream issue about `concurrency-detector`
-([llm-d-router#2881](https://github.com/llm-d/llm-d-router/issues/2881)).
+The second row looked like
+[llm-d-router#2881](https://github.com/llm-d/llm-d-router/issues/2881),
+whose fix is in endpoint picker v0.11.0. With the scheduler's image set to
+v0.11.0 the result was the same: the proxy asked the scheduler three times
+for one request within 3 ms, and the request then waited out its 60 s.
+
+So on KServe 0.21, with the endpoint picker v0.10.0 or v0.11.0, we have no
+settings that make best-effort wait behind the others. Do not copy either of the above to
+a model. What is left to try: the default detector's thresholds, and finding out
+what the scheduler answers the proxy when `concurrency-detector` is on.
 
 ## Side by side
 
