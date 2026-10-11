@@ -162,62 +162,25 @@ So the default gives best-effort one thing only: under steady overload, new
 best-effort requests are refused and tried at the next site. It never makes
 them wait behind the others.
 
-**What should make the class count.** The scheduler's flow control. With it
-every request waits in the scheduler, and requests are released in order of
-priority while the model has room. It is switched on in the scheduler's
-settings, which belong to the model's chart and replace KServe's default
-settings as a whole:
+**Flow control: tried, and not working yet.** The scheduler has a feature
+for this, flow control: requests wait in the scheduler and are released in
+order of priority while the model has room. It is switched on with
+`featureGates: [flowControl]` in the scheduler's settings
+(`spec.router.scheduler.config.inline` of the `LLMInferenceService`), which
+replace KServe's default settings as a whole. KServe passes them on, and the
+scheduler started with flow control and a priority band for -1. Run on the
+same lab, with vLLM limited to two requests at a time:
 
-```yaml
-# LLMInferenceService
-spec:
-  router:
-    scheduler:
-      config:
-        inline:
-          apiVersion: llm-d.ai/v1alpha1
-          kind: EndpointPickerConfig
-          featureGates: [flowControl]
-          plugins:
-          # KServe 0.21's default plugins, unchanged
-          - type: single-profile-handler
-          - type: queue-scorer
-          - type: kv-cache-utilization-scorer
-          - type: prefix-cache-scorer
-          - type: no-hit-lru-scorer
-          - type: max-score-picker
-          # counts the requests the scheduler itself has sent to a replica,
-          # so a burst cannot get past it
-          - type: concurrency-detector
-            parameters:
-              maxConcurrency: 64        # per replica: what one replica runs at once
-          schedulingProfiles:
-          - name: default
-            plugins:
-            - {pluginRef: queue-scorer, weight: 2}
-            - {pluginRef: kv-cache-utilization-scorer, weight: 2}
-            - {pluginRef: prefix-cache-scorer, weight: 3}
-            - {pluginRef: no-hit-lru-scorer, weight: 2}
-            - pluginRef: max-score-picker
-          flowControl:
-            saturationDetector:
-              pluginRef: concurrency-detector
-            defaultRequestTTL: 60s      # a request that waited this long gets 429
-```
+| Settings | Result |
+|---|---|
+| Flow control with the default saturation detector | Requests were answered, but in the order they arrived: 6 best-effort requests sent at 3 s were all answered before 6 standard requests sent at 5 s. vLLM's own queue held 12 requests, so the scheduler was not holding them back |
+| Flow control with `concurrency-detector`, `maxConcurrency: 2` | Broken: one request to an idle model waited 60 s and got 429 (`rejected-ttl-expired`). The scheduler released it, the proxy had no address for it, and the count of running requests never went down |
 
-- Set `maxConcurrency` to what one replica really runs at once, vLLM's
-  `--max-num-seqs`. Too high and the queue stays in vLLM, where there is no
-  priority.
-- A request that waits longer than `defaultRequestTTL` gets 429 and is
-  tried at the next site. Keep it below the route's timeout.
-- Do not put `concurrency-detector` in the scheduling profile.
-
-**This has not been run.** The field names are from the source of that
-version. Before relying on it, repeat the test above on one model: limit
-vLLM with `--max-num-seqs`, send the standard requests, then the best-effort
-ones a second later, and compare when each class is answered. It works if
-no standard request gets 429 and the best-effort ones are answered last or
-get 429.
+So on KServe 0.21 with the endpoint picker v0.10.0 we have no settings that
+make best-effort wait behind the others. Do not copy either of the above to
+a model. What is left to try: the detector's thresholds, a newer endpoint
+picker, and the open upstream issue about `concurrency-detector`
+([llm-d-router#2881](https://github.com/llm-d/llm-d-router/issues/2881)).
 
 ## Side by side
 

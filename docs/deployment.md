@@ -170,7 +170,7 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
    proves that the second route takes the tenant's requests.
 4. The hub marks the requests. For a site to serve them after the others,
    the model's scheduler must act on priorities, and with KServe 0.21's
-   default settings it does not. That is set in the model's chart; see
+   default settings it does not. We have found no settings that do; see
    [what a site does with the class](optimization.md#what-a-site-does-with-the-class).
 
 ## Before tenants send long prompts
