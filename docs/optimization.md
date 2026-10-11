@@ -66,7 +66,8 @@ counted against its budget. Tenants within their budget run as `standard`.
 What a site does with the class is decided by the model's scheduler on that
 site, not by the hub. With the scheduler settings KServe 0.21 ships, the
 class changed nothing in our test: best-effort requests waited in the same
-queue as the others and none was dropped. Read
+queue as the others and none was dropped. With the scheduler's flow control
+switched on, they waited behind all others. Read
 [what a site does with the class](#what-a-site-does-with-the-class) before
 you rely on best-effort to protect the tenants within their budget.
 
@@ -162,30 +163,76 @@ So the default gives best-effort one thing only: under steady overload, new
 best-effort requests are refused and tried at the next site. It never makes
 them wait behind the others.
 
-**Flow control: tried, and not working yet.** The scheduler has a feature
-for this, flow control: requests wait in the scheduler and are released in
-order of priority while the model has room. It is switched on with
-`featureGates: [flowControl]` in the scheduler's settings
-(`spec.router.scheduler.config.inline` of the `LLMInferenceService`), which
-replace KServe's default settings as a whole. KServe passes them on, and the
-scheduler started with flow control and a priority band for -1. Run on the
-same lab, with vLLM limited to two requests at a time:
+**What makes the class count: flow control.** With it, requests wait in the
+scheduler when the replicas are busy and are released in order of priority.
+It needs two things, and both are outside the hub.
 
-| Settings | Result |
-|---|---|
-| Flow control with the default saturation detector | Requests were answered, but in the order they arrived: 6 best-effort requests sent at 3 s were all answered before 6 standard requests sent at 5 s. vLLM's own queue held 12 requests, so the scheduler was not holding them back |
-| Flow control with `concurrency-detector`, `maxConcurrency: 2` | Broken: one request to an idle model waited 60 s and got 429 (`rejected-ttl-expired`). The scheduler released it, the proxy had no address for it, and the count of running requests never went down |
+1. *A gateway with
+   [agent-router#2595](https://github.com/theagentrouter/agent-router/pull/2595).*
+   Envoy AI Gateway 1.2.0 puts a model's scheduler filter into the proxy
+   once per route match that uses the model's pool, not once: 16 times for
+   one KServe model on our lab. The proxy then asks the scheduler up to 16
+   times for one request. With flow control the request takes every slot
+   itself, waits out its time and gets 429. The fix is merged upstream and
+   in no release yet; the charts repository carries it as a patch.
+2. *Flow control in the scheduler's settings*, in the model's
+   `LLMInferenceService`. They replace KServe's default settings as a whole:
 
-The second row looked like
-[llm-d-router#2881](https://github.com/llm-d/llm-d-router/issues/2881),
-whose fix is in endpoint picker v0.11.0. With the scheduler's image set to
-v0.11.0 the result was the same: the proxy asked the scheduler three times
-for one request within 3 ms, and the request then waited out its 60 s.
+```yaml
+spec:
+  router:
+    scheduler:
+      config:
+        inline:
+          apiVersion: llm-d.ai/v1alpha1
+          kind: EndpointPickerConfig
+          featureGates: [flowControl]
+          plugins:
+          - type: single-profile-handler
+          - type: queue-scorer
+          - type: kv-cache-utilization-scorer
+          - type: prefix-cache-scorer
+          - type: no-hit-lru-scorer
+          - type: max-score-picker
+          - type: concurrency-detector
+            parameters:
+              maxConcurrency: 64        # what one replica runs at once
+          schedulingProfiles:
+          - name: default
+            plugins:
+            - {pluginRef: queue-scorer, weight: 2}
+            - {pluginRef: kv-cache-utilization-scorer, weight: 2}
+            - {pluginRef: prefix-cache-scorer, weight: 3}
+            - {pluginRef: no-hit-lru-scorer, weight: 2}
+            - pluginRef: max-score-picker
+          flowControl:
+            saturationDetector:
+              pluginRef: concurrency-detector
+            defaultRequestTTL: 60s      # a request that waited this long gets 429
+```
 
-So on KServe 0.21, with the endpoint picker v0.10.0 or v0.11.0, we have no
-settings that make best-effort wait behind the others. Do not copy either of the above to
-a model. What is left to try: the default detector's thresholds, and finding out
-what the scheduler answers the proxy when `concurrency-detector` is on.
+- Set `maxConcurrency` to what one replica runs at once, vLLM's
+  `--max-num-seqs`. Above it the queue is in vLLM, which knows no priority.
+- Keep `defaultRequestTTL` below the route's timeout. A best-effort request
+  that waited that long gets 429 and is tried at the next site.
+- With the scheduler's default saturation detector in place of
+  `concurrency-detector`, requests were still answered in order of arrival.
+- Removing the settings from the `LLMInferenceService` did not put KServe's
+  defaults back on our lab. The scheduler kept the last settings.
+
+**Run on the lab** with both in place (KServe 0.21, endpoint picker v0.10.0,
+`maxConcurrency: 2`): 8 standard requests, then 6 best-effort after 3 s,
+then 6 more standard after 5 s.
+
+| | Without the gateway fix | With it |
+|---|---|---|
+| Scheduler filters for the model in the proxy | 16 | 1 |
+| One request to an idle model | 429 after 60 s | answered |
+| The 14 standard requests | | all answered, before any best-effort one |
+| The 6 best-effort requests | | answered last, or 429 after 60 s: all six in one run, three in the other |
+
+Not run: best-effort through the hub's own best-effort route with these
+settings, and two sites.
 
 ## Side by side
 
