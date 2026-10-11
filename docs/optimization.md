@@ -144,11 +144,29 @@ on equal terms. That is the shared pool's behaviour without the pool's upper
 limit. Set a [best-effort limit](pricing.md#a-limit-on-best-effort-use) on
 the model if that matters.
 
-**What should make the class count.** KServe's default settings hold only
-scorers, which choose a replica. They do not hold requests back. The
-endpoint picker has a feature for that, flow control: with it, requests wait
-in the scheduler when the model is saturated, ordered by priority. It is
-switched on in the scheduler's settings, which belong to the model's chart:
+**Why, from the scheduler's source** (llm-d router v0.10.0; read, not run):
+
+- With the default settings the scheduler holds no request back. It only
+  refuses a request with a priority below 0, with 429, when the model
+  counts as saturated at the moment the request arrives.
+- "Saturated" is read from vLLM's metrics: more than 5 requests waiting or
+  the KV cache above 80%. Requests that arrive together are all let in
+  before the metric has moved, which is what our test did.
+- A request let in is never reordered. vLLM answers its queue in the order
+  of arrival, whatever the class.
+- A class the scheduler does not know runs with priority 0, and nothing
+  reports it. The `InferenceObjective` must be in the pool's namespace and
+  name the pool. The hub creates it that way.
+
+So the default gives best-effort one thing only: under steady overload, new
+best-effort requests are refused and tried at the next site. It never makes
+them wait behind the others.
+
+**What should make the class count.** The scheduler's flow control. With it
+every request waits in the scheduler, and requests are released in order of
+priority while the model has room. It is switched on in the scheduler's
+settings, which belong to the model's chart and replace KServe's default
+settings as a whole:
 
 ```yaml
 # LLMInferenceService
@@ -160,12 +178,46 @@ spec:
           apiVersion: llm-d.ai/v1alpha1
           kind: EndpointPickerConfig
           featureGates: [flowControl]
-          # plus the plugins and scheduling profile the model uses today
+          plugins:
+          # KServe 0.21's default plugins, unchanged
+          - type: single-profile-handler
+          - type: queue-scorer
+          - type: kv-cache-utilization-scorer
+          - type: prefix-cache-scorer
+          - type: no-hit-lru-scorer
+          - type: max-score-picker
+          # counts the requests the scheduler itself has sent to a replica,
+          # so a burst cannot get past it
+          - type: concurrency-detector
+            parameters:
+              maxConcurrency: 64        # per replica: what one replica runs at once
+          schedulingProfiles:
+          - name: default
+            plugins:
+            - {pluginRef: queue-scorer, weight: 2}
+            - {pluginRef: kv-cache-utilization-scorer, weight: 2}
+            - {pluginRef: prefix-cache-scorer, weight: 3}
+            - {pluginRef: no-hit-lru-scorer, weight: 2}
+            - pluginRef: max-score-picker
+          flowControl:
+            saturationDetector:
+              pluginRef: concurrency-detector
+            defaultRequestTTL: 60s      # a request that waited this long gets 429
 ```
 
-We have not run this. Before relying on it, repeat the test above on one
-model: limit vLLM with `--max-num-seqs`, send both classes together, and
-compare how long each waits.
+- Set `maxConcurrency` to what one replica really runs at once, vLLM's
+  `--max-num-seqs`. Too high and the queue stays in vLLM, where there is no
+  priority.
+- A request that waits longer than `defaultRequestTTL` gets 429 and is
+  tried at the next site. Keep it below the route's timeout.
+- Do not put `concurrency-detector` in the scheduling profile.
+
+**This has not been run.** The field names are from the source of that
+version. Before relying on it, repeat the test above on one model: limit
+vLLM with `--max-num-seqs`, send the standard requests, then the best-effort
+ones a second later, and compare when each class is answered. It works if
+no standard request gets 429 and the best-effort ones are answered last or
+get 429.
 
 ## Side by side
 
