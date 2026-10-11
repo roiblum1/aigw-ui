@@ -93,6 +93,9 @@ jobs:
           npx tsc --noEmit
           npm run build
 
+      - name: Test the Claude Code plugin
+        run: node --test clients/claude-code/scripts/
+
       - name: Lint and render the chart
         run: hack/check-chart.sh
 

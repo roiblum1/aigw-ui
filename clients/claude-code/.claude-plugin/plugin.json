@@ -1,0 +1,28 @@
+{
+  "name": "aigw-usage",
+  "displayName": "AI Gateway usage",
+  "version": "0.1.0",
+  "description": "Shows your budget on the AI gateway in the status line and warns before it is spent",
+  "author": { "name": "AI Gateway Control" },
+  "userConfig": {
+    "hub_url": {
+      "type": "string",
+      "title": "Hub address",
+      "description": "The address of the AI Gateway Control hub, e.g. https://aigw.example.com. Empty uses AIGW_HUB_URL."
+    },
+    "api_key": {
+      "type": "string",
+      "title": "API key",
+      "description": "Your key for the gateway. Empty uses AIGW_API_KEY, then the key Claude Code sends (ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY).",
+      "sensitive": true
+    },
+    "warn_at": {
+      "type": "number",
+      "title": "Warn at, percent",
+      "description": "Tell me once when a budget has been used this far.",
+      "default": 90,
+      "min": 1,
+      "max": 100
+    }
+  }
+}
