@@ -65,7 +65,14 @@ func quotaPolicies(s State, m Model) []*unstructured.Unstructured {
 	sort.Strings(namespaces)
 	out := make([]*unstructured.Unstructured, 0, len(namespaces))
 	for _, ns := range namespaces {
-		out = append(out, quotaPolicy(ns, m, byNamespace[ns], false))
+		p := quotaPolicy(ns, m, byNamespace[ns], false)
+		if len(m.Existing) > 0 {
+			// Some of these backends belong to routes of the cluster's own.
+			// The sync copies the revision to those routes before it writes
+			// the policy, so that they are built again with the new rules.
+			p.SetAnnotations(map[string]string{QuotaRevisionAnnotation: quotaRevision(m)})
+		}
+		out = append(out, p)
 	}
 	return out
 }

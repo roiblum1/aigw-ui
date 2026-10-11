@@ -147,11 +147,14 @@ computes are the ones the gateway writes.
 ### Discovered models and models added by hand
 
 **What it does.** A discovered model is one a cluster already exposes; the
-server leaves its route and backends alone. A model added by hand gets a
-`Backend`, an `AIServiceBackend` and an `AIGatewayRoute` from the server.
+server leaves its route and backends alone, except for one annotation on the
+route (see [why a new quota needs the route to change](#why-a-new-quota-needs-the-route-to-change)).
+A model added by hand gets a `Backend`, an `AIServiceBackend` and an
+`AIGatewayRoute` from the server.
 
 **Why.** Routes that a cluster's chart owns have one writer already. Two
-writers for one object undo each other's changes.
+writers for one object undo each other's changes. The annotation is a field
+the chart does not set, so Helm and Argo CD leave it in place.
 
 ### Default quota and cost expression
 
@@ -425,8 +428,17 @@ neither counted nor enforced until something else changed. The controller
 copies a route's annotations to the `HTTPRoute` it generates, so the
 annotation makes that object change, and the route is built with the new
 rule. On a test gateway such a quota was enforced 12 seconds later; without
-the annotation, not at all. A route that a cluster's own chart renders has
-no such annotation: there a new quota takes effect with the next key change.
+the annotation, not at all.
+
+A route that a cluster's own chart renders gets the same annotation from the
+sync, on the routes that send to a backend the model's `QuotaPolicy`
+targets. It is written before the policy: the gateway's controller looks at
+the route when the policy changes, and the annotation has to be there by
+then. Changing the annotation alone does nothing. Until 0.12.1 such a route
+was not marked, and a new tenant's quota on it was neither counted nor
+enforced. Seen on AI Gateway 1.2.0 with a model from a chart: the counter
+of a tenant added in the UI stayed at 0, and the self-test failed at "The
+tokens are counted where the Usage page reads them".
 
 ### Set a quota
 

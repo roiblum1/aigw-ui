@@ -176,3 +176,62 @@ func TestSyncReportsChangesAndGatewayStatus(t *testing.T) {
 		t.Errorf("rejected = %+v, want old with its message", res.Rejected)
 	}
 }
+
+// A route of the cluster's own gets the quota revision of the policy that
+// targets its backend, before the policy is written. This tool's routes,
+// routes to other backends and routes that have the revision are left alone.
+func TestSyncMarksTheClustersOwnRoutes(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPatch:
+			calls = append(calls, r.Header.Get("Content-Type")+" "+r.URL.Path)
+			w.Write([]byte(`{"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"QuotaPolicy","metadata":{"name":"glm","namespace":"models"}}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/namespaces/models/aigatewayroutes"):
+			w.Write([]byte(`{"apiVersion":"v1","kind":"List","metadata":{},"items":[
+				{"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"theirs","namespace":"models"},"spec":{"rules":[{"backendRefs":[{"name":"glm-a"}]}]}},
+				{"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"current","namespace":"models","annotations":{"gateway.envoyproxy.io/aigw-ui-quota-revision":"r2"}},"spec":{"rules":[{"backendRefs":[{"name":"glm-a"}]}]}},
+				{"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"other-model","namespace":"models"},"spec":{"rules":[{"backendRefs":[{"name":"judge"}]}]}},
+				{"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"ours","namespace":"models","labels":{"app.kubernetes.io/managed-by":"aigw-ui"}},"spec":{"rules":[{"backendRefs":[{"name":"glm-a"}]}]}}
+			]}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/quotapolicies/glm"):
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}`))
+		default:
+			w.Write([]byte(`{"apiVersion":"v1","kind":"List","metadata":{},"items":[]}`))
+		}
+	}))
+	defer srv.Close()
+
+	client, err := newFromConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "aigateway.envoyproxy.io/v1alpha1", "kind": "QuotaPolicy",
+		"metadata": map[string]any{"name": "glm", "namespace": "models", "annotations": map[string]any{"gateway.envoyproxy.io/aigw-ui-quota-revision": "r2"}},
+		"spec":     map[string]any{"targetRefs": []any{map[string]any{"kind": "AIServiceBackend", "name": "glm-a"}}},
+	}}
+	res, err := client.Sync(context.Background(), "ns", []*unstructured.Unstructured{policy}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || !strings.HasPrefix(calls[0], "application/merge-patch+json ") || !strings.HasSuffix(calls[0], "/aigatewayroutes/theirs") ||
+		!strings.HasSuffix(calls[1], "/quotapolicies/glm") {
+		t.Errorf("patches %v, want the route theirs marked first, then the policy applied", calls)
+	}
+	if len(res.Changes) == 0 || res.Changes[0].Kind != "AIGatewayRoute" || res.Changes[0].Name != "theirs" {
+		t.Errorf("changes %+v, want the marked route listed", res.Changes)
+	}
+
+	// A policy without the revision is one for this tool's own backends.
+	calls = nil
+	policy.SetAnnotations(nil)
+	if _, err := client.Sync(context.Background(), "ns", []*unstructured.Unstructured{policy}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || !strings.HasSuffix(calls[0], "/quotapolicies/glm") {
+		t.Errorf("patches %v, want only the policy", calls)
+	}
+}
