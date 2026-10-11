@@ -394,6 +394,11 @@ It shows that tenant and no other. Nothing can be changed there. The key
 stays in the browser tab until it is closed. Turn the page off with
 `config.tenantPage: false`; see [security](security.md#the-tenants-own-page).
 
+The same figures can be shown inside the coding agent: a Claude Code plugin
+and an Oh My Pi extension put the budget in the status line and warn before
+it is spent. They are in the repository under
+[`clients/`](https://github.com/roiblum1/aigw-ui/tree/main/clients).
+
 ## Typical first setup
 
 1. Add each LLM cluster and press **Test**.

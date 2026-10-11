@@ -1,0 +1,12 @@
+{
+  "name": "aigw",
+  "owner": { "name": "AI Gateway Control" },
+  "metadata": { "description": "Tools for the users of an AI Gateway Control hub" },
+  "plugins": [
+    {
+      "name": "aigw-usage",
+      "source": "./clients/claude-code",
+      "description": "Shows your budget on the AI gateway in the status line and warns before it is spent"
+    }
+  ]
+}
