@@ -60,10 +60,15 @@ quota of 300,000 and tenant B of 300,000. The pool is 1,000,000.
 ## Best-effort
 
 **What it does.** A tenant whose budget is spent is not refused. Its
-requests are sent on as a lower class, `best-effort`. A site serves them at
-once when it has room. When it has not, it queues them behind every other
-request and drops them first. Tenants within their budget run as `standard`
-and are not held up by them.
+requests are sent on as a lower class, `best-effort`, and are no longer
+counted against its budget. Tenants within their budget run as `standard`.
+
+What a site does with the class is decided by the model's scheduler on that
+site, not by the hub. With the scheduler settings KServe 0.21 ships, the
+class changed nothing in our test: best-effort requests waited in the same
+queue as the others and none was dropped. Read
+[what a site does with the class](#what-a-site-does-with-the-class) before
+you rely on best-effort to protect the tenants within their budget.
 
 **How.**
 
@@ -74,8 +79,7 @@ and are not held up by them.
    That route marks every request with
    `x-llm-d-inference-objective: best-effort`, counts it, and refuses
    nobody.
-3. A site with no room for best-effort work answers 429, and the request is
-   tried at the next site.
+3. If a site refuses the request with 429, it is tried at the next site.
 4. When the window ends, the tenant is served as `standard` again. Nobody
    has to do anything.
 
@@ -83,15 +87,16 @@ and are not held up by them.
 
 - A reaches 270,000 (90%). Within about 15 seconds its requests go out as
   `best-effort`. The model is quiet, so they are answered as fast as before.
-- B and others get busy and the sites fill up. A's requests are now queued
-  behind theirs, and some are dropped. B, still within budget, sees no
-  difference.
+- B and others get busy and the sites fill up. On a site whose scheduler
+  acts on the class, A's requests wait behind theirs. On a site with
+  KServe's default settings, A's and B's requests wait in one queue and B
+  is slowed down by A.
 - The hour ends. A is `standard` again with a full budget.
 
 **Things to know.**
 
-- The decision is made by the sites, per request, from what they can serve
-  at that moment. There is no number to set and none to keep up to date.
+- The hub only marks the request. Whether a marked request waits longer or
+  is dropped is up to each site's scheduler.
 - What a tenant uses as best-effort is shown on the **Usage** page next to
   the budget and is not added to it. It has no upper limit unless you set
   one: **Best-effort limit** in the model's row. A tenant at the limit is
@@ -114,16 +119,63 @@ and are not held up by them.
   next to the model's `InferencePool`, and removes it when the mode is
   switched off. Nothing has to be added to the model's release.
 
+## What a site does with the class
+
+The hub's part ends when the request reaches the site with
+`x-llm-d-inference-objective: best-effort` and the site has an
+`InferenceObjective` of that name with priority -1. The rest is done by the
+model's scheduler, the endpoint picker that KServe deploys for an
+`LLMInferenceService`.
+
+**What we saw.** On OpenShift 4.22 with KServe 0.21 (endpoint picker
+`llm-d-router-endpoint-picker` v0.10.0) and the scheduler settings KServe
+writes by default:
+
+- vLLM was limited to two requests at a time. 30 `standard` and 10
+  `best-effort` requests were sent together, so up to 28 were waiting.
+- No request was refused. 26 `standard` and 6 `best-effort` requests were
+  answered, and the others reached the client's timeout of 5 minutes.
+- 6 of 10 against 26 of 30 is too few requests to read as a priority.
+  The order in which the two classes were answered was not recorded.
+
+So on such a site, best-effort means: the tenant keeps being served, the use
+is counted apart from its budget, and under load it competes with everyone
+on equal terms. That is the shared pool's behaviour without the pool's upper
+limit. Set a [best-effort limit](pricing.md#a-limit-on-best-effort-use) on
+the model if that matters.
+
+**What should make the class count.** KServe's default settings hold only
+scorers, which choose a replica. They do not hold requests back. The
+endpoint picker has a feature for that, flow control: with it, requests wait
+in the scheduler when the model is saturated, ordered by priority. It is
+switched on in the scheduler's settings, which belong to the model's chart:
+
+```yaml
+# LLMInferenceService
+spec:
+  router:
+    scheduler:
+      config:
+        inline:
+          apiVersion: llm-d.ai/v1alpha1
+          kind: EndpointPickerConfig
+          featureGates: [flowControl]
+          # plus the plugins and scheduling profile the model uses today
+```
+
+We have not run this. Before relying on it, repeat the test above on one
+model: limit vLLM with `--max-num-seqs`, send both classes together, and
+compare how long each waits.
+
 ## Side by side
 
 | | Shared pool | Best-effort |
 |---|---|---|
-| A tenant past its quota is served | while the pool has tokens | while a site has room |
-| What "room" is | a number you set per model | what the sites can serve at that moment |
-| Its requests under load | compete equally with requests within budget | wait behind them and are dropped first |
-| Protection for tenants within budget | only through the size of the pool | by class, at the model |
-| When the extra runs out | 429 from the gateway | the site queues, then answers 429; the request is tried at the next site |
-| An upper limit on the extra use | yes, the pool | no |
+| A tenant past its quota is served | while the pool has tokens | always, up to the best-effort limit if one is set |
+| Its requests under load | compete equally with requests within budget | as each site's scheduler treats the class. With KServe's default settings: compete equally |
+| Protection for tenants within budget | only through the size of the pool | only on sites whose scheduler acts on the class |
+| When the extra runs out | 429 from the gateway | 429 from the gateway at the best-effort limit; without a limit it does not run out |
+| An upper limit on the extra use | yes, the pool, for all tenants together | optional, per tenant: the best-effort limit |
 | How fast it applies | at once | up to 15 seconds plus a sync |
 | Quota windows | any | hourly and daily |
 | Tenants without a quota | use the pool | refused, or best-effort with the second setting |
@@ -138,9 +190,11 @@ and are not held up by them.
 - **Shared pool** when the model has no entry route, when the serving
   clusters have no request classes, or when you want a hard limit on the
   total. It is the simple one: one number, and the gateway does the rest.
-- **Best-effort** when tenants within budget must not be slowed down by
-  the ones past it, and when the model's capacity changes during the day.
-  It costs more to set up and gives a better result under load.
+- **Best-effort** when a tenant past its budget should keep working and
+  its extra use should be seen per tenant, and when the sites' schedulers
+  act on the class, so that tenants within budget are not slowed down. On
+  sites with KServe's default scheduler settings it protects nobody, and
+  the shared pool does the same with less to set up.
 
 **Both on one model.** A request is refused only when the tenant's quota
 and the pool are both spent, and a tenant is moved to best-effort at 90% of
@@ -162,9 +216,11 @@ gateway.
   with two sites on a gateway built with that fix: the move at 90%, the
   class the site receives, the separate counter, the limit on best-effort
   use, and the return to `standard` after a reset. One request got a 500 in
-  the seconds in which the best-effort route was created. Not run: a model under real load
-  dropping best-effort work first, which is the serving stack's part, and a
+  the seconds in which the best-effort route was created. Not run: a
   window ending by itself.
+- **Under load.** A real model under more load than it could serve did not
+  treat best-effort requests differently. See
+  [what a site does with the class](#what-a-site-does-with-the-class).
 
 See also [what each action does, and why](how-it-works.md#best-effort-when-a-budget-is-spent)
 for the reasons behind the best-effort design.

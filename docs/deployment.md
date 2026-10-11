@@ -103,7 +103,7 @@ Back up the encryption key straight away. See
 | `config.overageThreshold` | `0.9` | The share of its budget a tenant has to have used to be moved to best-effort, from `0.5` to `1` |
 | `config.usageHistoryInterval` | `1m` | How often the usage counters are read to keep the usage history. At least `10s`; `0` keeps none. Needs `redis.url` |
 | `config.tenantPage` | `true` | Lets a tenant sign in at `/my-usage` with one of its API keys and see its own budgets and usage |
-| `config.bestEffortPriority` | `-1` | The priority of the request class `best-effort` the hub creates on the serving clusters. Below 0: a request without a class has 0 |
+| `config.bestEffortPriority` | `-1` | The priority of the request class `best-effort` the hub creates on the serving clusters. Below 0: a request without a class has 0. It has an effect only on a site whose scheduler acts on priorities |
 | `fleet.domain` | empty | The sites' listener for other sites answers as `peers.llm.<domain>`. Empty, with `fleet.peerSNI` empty too: no entry route can be turned on |
 | `fleet.peerSNI` | empty | That server name, when it is not `peers.llm.<domain>` |
 | `fleet.peerCAConfigMap` | `llm-peer-ca` | ConfigMap in each gateway namespace with the CA of the sites' peer certificates |
@@ -168,6 +168,10 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
 3. After switching the model, run **Self-test** on a cluster with that
    model. Its step "A tenant past its budget is served as best-effort"
    proves that the second route takes the tenant's requests.
+4. The hub marks the requests. For a site to serve them after the others,
+   the model's scheduler must act on priorities, and with KServe 0.21's
+   default settings it does not. That is set in the model's chart; see
+   [what a site does with the class](optimization.md#what-a-site-does-with-the-class).
 
 ## Before tenants send long prompts
 

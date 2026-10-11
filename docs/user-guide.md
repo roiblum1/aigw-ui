@@ -194,8 +194,11 @@ have their peer listeners and certificates; see
 
 **When a budget is spent.** A model with an entry route has a second
 selector in its row. *Refuse* answers 429 to a tenant whose budget is spent,
-as before. *Best-effort* keeps answering: the tenant's requests are queued
-behind everyone else's and are the first to be dropped when a site is full.
+as before. *Best-effort* keeps answering: the tenant's requests are marked
+as the class `best-effort` and counted apart from its budget. Whether they
+then wait behind everyone else's depends on the model's scheduler on each
+site; with KServe's default settings they do not. See
+[optimization.md](optimization.md#what-a-site-does-with-the-class).
 The tenant goes back to normal when its quota's window ends. *Best-effort,
 also without a quota* does the same for tenants that have no quota on the
 model. The Usage page shows who is served as best-effort right now, how many

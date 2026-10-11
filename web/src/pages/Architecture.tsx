@@ -36,7 +36,7 @@ const status: { part: string; today: string; built: "yes" | "partly" | "no" }[] 
   },
   {
     part: "Priority class",
-    today: "Built per model, not per key: a tenant whose budget is spent is served as best-effort, or tenants share a pool. See the Models page.",
+    today: "Built per model, not per key: a tenant whose budget is spent is marked as best-effort, or tenants share a pool. The class changes what a site does only when its scheduler acts on priorities. See the Models page.",
     built: "partly",
   },
   {
@@ -46,7 +46,7 @@ const status: { part: string; today: string; built: "yes" | "partly" | "no" }[] 
   },
   {
     part: "Choosing a site",
-    today: "Built: a weighted hash of the session header in each entry gateway, from the entry route this tool renders. There is no separate service that picks a site.",
+    today: "Built: a weighted hash of the session header in each entry gateway, from the entry route this tool renders. There is no separate service that picks a site, and a site is not chosen by what it has cached.",
     built: "yes",
   },
   { part: "Peer listener, EPP settings", today: "Not part of this tool. They belong to the cluster charts.", built: "no" },

@@ -62,7 +62,7 @@ export default function Models() {
       bestEffort &&
       m.spent_mode === "refuse" &&
       !confirm(
-        `Serve tenants past their budget on ${m.name} as best-effort? They are no longer refused: their requests are queued behind all others and dropped first when a site is full. Every serving cluster needs an InferenceObjective named best-effort for the model.`,
+        `Serve tenants past their budget on ${m.name} as best-effort? They are no longer refused: their requests are marked best-effort and counted apart from the budget. Whether they wait behind the others depends on each site's scheduler; with KServe's default settings they do not.`,
       )
     )
       return;

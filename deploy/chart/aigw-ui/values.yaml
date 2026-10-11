@@ -34,7 +34,8 @@ config:
   tenantPage: true
   # The priority of the request class "best-effort", which the hub creates
   # next to each model's InferencePool for a model in best-effort mode. A
-  # request without a class has priority 0; below 0 is dropped first.
+  # request without a class has priority 0. It has an effect only on a site
+  # whose scheduler acts on priorities; see docs/optimization.md.
   bestEffortPriority: -1
 
 # What every site's entry route has in common. Leave domain and peerSNI empty
