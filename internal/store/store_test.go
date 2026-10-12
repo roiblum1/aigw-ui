@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -184,6 +185,47 @@ func TestFleetModelCanCarryAQuota(t *testing.T) {
 		if m.QuotaCapable != m.Fleet {
 			t.Errorf("%s: listed with quota_capable=%v, fleet=%v", m.Name, m.QuotaCapable, m.Fleet)
 		}
+	}
+}
+
+func TestListModelsEntryBackend(t *testing.T) {
+	s, ctx := open(t)
+	glm := model(t, s, ctx, "glm-5.3", true)
+	plain := model(t, s, ctx, "judge", false)
+	site, err := s.CreateCluster(ctx, Cluster{Name: "site-a", Namespace: "ai-gateway", GatewayName: "gw"}, []byte("kubeconfig"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.CreateCluster(ctx, Cluster{Name: "site-b", Namespace: "ai-gateway", GatewayName: "gw"}, []byte("kubeconfig"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE clusters SET fleet_enabled = true WHERE id = $1`, site.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{site.ID, other.ID} {
+		for _, m := range []string{glm, plain} {
+			if _, err := s.db.Exec(ctx, `INSERT INTO model_endpoints (model_id, cluster_id, upstream_model, source, backends) VALUES ($1, $2, '', 'discovered', '[]')`, m, c); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	models, err := s.ListModels(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, m := range models {
+		for _, e := range m.Endpoints {
+			got[m.Name+"@"+e.ClusterName] = e.EntryBackend
+			if len(e.Backends) != 0 {
+				t.Errorf("%s on %s: backends = %v, want none", m.Name, e.ClusterName, e.Backends)
+			}
+		}
+	}
+	want := map[string]string{"glm-5.3@site-a": "fleet-glm-5-3", "glm-5.3@site-b": "", "judge@site-a": "", "judge@site-b": ""}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("entry backends = %v, want %v", got, want)
 	}
 }
 

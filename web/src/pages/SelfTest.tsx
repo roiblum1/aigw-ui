@@ -22,7 +22,7 @@ export default function SelfTest({ cluster, onClose }: { cluster: Cluster; onClo
 
   // Models this cluster serves that a quota can be attached to.
   const usable = (models ?? []).filter((m) =>
-    m.endpoints.some((e) => e.cluster_id === cluster.id && (e.source === "manual" || (e.backends?.length ?? 0) > 0)),
+    m.endpoints.some((e) => e.cluster_id === cluster.id && (e.source === "manual" || (e.backends?.length ?? 0) > 0 || !!e.entry_backend)),
   );
 
   useEffect(() => {

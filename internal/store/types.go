@@ -72,6 +72,11 @@ type Endpoint struct {
 	// models found in a cluster's existing AIGatewayRoutes.
 	Source   string       `json:"source"`
 	Backends []BackendRef `json:"backends"`
+	// EntryBackend names the backend of the model's entry route on this
+	// cluster, which is what a quota attaches to there. Empty unless the
+	// model is a fleet model and the cluster is in the fleet. It is not in
+	// Backends, which lists what the cluster's own routes have.
+	EntryBackend string `json:"entry_backend,omitempty"`
 	// Capacity is what the cluster can serve of the model and the weight
 	// applied for it.
 	Capacity EndpointCapacity `json:"capacity"`
