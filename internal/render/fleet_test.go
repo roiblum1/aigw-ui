@@ -67,8 +67,11 @@ func TestFleetObjects(t *testing.T) {
 	if n, _, _ := unstructured.NestedInt64(policy.Object, "spec", "retry", "numRetries"); n != 1 {
 		t.Errorf("numRetries = %d, want one per other site", n)
 	}
-	if p, found, _ := unstructured.NestedInt64(policy.Object, "spec", "healthCheck", "panicThreshold"); !found || p != 0 {
-		t.Errorf("panicThreshold = %d (set: %v), want 0", p, found)
+	if p, found, _ := unstructured.NestedInt64(policy.Object, "spec", "healthCheck", "panicThreshold"); !found || p != 1 {
+		t.Errorf("panicThreshold = %d (set: %v), want 1", p, found)
+	}
+	if i, _, _ := unstructured.NestedString(policy.Object, "spec", "healthCheck", "active", "interval"); i != "3s" {
+		t.Errorf("health check interval = %q, want 3s", i)
 	}
 	if path, _, _ := unstructured.NestedString(policy.Object, "spec", "healthCheck", "active", "http", "path"); path != "/healthz/glm-5.3" {
 		t.Errorf("health check path = %q", path)

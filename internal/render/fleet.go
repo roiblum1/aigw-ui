@@ -47,6 +47,9 @@ const (
 	// fleetRequestTimeout replaces the gateway's default of 60s, which is
 	// too short for a long generation.
 	fleetRequestTimeout = "3600s"
+	// fleetHealthInterval is how often a site is checked. Three failures in a
+	// row take a site out, so a dead site is left alone after 9 seconds.
+	fleetHealthInterval = "3s"
 	// fleetBreakerLimit is as good as no limit: each site's own shed limit
 	// decides how much it takes.
 	fleetBreakerLimit int64 = 100000
