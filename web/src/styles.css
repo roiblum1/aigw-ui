@@ -396,6 +396,16 @@
     font-size: 12.5px;
     box-shadow: none;
   }
+  /* A select between the buttons of a row is as small as they are. */
+  .row-actions select {
+    width: auto;
+    height: 28px;
+    min-height: 0;
+    padding: 0 6px;
+    margin-left: 6px;
+    font-size: 12.5px;
+    vertical-align: middle;
+  }
   td.strong,
   td .strong,
   td.mono {
