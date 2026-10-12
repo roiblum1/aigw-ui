@@ -56,12 +56,19 @@ func fleetTrafficPolicy(s State, m Model, name string, retryOn ...int64) *unstru
 			},
 		},
 		"healthCheck": map[string]any{
-			// 0 means: never send to a site that fails its check, however
-			// many sites fail. Do not remove.
-			"panicThreshold": int64(0),
+			// 1 means: a site that fails its check is not used while any
+			// other site passes, and when every site fails the request is
+			// sent anyway. With 0 a model with one site answered 503 to
+			// everyone when its check failed three times in a row for a
+			// reason that was not the model. Do not raise: at 50 two failed
+			// sites of three would get two thirds of the traffic.
+			"panicThreshold": int64(1),
 			"active": map[string]any{
-				"type":     "HTTP",
-				"interval": "5s",
+				"type": "HTTP",
+				// Not 5s: vLLM closes an idle connection after 5 seconds, so
+				// a check every 5 seconds met the closing connection again
+				// and again and counted as failed.
+				"interval": fleetHealthInterval,
 				// The model's own health answer can be slow under load.
 				"timeout":            "5s",
 				"unhealthyThreshold": int64(3),
