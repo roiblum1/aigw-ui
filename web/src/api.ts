@@ -53,6 +53,8 @@ export interface Endpoint {
   source?: "manual" | "discovered";
   /** Empty when the cluster has nothing a quota can attach to for this model. */
   backends?: { name: string; namespace?: string; model: string; override: boolean }[];
+  /** The backend of the model's entry route on this cluster. Set for a fleet model on a fleet cluster. */
+  entry_backend?: string;
   /** What the cluster can serve of the model. Absent in a request body. */
   capacity?: {
     /** The cluster has a deployment of the model. */

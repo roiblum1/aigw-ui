@@ -148,7 +148,7 @@ func (r *Runner) pickModel(ctx context.Context, clusterID, modelID string) (stor
 			continue
 		}
 		for _, e := range m.Endpoints {
-			if e.ClusterID == clusterID && (e.Source == store.SourceManual || len(e.Backends) > 0) {
+			if e.ClusterID == clusterID && (e.Source == store.SourceManual || len(e.Backends) > 0 || e.EntryBackend != "") {
 				return m, nil
 			}
 		}
