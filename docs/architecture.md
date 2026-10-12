@@ -243,8 +243,10 @@ The policy holds the routing:
 - **Retry:** on connect failure, reset and 503, once per other site. A site
   over its limit answers 503 at once and the request goes to the next one.
 - **Health check:** `GET /healthz/<model>` on each site's peer listener
-  every 5s, with `panicThreshold: 0`, so a site that fails is never used
-  however many fail. Slashes in a model name stay in the path.
+  every 3s, with `panicThreshold: 1`: a site that fails is not used while
+  another site passes, and when every site fails the request is sent anyway.
+  The interval is not 5s because vLLM closes an idle connection after 5
+  seconds, and a check every 5 seconds kept meeting the closing connection. Slashes in a model name stay in the path.
 - **Retry picks from 20 sites, not 5.** Envoy Gateway lets the gateway pick
   a site at most five times for one try of a request, and then takes a site
   that already failed. With a hash, every pick lands by the same weights, so
