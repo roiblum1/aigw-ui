@@ -5,8 +5,10 @@ import {
   type CapacityGPU,
   type CapacityModel,
   type CapacityPlan,
+  type CapacityPrices,
   type CapacityRun,
   type CapacityShapePlan,
+  type Model,
 } from "../api";
 import { Bar, LoadChart, short } from "../charts";
 import {
@@ -24,6 +26,7 @@ import {
   usePolling,
   type Unit,
 } from "../components";
+import ModelPrices from "./ModelPrices";
 
 /** Tokens a second, short: 12.3k. */
 const rate = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : Math.round(n).toLocaleString("en-US"));
@@ -50,7 +53,22 @@ export default function Capacity() {
   const [measuring, setMeasuring] = useState<{ m: CapacityModel; shape: string } | null>(null);
   const [history, setHistory] = useState<CapacityModel | null>(null);
   const [pricing, setPricing] = useState(false);
+  const [pricesFor, setPricesFor] = useState<{ model: Model; suggested: CapacityPrices; note: string } | null>(null);
   const action = useAction();
+
+  // The prices form edits a model as the Models page has it.
+  const usePrices = (m: CapacityModel) =>
+    action.run(async () => {
+      const model = (await api.models()).find((x) => x.id === m.model_id);
+      if (!model || !m.plan.break_even) return;
+      setPricesFor({
+        model,
+        suggested: m.plan.break_even,
+        note: `Break-even from the capacity measurement at ${percent(m.plan.utilization)} busy`,
+      });
+    });
+  const dollarModels = data?.models.filter((m) => m.unit === "credits" && m.plan.measured_instances > 0) ?? [];
+  const total = (f: (p: CapacityPlan) => number) => dollarModels.reduce((n, m) => n + f(m.plan), 0);
 
   const stop = (run: CapacityRun) => {
     if (!confirm(`Stop measuring ${run.model_name}? Its Job is deleted; the steps it finished are kept.`)) return;
@@ -85,6 +103,16 @@ export default function Capacity() {
           </button>
         </div>
       )}
+      {dollarModels.length > 0 && (
+        <div className="banner info">
+          The {dollarModels.length === 1 ? "measured model" : `${dollarModels.length} measured models`} counted in
+          dollars can be given <span className="strong">{formatDollars(total((p) => p.capacity_day))}</span> a day;
+          with {dollarModels.length === 1 ? "its overcommit limit" : "their overcommit limits"}, up to{" "}
+          {formatDollars(total((p) => p.ceiling_day))}. The budgets take{" "}
+          {formatDollars(total((p) => p.given_day))}, so{" "}
+          <LeftToGive left={total((p) => p.left_day)} format={formatDollars} /> a day.
+        </div>
+      )}
       {data?.models.length === 0 && <Empty icon={Gauge}>No models yet. Add one on the Models page.</Empty>}
       {data?.models.map((m) => (
         <ModelCard
@@ -95,11 +123,24 @@ export default function Capacity() {
           onHistory={() => setHistory(m)}
           onStop={stop}
           onChanged={reload}
+          onUsePrices={() => usePrices(m)}
         />
       ))}
       {measuring && <MeasureForm m={measuring.m} shape={measuring.shape} onClose={() => setMeasuring(null)} onStarted={reload} />}
       {history && <RunHistory m={history} onClose={() => setHistory(null)} onChanged={reload} />}
       {pricing && data && <GPUPrices gpus={data.gpus} onClose={() => setPricing(false)} onChanged={reload} />}
+      {pricesFor && (
+        <ModelPrices
+          model={pricesFor.model}
+          suggested={pricesFor.suggested}
+          suggestedNote={pricesFor.note}
+          onClose={() => setPricesFor(null)}
+          onChanged={async () => {
+            setPricesFor(null);
+            await reload();
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -111,10 +152,27 @@ function ModelCard(props: {
   onHistory: () => void;
   onStop: (run: CapacityRun) => void;
   onChanged: () => Promise<void>;
+  onUsePrices: () => void;
 }) {
   const { m } = props;
   const [open, setOpen] = useState("");
   const action = useAction();
+  const editOvercommit = () => {
+    const text = prompt(
+      `How far ${m.model_name}'s budgets may add up beyond what its GPUs serve a day at the expected busy share, as a factor from 1 to 10. Tenants rarely use all of their budgets on the same day, so more than 1 keeps the GPUs busier.`,
+      String(m.plan.overcommit_limit),
+    );
+    if (text == null) return;
+    const n = Number(text);
+    if (!(n >= 1 && n <= 10)) {
+      alert("Give a number from 1 to 10.");
+      return;
+    }
+    action.run(async () => {
+      await api.setOvercommitLimit(m.model_id, n);
+      await props.onChanged();
+    });
+  };
   const editTarget = () => {
     const text = prompt(
       `The share of the day ${m.model_name}'s instances are expected to be busy, in percent. The prices that pay for them are worked out at it.`,
@@ -144,6 +202,10 @@ function ModelCard(props: {
               change
             </button>
             {m.plan.observed_utilization != null && <> · an average day uses {percent(m.plan.observed_utilization)}</>}
+            {" · "}overcommit limit {m.plan.overcommit_limit}×{" "}
+            <button className="link" disabled={action.busy} onClick={editOvercommit}>
+              change
+            </button>
           </p>
         </div>
         <div className="row-actions">
@@ -161,7 +223,7 @@ function ModelCard(props: {
         <p className="detail">No site has a deployment of this model, or discovery has not read it yet.</p>
       ) : (
         <>
-          <Summary plan={m.plan} />
+          <Summary plan={m.plan} onUsePrices={props.onUsePrices} />
           <div className="table-wrap">
             <table className="plain">
               <thead>
@@ -264,28 +326,50 @@ function ShapeRow(props: {
   );
 }
 
-function Summary({ plan }: { plan: CapacityPlan }) {
+/** What is left to give, or how far the budgets are past the ceiling. */
+function LeftToGive({ left, format }: { left: number; format: (n: number) => string }) {
+  return left >= 0 ? (
+    <>
+      <span className="strong ok-text">{format(left)}</span> is left to give
+    </>
+  ) : (
+    <>
+      the budgets are <span className="strong warn-text">{format(-left)}</span> past the ceiling
+    </>
+  );
+}
+
+function Summary({ plan, onUsePrices }: { plan: CapacityPlan; onUsePrices: () => void }) {
   const show = (n: number) => perDay(n, plan.unit);
   return (
     <div className="dash-grid">
       <div className="panel">
         <h3>What the model can be given a day</h3>
         {plan.capacity_day > 0 ? (
-          <Bar label="Given to tenants" used={plan.allocated_day} limit={plan.capacity_day} format={show} />
+          <Bar label="Given to tenants, against the ceiling" used={plan.given_day} limit={plan.ceiling_day} format={show} />
         ) : (
           <p className="detail">Nothing yet: no measured shape has a ready instance.</p>
         )}
         {plan.measured_instances > 0 && (
-          <p className="detail">
-            What the {plan.measured_instances} measured {plan.measured_instances === 1 ? "instance serves" : "instances serve"}{" "}
-            busy all day, {show(plan.full_day)}, × {percent(plan.utilization)} busy ={" "}
-            <span className="strong">{show(plan.capacity_day)}</span>.
-          </p>
+          <>
+            <p className="detail">
+              What the {plan.measured_instances} measured{" "}
+              {plan.measured_instances === 1 ? "instance serves" : "instances serve"} busy all day, {show(plan.full_day)},
+              × {percent(plan.utilization)} busy = <span className="strong">{show(plan.capacity_day)}</span>; ×{" "}
+              {plan.overcommit_limit} overcommit = a ceiling of {show(plan.ceiling_day)}.
+            </p>
+            <p className="detail">
+              The budgets take {show(plan.given_day)}
+              {plan.short_windows > 0 &&
+                ` (${plan.short_windows} hourly or per-minute ${plan.short_windows === 1 ? "budget" : "budgets"} at the most a day allows)`}
+              {plan.overcommit != null && `, ${plan.overcommit.toFixed(2)}× what the GPUs serve`}, so{" "}
+              <LeftToGive left={plan.left_day} format={show} />.
+            </p>
+          </>
         )}
-        {plan.overcommit != null && plan.overcommit > 1 && (
-          <p className="detail warn-text">
-            The daily budgets add up to {plan.overcommit.toFixed(2)}× that. It holds while tenants do not use them all on
-            the same day.
+        {plan.pool_day != null && (
+          <p className="detail">
+            The shared pool lets tenants past their budget use up to {show(plan.pool_day)} a day between them.
           </p>
         )}
         {plan.safe_allocated_day != null && (
@@ -319,7 +403,10 @@ function Summary({ plan }: { plan: CapacityPlan }) {
         {plan.cost_per_hour == null ? (
           <p className="detail">Set the price of every GPU the measured shapes run on to see what they cost.</p>
         ) : (
-          <p className="detail">The measured instances cost {formatDollars(plan.cost_per_hour)} an hour.</p>
+          <p className="detail">
+            The measured instances cost {formatDollars(plan.cost_per_hour)} an hour,{" "}
+            <span className="strong">{formatDollars(plan.cost_per_hour * 24)}</span> a day.
+          </p>
         )}
         {plan.charged_per_hour != null && (
           <p className="detail">
@@ -334,7 +421,11 @@ function Summary({ plan }: { plan: CapacityPlan }) {
               {formatPrice(plan.break_even.price_input)} input, {formatPrice(plan.break_even.price_cached)} cached,{" "}
               {formatPrice(plan.break_even.price_output)} output
             </span>
-            . Tenants pay it whichever shape serves them. Set it on the Models page under Prices.
+            . Tenants pay it whichever shape serves them, and at these prices what the GPUs serve a day at{" "}
+            {percent(plan.utilization)} busy is worth what they cost a day.{" "}
+            <button className="link" onClick={onUsePrices}>
+              Use these prices
+            </button>
           </p>
         )}
       </div>

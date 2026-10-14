@@ -1,6 +1,7 @@
 import { Boxes, Gauge, KeyRound, Server, Users, type LucideIcon } from "lucide-react";
-import { api } from "../api";
-import { ErrorBanner, PageHeader, StatusBadge, formatTime, useLoad } from "../components";
+import { api, type Budgets, type Unit } from "../api";
+import { short } from "../charts";
+import { ErrorBanner, PageHeader, StatusBadge, formatDollars, formatTime, useLoad } from "../components";
 import Dashboard from "./Dashboard";
 import History from "./History";
 
@@ -22,8 +23,74 @@ function Stat(props: { label: string; value: number; icon: LucideIcon; note?: st
   );
 }
 
+/**
+ * What each model can be given a day from what its GPUs serve, and how much of
+ * that its budgets take: the answer to "how much can I still give".
+ */
+function BudgetsCard({ b }: { b: Budgets }) {
+  if (b.models.length === 0) return null;
+  // Dollars to the cent, tokens written short: 3.6B tokens.
+  const formatAmount = (n: number, unit: Unit) => (unit === "credits" ? formatDollars(n) : `${short(n)} tokens`);
+  const left = (n: number, unit: Unit) =>
+    n >= 0 ? formatAmount(n, unit) : <span className="warn-text">{formatAmount(-n, unit)} past</span>;
+  return (
+    <section className="card">
+      <h2>Budgets</h2>
+      <p className="hint">
+        What each model's ready GPUs serve a day at its expected busy share, the ceiling its overcommit limit allows, and
+        what the tenants' budgets take. Hourly and per-minute budgets count at the most they allow in a day. See{" "}
+        <a href="#capacity">Capacity</a>.
+      </p>
+      <div className="table-wrap">
+        <table className="plain">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th className="text-right">Can be given a day</th>
+              <th className="text-right">Ceiling</th>
+              <th className="text-right">Given</th>
+              <th className="text-right">Left</th>
+            </tr>
+          </thead>
+          <tbody>
+            {b.models.map((m) => (
+              <tr key={m.model_id}>
+                <td className="strong">{m.model_name}</td>
+                {m.measured ? (
+                  <>
+                    <td className="text-right tabular-nums">{formatAmount(m.capacity_day, m.unit)}</td>
+                    <td className="text-right tabular-nums">
+                      {formatAmount(m.ceiling_day, m.unit)} <span className="detail">({m.overcommit_limit}×)</span>
+                    </td>
+                    <td className="text-right tabular-nums">{formatAmount(m.given_day, m.unit)}</td>
+                    <td className="text-right tabular-nums">{left(m.left_day, m.unit)}</td>
+                  </>
+                ) : (
+                  <td colSpan={4} className="detail">
+                    Not measured: given {formatAmount(m.given_day, m.unit)} a day against an unknown capacity
+                  </td>
+                )}
+              </tr>
+            ))}
+            {b.credits.capacity_day > 0 && (
+              <tr>
+                <td className="strong">All in dollars</td>
+                <td className="text-right tabular-nums strong">{formatAmount(b.credits.capacity_day, "credits")}</td>
+                <td className="text-right tabular-nums">{formatAmount(b.credits.ceiling_day, "credits")}</td>
+                <td className="text-right tabular-nums">{formatAmount(b.credits.given_day, "credits")}</td>
+                <td className="text-right tabular-nums strong">{left(b.credits.left_day, "credits")}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export default function Overview() {
   const { data, error } = useLoad(async () => ({ overview: await api.overview(), clusters: await api.clusters() }));
+  const budgets = useLoad(api.budgets);
   const o = data?.overview;
   return (
     <>
@@ -44,6 +111,7 @@ export default function Overview() {
           <Stat label="Quotas" value={o.quotas} icon={Gauge} />
         </div>
       )}
+      {budgets.data && <BudgetsCard b={budgets.data} />}
       <Dashboard />
       <History />
       {data && data.clusters.length > 0 && (

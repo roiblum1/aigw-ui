@@ -154,10 +154,31 @@ busy all day   = sum over measured shapes of: one instance a day x ready instanc
 can be given   = busy all day x expected busy share
 ```
 
-Instances on a drained site are not counted. **Given to tenants** is every
-enabled tenant's enforced daily budget on the model. Quotas per minute or
-per hour limit a rate and are not budgets, so they are not added; the page
-says how many there are. **Overcommit** is given divided by can be given.
+Instances on a drained site are not counted, so the figure follows the
+fleet: a site that loses pods or is drained lowers it at the next poll.
+
+**What is left to give.**
+
+```
+ceiling        = can be given x overcommit limit
+given          = sum over the enabled tenants' enforced budgets of: the most it lets be used in a day
+left to give   = ceiling - given
+```
+
+- **Overcommit limit.** Each model has one, 1.5 until you change it next
+  to the busy share. Tenants rarely use all of their budgets on the same
+  day, so budgets that add up to more than the GPUs serve keep them busier.
+  1 means no overcommit.
+- **Budgets per hour or minute** count at the most they allow in a day: $1
+  an hour is up to $24 a day. A budget in dry run is not counted.
+- **Overcommit** is given divided by can be given.
+- **The shared pool** is shown apart. Every request is charged to the
+  tenant's budget and to the pool, and passes while either has room, so a
+  pool above 1 lets tenants past their budget use what others leave. It is
+  not added to what is given.
+
+Nothing is refused: a budget that takes the model past its ceiling is
+saved once you confirm it.
 
 **How far the budgets could go.** If tenants keep using their budgets as on
 the busiest day of the last 30, the budgets could add up to
@@ -166,7 +187,35 @@ the busiest day of the last 30, the budgets could add up to
 can be given x given / busiest day
 ```
 
-before such a day fills what the model can be given.
+before such a day fills what the model can be given. It is a suggestion for
+the overcommit limit once there is history.
+
+## Budgets in dollars
+
+**How many dollars a model can be given a day.** At the break-even prices,
+what a model's ready GPUs serve a day at the expected busy share is worth
+exactly what those GPUs cost a day. So for a priced model, *can be given* is
+the GPUs' cost a day, without profit, and the overcommit limit says how far
+the budgets may go past it.
+
+The figures appear where budgets are decided:
+
+- **Capacity page**: each model's panel, and above them the total over the
+  measured models in dollars.
+- **A tenant's quotas**: choosing a model in **Add a quota**, or editing a
+  budget, shows what the model can be given, its ceiling, what the budgets
+  take and what is left, and the same with the budget being typed. Saving
+  past the ceiling asks to confirm. The card says what the tenant can use a
+  day over the models in dollars.
+- **Overview**: the **Budgets** card, one row per model and a total.
+- **Task log**: a budget change says where the model stands after it, for
+  example "glm budgets now $1,840 of $1,700 a day (1.08×, limit 1.5×)".
+
+**A model in tokens** has no dollars. **Use these prices**, next to the
+break-even prices on the Capacity page, opens the model's prices with them
+filled in. The prices then follow the rules in [pricing](pricing.md): they
+start at the next 00:00 UTC, the first prices convert the model's limits once,
+and the model starts in dry-run.
 
 **Busiest day in 30 days** is the most the model was used in one day,
 best-effort included, against what the measured instances serve busy all
@@ -223,6 +272,8 @@ and a table of every step. **Measurements** lists the earlier ones.
 |---|---|---|---|
 | GET | `/capacity` | | `{"image", "gpus", "models"}`: for each model its deployments with their shapes, the expected busy share, the defaults for a new measurement, the latest result of each shape, the plan and the measurement running |
 | PUT | `/models/{id}/target-utilization` | `{"utilization"}` | 204. 0.05 to 1 |
+| PUT | `/models/{id}/overcommit-limit` | `{"limit"}` | 204. 1 to 10 |
+| GET | `/budgets` | | `{"models", "credits"}`: for each model `measured`, `capacity_day`, `ceiling_day`, `given_day`, `left_day`, `overcommit`, `overcommit_limit`, `short_windows`, `pool_day`, in its unit; `credits` adds them up over the measured models in dollars |
 | PUT | `/gpu-prices/{gpu}` | `{"usd_per_hour", "note"}` | 204 |
 | DELETE | `/gpu-prices/{gpu}` | | 204 |
 | GET | `/clusters/{id}/deployments/{namespace}/{name}/pods` | | The deployment's ready pods, read from the cluster |

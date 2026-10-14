@@ -422,8 +422,9 @@ unit. The gateway cannot count further in one window.
 
 ### Capacity
 
-Measuring what one instance of a model serves, and what the model can be
-given. See [capacity](capacity.md#api) for the paths.
+Measuring what one instance of a model serves, what the model can be given,
+and what is left to give under its overcommit limit (`GET /budgets`). See
+[capacity](capacity.md#api) for the paths.
 
 ## Tenants, keys and quotas
 

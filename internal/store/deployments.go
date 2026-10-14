@@ -97,31 +97,53 @@ func (s *Store) DeleteGPUPrice(ctx context.Context, gpu string) error {
 	return affected(s.db.Exec(ctx, `DELETE FROM gpu_prices WHERE gpu = $1`, gpu))
 }
 
+// CapacityTarget is what a model's plan is worked out at.
+type CapacityTarget struct {
+	// Utilization is the share of the day its instances are expected to be
+	// busy; the prices that pay for them are worked out at it.
+	Utilization float64
+	// OvercommitLimit is how far the tenants' budgets may add up beyond what
+	// the instances serve a day at that share.
+	OvercommitLimit float64
+}
+
 // SetTargetUtilization sets the share of the day a model's instances are
 // expected to be busy, and returns the model's name.
 func (s *Store) SetTargetUtilization(ctx context.Context, modelID string, share float64) (string, error) {
+	return s.setModelTarget(ctx, modelID, "target_utilization", share)
+}
+
+// SetOvercommitLimit sets how far the budgets on a model may add up beyond
+// what it can be given a day, and returns the model's name.
+func (s *Store) SetOvercommitLimit(ctx context.Context, modelID string, limit float64) (string, error) {
+	return s.setModelTarget(ctx, modelID, "overcommit_limit", limit)
+}
+
+// setModelTarget sets one of the columns of CapacityTarget. column is one of
+// the two names above, never a value from a request.
+func (s *Store) setModelTarget(ctx context.Context, modelID, column string, value float64) (string, error) {
 	var name string
-	err := s.db.QueryRow(ctx, `UPDATE models SET target_utilization = $2 WHERE id = $1 RETURNING name`, modelID, share).Scan(&name)
+	err := s.db.QueryRow(ctx, `UPDATE models SET `+column+` = $2 WHERE id = $1 RETURNING name`, modelID, value).Scan(&name)
 	return name, mapErr(err)
 }
 
-// TargetUtilizations returns every model's target utilization, by model.
-func (s *Store) TargetUtilizations(ctx context.Context) (map[string]float64, error) {
+// CapacityTargets returns every model's targets, by model.
+func (s *Store) CapacityTargets(ctx context.Context) (map[string]CapacityTarget, error) {
 	type row struct {
-		id    string
-		share float64
+		id string
+		t  CapacityTarget
 	}
 	rows, err := list(ctx, s, func(r scanner) (row, error) {
 		var x row
-		err := r.Scan(&x.id, &x.share)
+		err := r.Scan(&x.id, &x.t.Utilization, &x.t.OvercommitLimit)
 		return x, err
-	}, `SELECT id, target_utilization FROM models`)
+	}, `SELECT id, target_utilization, overcommit_limit FROM models`)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]float64, len(rows))
+	out := make(map[string]CapacityTarget, len(rows))
 	for _, x := range rows {
-		out[x.id] = x.share
+		out[x.id] = x.t
 	}
 	return out, nil
 }

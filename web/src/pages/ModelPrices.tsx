@@ -30,14 +30,21 @@ function PriceLine({ p }: { p: Price }) {
  * into the model's cost expression, and the model's quotas and usage are
  * then counted in dollars.
  */
-export default function ModelPrices(props: { model: Model; onClose: () => void; onChanged: () => Promise<void> }) {
+export default function ModelPrices(props: {
+  model: Model;
+  /** Prices to start from instead of the model's, such as the break-even prices of a capacity measurement. */
+  suggested?: { price_input: number; price_cached: number; price_output: number };
+  suggestedNote?: string;
+  onClose: () => void;
+  onChanged: () => Promise<void>;
+}) {
   const { model } = props;
-  const from = model.pending_prices ?? model.prices;
+  const from = props.suggested ?? model.pending_prices ?? model.prices;
   const [input, setInput] = useState(dollars(from?.price_input));
   const [cached, setCached] = useState(dollars(from?.price_cached));
   const [output, setOutput] = useState(dollars(from?.price_output));
   const [now, setNow] = useState(false);
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(props.suggestedNote ?? "");
   const history = useLoad(() => api.prices(model.id));
   const action = useAction();
 

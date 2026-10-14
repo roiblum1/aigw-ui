@@ -205,7 +205,7 @@ func (s *Server) quotaSummary(ctx context.Context, tenantID, modelID string, quo
 		if q.Shadow {
 			summary += " (dry run)"
 		}
-		return summary
+		return summary + s.budgetSummary(ctx, modelID)
 	}
 	return "Set a quota for " + t.Slug
 }

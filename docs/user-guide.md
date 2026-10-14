@@ -241,6 +241,14 @@ clients and `/anthropic/v1/messages` for Anthropic-style ones.
 
 A quota is one budget for the tenant on that model across all sites.
 
+**How much is left to give.** For a measured model, choosing it in **Add
+quota** or editing its budget shows what the model's GPUs serve a day, the
+ceiling its overcommit limit allows, what the budgets take and what is left,
+and the same with the amount being typed. An hourly budget counts at 24
+times its amount. Saving past the ceiling asks you to confirm; nothing is
+refused. The **Budgets** card on the Overview shows every model. See
+[capacity](capacity.md#budgets-in-dollars).
+
 **Prices.** **Prices** in a model's row sets what a million tokens of the
 model cost: input, cached input and output. The model's quotas and usage
 are then shown and entered in dollars, and a prompt answered from the

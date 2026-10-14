@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.14.0](v0.14.0.md) | not released yet | What is left to give: each model's budgets against what its GPUs serve a day and an overcommit limit, shown in the quota form, on the Capacity page and the Overview; hourly budgets at their daily maximum; the measured break-even prices in one click |
 | [0.13.2](v0.13.2.md) | not released yet | A cluster where the hub may not list pods or nodes says so, instead of showing GPUs as unlabelled |
 | [0.13.1](v0.13.1.md) | not released yet | A capacity measurement asks the pod how long a request it takes and stops at once when its prompts do not fit; the Capacity page fits a laptop screen and explains a shape whose GPU is not known |
 | [0.13.0](v0.13.0.md) | not released yet | A Capacity page: measure each shape of a model with AIPerf, GPU prices, what a model can be given a day, the overcommit of its budgets, and one price that pays for its GPUs |
