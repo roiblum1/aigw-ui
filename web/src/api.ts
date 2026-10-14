@@ -352,16 +352,25 @@ export interface MyBudget {
 export interface CapacitySettings {
   /** Requests in flight at each load step, ascending. */
   concurrency: number[];
+  /** Requests a step sends at least; four per request in flight above it. */
+  min_requests: number;
+  /** The longest a step may take, in seconds. */
   step_seconds: number;
   sessions: number;
   max_prompt_tokens: number;
   max_output_tokens: number;
   ttft_p95_ms: number;
   itl_p95_ms: number;
-  /** What one instance costs an hour, in dollars. 0 when not known. */
-  instance_cost_per_hour_usd: number;
-  /** The share of the day the instances are expected to be busy, 0 to 1. */
-  utilization: number;
+}
+
+/** What one instance of a deployment is: the same model runs in several. */
+export interface CapacityShape {
+  topology: "single" | "multi-node" | "prefill-decode";
+  gpu: string;
+  gpus_per_instance: number;
+  revision: string;
+  key: string;
+  label: string;
 }
 
 /** What one load step measured. */
@@ -383,6 +392,18 @@ export interface CapacityStep {
   error?: string;
 }
 
+/** A step with what the server made of it. */
+export interface CapacityStepView {
+  concurrency: number;
+  met: boolean;
+  reason?: string;
+  /** The step reached its longest time before enough requests were answered. */
+  few_samples: boolean;
+  input_per_s: number;
+  output_per_s: number;
+  cached_share: number | null;
+}
+
 export interface CapacityRun {
   id: string;
   model_id: string;
@@ -390,6 +411,8 @@ export interface CapacityRun {
   cluster_id: string;
   cluster_name: string;
   namespace: string;
+  deployment: string;
+  shape: CapacityShape;
   job_name: string;
   /** The pod that was measured. */
   instance: string;
@@ -398,8 +421,8 @@ export interface CapacityRun {
   detail: string;
   dataset: { sessions: number; requests: number; prompt_mean: number; prompt_max: number } | null;
   steps: CapacityStep[];
-  /** The highest step that met the targets, and why the next one did not. */
-  result: { best: CapacityStep | null; limit: string };
+  /** The highest step that met the targets, why the next one did not, and every step. */
+  result: { best: CapacityStep | null; limit: string; steps: CapacityStepView[] };
   created_at: string;
   finished_at: string | null;
 }
@@ -410,36 +433,83 @@ export interface CapacityPrices {
   price_output: number;
 }
 
-/** What a model can be given, from what one instance serves. Amounts are in unit. */
+/** What one shape of a model gives. Amounts are in the model's unit, costs in credits. */
+export interface CapacityShapePlan {
+  shape: CapacityShape;
+  instances: number;
+  sites: string[];
+  measured: boolean;
+  concurrency: number;
+  per_instance_day: number;
+  cost_per_instance_hour: number | null;
+  /** A million input-equivalent tokens on this shape busy all day. */
+  cost_per_million: number | null;
+}
+
+/** What a model can be given. Amounts are in unit, costs in credits. */
 export interface CapacityPlan {
   unit: Unit;
-  per_instance_day: number;
+  utilization: number;
+  shapes: CapacityShapePlan[];
   instances: number;
+  measured_instances: number;
+  full_day: number;
   capacity_day: number;
   allocated_day: number;
+  rate_limits: number;
   overcommit: number | null;
   busiest_day: number;
   busiest_share: number | null;
-  cost_per_instance_hour: number | null;
+  observed_utilization: number | null;
+  safe_allocated_day: number | null;
+  cost_per_hour: number | null;
   break_even: CapacityPrices | null;
-  charged_per_instance_hour: number | null;
+  charged_per_hour: number | null;
   notes: string[];
+}
+
+/** A deployment (LLMInferenceService) of a model on a site. */
+export interface CapacityDeployment {
+  cluster_id: string;
+  cluster_name: string;
+  namespace: string;
+  name: string;
+  model_id: string;
+  topology: string;
+  gpu: string;
+  gpus_per_instance: number;
+  revision: string;
+  instances: number | null;
+  drained: boolean;
+  observed_at: string;
+  shape: CapacityShape;
+  max_model_len: number;
 }
 
 export interface CapacityModel {
   model_id: string;
   model_name: string;
   unit: Unit;
-  sites: { cluster_id: string; cluster_name: string; instances: number | null; max_model_len: number }[];
+  target_utilization: number;
+  deployments: CapacityDeployment[];
   defaults: CapacitySettings;
-  latest: CapacityRun | null;
-  plan: CapacityPlan | null;
+  /** The newest measurement of each shape that found a load within the targets. */
+  latest: CapacityRun[];
+  plan: CapacityPlan;
   running: CapacityRun | null;
+}
+
+export interface CapacityGPU {
+  gpu: string;
+  usd_per_hour: number | null;
+  note: string;
+  deployments: number;
 }
 
 export interface CapacityOverview {
   /** The AIPerf image the server runs, or "" when none is set. */
   image: string;
+  gpus: CapacityGPU[];
   models: CapacityModel[];
 }
 
@@ -585,10 +655,19 @@ export const api = {
   overage: () => request<OverageEntry[]>("GET", "/overage"),
   capacity: () => request<CapacityOverview>("GET", "/capacity"),
   capacityRuns: (modelId: string) => request<CapacityRun[]>("GET", `/models/${modelId}/capacity-runs`),
-  startCapacityRun: (modelId: string, body: { cluster_id: string; pod?: string; settings: CapacitySettings }) =>
-    request<CapacityRun>("POST", `/models/${modelId}/capacity-runs`, body),
+  startCapacityRun: (
+    modelId: string,
+    body: { cluster_id: string; namespace: string; deployment: string; pod: string; settings: CapacitySettings },
+  ) => request<CapacityRun>("POST", `/models/${modelId}/capacity-runs`, body),
   cancelCapacityRun: (id: string) => request<CapacityRun>("POST", `/capacity-runs/${id}/cancel`),
   deleteCapacityRun: (id: string) => request<void>("DELETE", `/capacity-runs/${id}`),
+  deploymentPods: (clusterId: string, namespace: string, name: string) =>
+    request<string[]>("GET", `/clusters/${clusterId}/deployments/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/pods`),
+  setTargetUtilization: (modelId: string, utilization: number) =>
+    request<void>("PUT", `/models/${modelId}/target-utilization`, { utilization }),
+  setGPUPrice: (gpu: string, usd_per_hour: number, note: string) =>
+    request<void>("PUT", `/gpu-prices/${encodeURIComponent(gpu)}`, { usd_per_hour, note }),
+  deleteGPUPrice: (gpu: string) => request<void>("DELETE", `/gpu-prices/${encodeURIComponent(gpu)}`),
   drainSite: (modelId: string, clusterId: string, drained: boolean) =>
     request<void>("PUT", `/models/${modelId}/sites/${clusterId}/drain`, { drained }),
 

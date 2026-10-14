@@ -39,3 +39,29 @@
     vertical-align: -1px;
   }
 }
+@layer components {
+  /* A button that reads as a word in a sentence. */
+  .detail button.link,
+  .banner button.link {
+    height: auto;
+    padding: 0 2px;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    font: inherit;
+    color: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .detail button.link:hover:not(:disabled),
+  .banner button.link:hover:not(:disabled) {
+    background: none;
+    color: var(--foreground);
+  }
+  .shape-cell {
+    min-width: 230px;
+  }
+  .nowrap {
+    white-space: nowrap;
+  }
+}

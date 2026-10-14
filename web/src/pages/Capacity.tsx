@@ -1,6 +1,13 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Gauge } from "lucide-react";
-import { api, type CapacityModel, type CapacityPlan, type CapacityRun, type CapacitySettings, type CapacityStep } from "../api";
+import {
+  api,
+  type CapacityGPU,
+  type CapacityModel,
+  type CapacityPlan,
+  type CapacityRun,
+  type CapacityShapePlan,
+} from "../api";
 import { Bar, LoadChart, short } from "../charts";
 import {
   Empty,
@@ -21,47 +28,28 @@ import {
 /** Tokens a second, short: 12.3k. */
 const rate = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : Math.round(n).toLocaleString("en-US"));
 const percent = (n: number) => `${Math.round(n * 100)}%`;
+const seconds = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);
 /** A sentence from the server that starts in the middle: "at 32 in flight: …". */
 const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-const seconds = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);
 
 /** An amount per day: dollars, or tokens written short. */
 function perDay(n: number, unit: Unit): string {
   return unit === "credits" ? formatDollars(n) : `${short(n)} tokens`;
 }
 
-function cachedShare(s: CapacityStep): number | null {
-  if (s.server_prompt_tokens == null || s.server_cached_tokens == null || s.server_prompt_tokens <= 0) return null;
-  return Math.min(Math.max(s.server_cached_tokens / s.server_prompt_tokens, 0), 1);
-}
-
-const perSecond = (n: number, s: CapacityStep) => (s.duration_s > 0 ? n / s.duration_s : 0);
-
-function meets(s: CapacityStep, set: CapacitySettings): boolean {
-  const total = s.requests + s.errors;
-  return !s.error && s.requests > 0 && s.errors <= 0.01 * total && s.ttft_p95_ms <= set.ttft_p95_ms && s.itl_p95_ms <= set.itl_p95_ms;
-}
-
-/** The longest a measurement may take, as the server bounds it. */
-function longest(set: CapacitySettings): string {
-  const s = set.concurrency.length * (set.step_seconds + 300 + 60) + 900;
-  const h = Math.floor(s / 3600);
-  const m = Math.round((s % 3600) / 60);
-  return h > 0 ? `${h} h ${m} min` : `${m} min`;
-}
-
 /**
- * What one instance of each model serves at the latency promised to the
- * tenants, measured with AIPerf in a Job on a cluster, and what follows from
- * it: what the model can be given a day, what it has been given, and the
- * price that pays for its instances.
+ * What one instance of each shape of a model serves at the latency promised
+ * to the tenants, measured with AIPerf in a Job on a cluster, and what
+ * follows from it: what the model can be given a day, what it has been
+ * given, and the one set of prices that pays for its instances.
  */
 export default function Capacity() {
   const { data, error, reload } = useLoad(api.capacity);
   const running = data?.models.some((m) => m.running) ?? false;
   usePolling(reload, running ? 15_000 : 60_000);
-  const [measuring, setMeasuring] = useState<CapacityModel | null>(null);
+  const [measuring, setMeasuring] = useState<{ m: CapacityModel; shape: string } | null>(null);
   const [history, setHistory] = useState<CapacityModel | null>(null);
+  const [pricing, setPricing] = useState(false);
   const action = useAction();
 
   const stop = (run: CapacityRun) => {
@@ -71,18 +59,30 @@ export default function Capacity() {
       await reload();
     });
   };
+  const unpriced = data?.gpus.filter((g) => g.usd_per_hour == null && g.deployments > 0) ?? [];
 
   return (
     <section>
       <PageHeader
         title="Capacity"
-        subtitle="What one instance of a model serves at the latency you promise, what the model can therefore be given a day, and how much of that the tenants' budgets already take."
-      />
+        subtitle="What each shape of a model serves at the latency you promise, what the model can therefore be given a day, how much of that the budgets take, and the prices that pay for its GPUs and no more."
+      >
+        <button onClick={() => setPricing(true)}>GPU prices</button>
+      </PageHeader>
       <ErrorBanner message={error || action.error} />
       {data && !data.image && (
         <div className="banner warn">
           No AIPerf image is set, so nothing can be measured. Set <span className="mono">capacity.image</span> in the
           chart to an image the clusters can pull; see the capacity guide under Docs.
+        </div>
+      )}
+      {unpriced.length > 0 && (
+        <div className="banner warn">
+          {unpriced.map((g) => g.gpu).join(", ")} {unpriced.length === 1 ? "has" : "have"} no price, so the cost of the
+          models on {unpriced.length === 1 ? "it" : "them"} is not worked out.{" "}
+          <button className="link" onClick={() => setPricing(true)}>
+            Set GPU prices
+          </button>
         </div>
       )}
       {data?.models.length === 0 && <Empty icon={Gauge}>No models yet. Add one on the Models page.</Empty>}
@@ -91,13 +91,15 @@ export default function Capacity() {
           key={m.model_id}
           m={m}
           canMeasure={!!data.image && !action.busy}
-          onMeasure={() => setMeasuring(m)}
+          onMeasure={(shape) => setMeasuring({ m, shape })}
           onHistory={() => setHistory(m)}
           onStop={stop}
+          onChanged={reload}
         />
       ))}
-      {measuring && <MeasureForm m={measuring} onClose={() => setMeasuring(null)} onStarted={reload} />}
+      {measuring && <MeasureForm m={measuring.m} shape={measuring.shape} onClose={() => setMeasuring(null)} onStarted={reload} />}
       {history && <RunHistory m={history} onClose={() => setHistory(null)} onChanged={reload} />}
+      {pricing && data && <GPUPrices gpus={data.gpus} onClose={() => setPricing(false)} onChanged={reload} />}
     </section>
   );
 }
@@ -105,47 +107,233 @@ export default function Capacity() {
 function ModelCard(props: {
   m: CapacityModel;
   canMeasure: boolean;
-  onMeasure: () => void;
+  onMeasure: (shape: string) => void;
   onHistory: () => void;
   onStop: (run: CapacityRun) => void;
+  onChanged: () => Promise<void>;
 }) {
   const { m } = props;
-  const sites = m.sites.map((s) => `${s.cluster_name} (${s.instances == null ? "ready count unknown" : `${s.instances} ready`})`);
+  const [open, setOpen] = useState("");
+  const action = useAction();
+  const editTarget = () => {
+    const text = prompt(
+      `The share of the day ${m.model_name}'s instances are expected to be busy, in percent. The prices that pay for them are worked out at it.`,
+      String(Math.round(m.target_utilization * 100)),
+    );
+    if (text == null) return;
+    const n = Number(text);
+    if (!(n >= 5 && n <= 100)) {
+      alert("Give a number from 5 to 100.");
+      return;
+    }
+    action.run(async () => {
+      await api.setTargetUtilization(m.model_id, n / 100);
+      await props.onChanged();
+    });
+  };
+  const latest = (key: string) => m.latest.find((r) => r.shape.key === key);
+
   return (
     <div className="card">
       <div className="dash-head">
         <div>
           <h2>{m.model_name}</h2>
-          <p className="detail">{sites.length > 0 ? `Served on ${sites.join(", ")}` : "No site serves this model."}</p>
+          <p className="detail">
+            Expected busy share {percent(m.target_utilization)}{" "}
+            <button className="link" disabled={action.busy} onClick={editTarget}>
+              change
+            </button>
+            {m.plan.observed_utilization != null && <> · an average day uses {percent(m.plan.observed_utilization)}</>}
+          </p>
         </div>
         <div className="row-actions">
           <button onClick={props.onHistory}>Measurements</button>
-          {m.running ? (
+          {m.running && (
             <button className="danger" onClick={() => props.onStop(m.running!)}>
               Stop
-            </button>
-          ) : (
-            <button
-              className="primary"
-              disabled={!props.canMeasure || m.sites.length === 0}
-              title="Measure one ready pod of the model with AIPerf. It runs as a Job on the cluster."
-              onClick={props.onMeasure}
-            >
-              Measure
             </button>
           )}
         </div>
       </div>
+      <ErrorBanner message={action.error} />
       {m.running && <Running run={m.running} />}
-      {m.plan && m.latest?.result.best ? (
-        <Plan m={m} plan={m.plan} run={m.latest} best={m.latest.result.best} />
+      {m.deployments.length === 0 ? (
+        <p className="detail">No site has a deployment of this model, or discovery has not read it yet.</p>
       ) : (
-        !m.running && (
-          <p className="detail">
-            Not measured yet. A measurement finds the highest load one instance serves within your latency targets.
-          </p>
-        )
+        <>
+          <Summary plan={m.plan} />
+          <div className="table-wrap">
+            <table className="plain">
+              <thead>
+                <tr>
+                  <th>Shape</th>
+                  <th>Sites</th>
+                  <th className="text-right">Ready</th>
+                  <th className="text-right">In flight within targets</th>
+                  <th className="text-right">One instance a day</th>
+                  <th className="text-right">Cost an hour</th>
+                  <th className="text-right" title="What a million input-equivalent tokens cost on this shape busy all day">
+                    Cost per 1M
+                  </th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {m.plan.shapes.map((s) => {
+                  const run = latest(s.shape.key);
+                  return (
+                    <Fragment key={s.shape.key}>
+                      <ShapeRow
+                        s={s}
+                        unit={m.unit}
+                        run={run}
+                        canMeasure={props.canMeasure && !m.running && s.shape.topology !== "prefill-decode"}
+                        open={open === s.shape.key}
+                        onToggle={() => setOpen(open === s.shape.key ? "" : s.shape.key)}
+                        onMeasure={() => props.onMeasure(s.shape.key)}
+                      />
+                      {open === s.shape.key && run && (
+                        <tr>
+                          <td colSpan={8}>
+                            <RunDetail run={run} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
+      {m.plan.notes.map((n) => (
+        <p key={n} className="detail">
+          {n}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function ShapeRow(props: {
+  s: CapacityShapePlan;
+  unit: Unit;
+  run?: CapacityRun;
+  canMeasure: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onMeasure: () => void;
+}) {
+  const { s, run } = props;
+  const pd = s.shape.topology === "prefill-decode";
+  return (
+    <tr>
+      <td className="shape-cell">
+        {s.shape.label}
+        {run && (
+          <div className="detail">
+            Measured {formatTime(run.created_at)} on {run.cluster_name}
+          </div>
+        )}
+      </td>
+      <td className="nowrap">{s.sites.join(", ")}</td>
+      <td className="text-right tabular-nums">{s.instances}</td>
+      <td className="text-right tabular-nums">{s.measured ? s.concurrency : <span className="tag warn">not measured</span>}</td>
+      <td className="text-right tabular-nums">{s.measured ? perDay(s.per_instance_day, props.unit) : "–"}</td>
+      <td className="text-right tabular-nums">{s.cost_per_instance_hour == null ? "–" : formatDollars(s.cost_per_instance_hour)}</td>
+      <td className="text-right tabular-nums">{s.cost_per_million == null ? "–" : formatPrice(s.cost_per_million)}</td>
+      <td className="row-actions">
+        {run && <button onClick={props.onToggle}>{props.open ? "Hide steps" : "Steps"}</button>}
+        <button
+          className={s.measured ? undefined : "primary"}
+          disabled={!props.canMeasure}
+          title={
+            pd
+              ? "An instance of this shape is prefill and decode pods together, which is not measured yet."
+              : "Measure one ready pod of this shape with AIPerf. It runs as a Job on its cluster."
+          }
+          onClick={props.onMeasure}
+        >
+          Measure
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function Summary({ plan }: { plan: CapacityPlan }) {
+  const show = (n: number) => perDay(n, plan.unit);
+  return (
+    <div className="dash-grid">
+      <div className="panel">
+        <h3>What the model can be given a day</h3>
+        {plan.capacity_day > 0 ? (
+          <Bar label="Given to tenants" used={plan.allocated_day} limit={plan.capacity_day} format={show} />
+        ) : (
+          <p className="detail">Nothing yet: no measured shape has a ready instance.</p>
+        )}
+        <p className="detail">
+          What the {plan.measured_instances} measured {plan.measured_instances === 1 ? "instance serves" : "instances serve"}{" "}
+          busy all day, {show(plan.full_day)}, × {percent(plan.utilization)} busy ={" "}
+          <span className="strong">{show(plan.capacity_day)}</span>.
+        </p>
+        {plan.overcommit != null && plan.overcommit > 1 && (
+          <p className="detail warn-text">
+            The daily budgets add up to {plan.overcommit.toFixed(2)}× that. It holds while tenants do not use them all on
+            the same day.
+          </p>
+        )}
+        {plan.safe_allocated_day != null && (
+          <p className="detail">
+            If tenants keep using their budgets as on the busiest day, the budgets could add up to{" "}
+            <span className="strong">{show(plan.safe_allocated_day)}</span> a day before such a day fills it.
+          </p>
+        )}
+      </div>
+
+      <div className="panel">
+        <h3>Busiest day in 30 days</h3>
+        {plan.busiest_share != null && plan.full_day > 0 ? (
+          <>
+            <Bar label="Used" used={plan.busiest_day} limit={plan.full_day} format={show} />
+            <p className="detail">Out of what the measured instances serve busy all day.</p>
+          </>
+        ) : (
+          <p className="detail">No usage recorded yet, or nothing measured.</p>
+        )}
+        {plan.observed_utilization != null && (
+          <p className="detail">
+            An average day used {percent(plan.observed_utilization)} of it; the prices are worked out at{" "}
+            {percent(plan.utilization)}.
+          </p>
+        )}
+      </div>
+
+      <div className="panel">
+        <h3>Cost and price</h3>
+        {plan.cost_per_hour == null ? (
+          <p className="detail">Set the price of every GPU the measured shapes run on to see what they cost.</p>
+        ) : (
+          <p className="detail">The measured instances cost {formatDollars(plan.cost_per_hour)} an hour.</p>
+        )}
+        {plan.charged_per_hour != null && (
+          <p className="detail">
+            Busy for an hour at the model's prices, they are charged {formatDollars(plan.charged_per_hour)}
+            {plan.cost_per_hour ? `: ${(plan.charged_per_hour / plan.cost_per_hour).toFixed(2)}× their cost` : ""}.
+          </p>
+        )}
+        {plan.break_even && (
+          <p className="detail">
+            One set of prices that pays for them at {percent(plan.utilization)} busy, per 1M tokens:{" "}
+            <span className="strong">
+              {formatPrice(plan.break_even.price_input)} input, {formatPrice(plan.break_even.price_cached)} cached,{" "}
+              {formatPrice(plan.break_even.price_output)} output
+            </span>
+            . Tenants pay it whichever shape serves them. Set it on the Models page under Prices.
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -154,118 +342,28 @@ function Running({ run }: { run: CapacityRun }) {
   const last = run.steps[run.steps.length - 1];
   return (
     <div className="banner info">
-      Measuring {run.namespace}/{run.instance} on {run.cluster_name} since {formatTime(run.created_at)}:{" "}
+      Measuring {run.shape.label}: pod {run.namespace}/{run.instance} on {run.cluster_name} since{" "}
+      {formatTime(run.created_at)}.{" "}
       {run.steps.length === 0
-        ? "making up the sessions and starting the first step."
+        ? "Making up the sessions and starting the first step."
         : `${run.steps.length} of ${run.settings.concurrency.length} steps done, the last at ${last.concurrency} in flight.`}{" "}
       It stops at the first step that misses a target.
     </div>
   );
 }
 
-function Plan(props: { m: CapacityModel; plan: CapacityPlan; run: CapacityRun; best: CapacityStep }) {
-  const { plan, run, best } = props;
-  const set = run.settings;
-  const share = cachedShare(best);
-  const full = plan.per_instance_day * plan.instances;
-  const show = (n: number) => perDay(n, plan.unit);
+function RunDetail({ run }: { run: CapacityRun }) {
   return (
     <>
-      <div className="dash-grid">
-        <div className="panel">
-          <h3>One instance</h3>
-          <div className="rate-now">
-            {best.concurrency}
-            <span className="detail"> requests in flight within the targets</span>
-          </div>
-          <p className="detail">
-            {rate(perSecond(best.input_tokens, best))} prompt tokens a second
-            {share != null ? `, ${percent(share)} of them from the cache` : ""}, and{" "}
-            {rate(perSecond(best.output_tokens, best))} output tokens a second.
-          </p>
-          <p className="detail">
-            Time to first token p95 {seconds(best.ttft_p95_ms)} (target {seconds(set.ttft_p95_ms)}), between tokens p95{" "}
-            {seconds(best.itl_p95_ms)} (target {seconds(set.itl_p95_ms)}). Average prompt {Math.round(best.isl_mean).toLocaleString("en-US")} tokens.
-          </p>
-          <p className="detail">
-            Measured {formatTime(run.created_at)} on {run.cluster_name}, pod {run.instance}. {sentence(run.result.limit)}.
-          </p>
-        </div>
-
-        <div className="panel">
-          <h3>What the model can be given a day</h3>
-          {plan.capacity_day > 0 ? (
-            <Bar label="Given to tenants" used={plan.allocated_day} limit={plan.capacity_day} format={show} />
-          ) : (
-            <p className="detail">No instance is ready, so the model can be given nothing now.</p>
-          )}
-          <p className="detail">
-            {plan.instances} {plan.instances === 1 ? "instance" : "instances"} × {show(plan.per_instance_day)} each when busy all
-            day × {percent(set.utilization)} busy = <span className="strong">{show(plan.capacity_day)}</span>.
-          </p>
-          {plan.overcommit != null && plan.overcommit > 1 && (
-            <p className="detail warn-text">
-              The budgets add up to {plan.overcommit.toFixed(2)}× what the model serves. That holds only while tenants do not
-              use them all on the same day.
-            </p>
-          )}
-          {plan.overcommit != null && plan.overcommit <= 1 && (
-            <p className="detail">
-              The budgets take {percent(plan.overcommit)} of it; {show(plan.capacity_day - plan.allocated_day)} a day is
-              left to give.
-            </p>
-          )}
-        </div>
-
-        <div className="panel">
-          <h3>Busiest day in 30 days</h3>
-          {plan.busiest_share != null && full > 0 ? (
-            <>
-              <Bar label="Used" used={plan.busiest_day} limit={full} format={show} />
-              <p className="detail">Out of what every ready instance serves busy all day.</p>
-            </>
-          ) : (
-            <p className="detail">No usage recorded yet.</p>
-          )}
-        </div>
-
-        <div className="panel">
-          <h3>Cost and price</h3>
-          {plan.cost_per_instance_hour == null ? (
-            <p className="detail">Give what an instance costs an hour when you measure, to see the price that pays for it.</p>
-          ) : (
-            <p className="detail">An instance costs {formatDollars(plan.cost_per_instance_hour)} an hour.</p>
-          )}
-          {plan.charged_per_instance_hour != null && (
-            <p className="detail">
-              At the model's prices, one busy instance is charged {formatDollars(plan.charged_per_instance_hour)} an hour
-              {plan.cost_per_instance_hour
-                ? `: ${(plan.charged_per_instance_hour / plan.cost_per_instance_hour).toFixed(2)}× its cost`
-                : ""}
-              .
-            </p>
-          )}
-          {plan.break_even && (
-            <p className="detail">
-              Prices that pay for the instances at {percent(set.utilization)} busy, per 1M tokens:{" "}
-              <span className="strong">
-                {formatPrice(plan.break_even.price_input)} input, {formatPrice(plan.break_even.price_cached)} cached,{" "}
-                {formatPrice(plan.break_even.price_output)} output
-              </span>
-              . Set them on the Models page under Prices.
-            </p>
-          )}
-        </div>
-      </div>
-      {plan.notes.map((n) => (
-        <p key={n} className="detail">
-          {n}
-        </p>
-      ))}
-      <h3>Load steps</h3>
+      <p className="detail">
+        Pod {run.namespace}/{run.instance}.{" "}
+        {run.dataset &&
+          `${run.dataset.sessions} sessions, prompts of ${Math.round(run.dataset.prompt_mean).toLocaleString("en-US")} tokens on average and up to ${run.dataset.prompt_max.toLocaleString("en-US")}. `}
+        {run.result.limit && `${sentence(run.result.limit)}.`}
+      </p>
       <LoadChart
         steps={run.steps.filter((s) => !s.error)}
-        ttftTarget={set.ttft_p95_ms}
+        ttftTarget={run.settings.ttft_p95_ms}
         title={`Output tokens a second and time to first token at each load step of ${run.model_name}`}
       />
       <Steps run={run} />
@@ -291,9 +389,8 @@ function Steps({ run }: { run: CapacityRun }) {
           </tr>
         </thead>
         <tbody>
-          {run.steps.map((s) => {
-            const share = cachedShare(s);
-            const ok = meets(s, run.settings);
+          {run.steps.map((s, i) => {
+            const v = run.result.steps[i];
             return (
               <tr key={s.concurrency} className={run.result.best?.concurrency === s.concurrency ? "best" : undefined}>
                 <td className="text-right tabular-nums">{s.concurrency}</td>
@@ -307,9 +404,9 @@ function Steps({ run }: { run: CapacityRun }) {
                       {s.requests}
                       {s.errors > 0 && <span className="detail warn-text"> ({s.errors} failed)</span>}
                     </td>
-                    <td className="text-right tabular-nums">{rate(perSecond(s.input_tokens, s))}</td>
-                    <td className="text-right tabular-nums">{rate(perSecond(s.output_tokens, s))}</td>
-                    <td className="text-right tabular-nums">{share == null ? "–" : percent(share)}</td>
+                    <td className="text-right tabular-nums">{rate(v.input_per_s)}</td>
+                    <td className="text-right tabular-nums">{rate(v.output_per_s)}</td>
+                    <td className="text-right tabular-nums">{v.cached_share == null ? "–" : percent(v.cached_share)}</td>
                     <td className="text-right tabular-nums">
                       {seconds(s.ttft_p50_ms)} / {seconds(s.ttft_p95_ms)}
                     </td>
@@ -318,7 +415,20 @@ function Steps({ run }: { run: CapacityRun }) {
                     </td>
                   </>
                 )}
-                <td>{ok ? <span className="tag">met</span> : <span className="tag warn">missed</span>}</td>
+                <td>
+                  {v.met ? (
+                    <span className="tag">met</span>
+                  ) : (
+                    <span className="tag warn" title={v.reason}>
+                      missed
+                    </span>
+                  )}
+                  {v.few_samples && (
+                    <span className="tag warn" title="The step reached its longest time before enough requests were answered">
+                      few samples
+                    </span>
+                  )}
+                </td>
               </tr>
             );
           })}
@@ -328,75 +438,114 @@ function Steps({ run }: { run: CapacityRun }) {
   );
 }
 
-function MeasureForm(props: { m: CapacityModel; onClose: () => void; onStarted: () => Promise<void> }) {
+const targetKey = (x: { cluster_id: string; namespace: string; name: string }) => `${x.cluster_id}/${x.namespace}/${x.name}`;
+
+function MeasureForm(props: { m: CapacityModel; shape: string; onClose: () => void; onStarted: () => Promise<void> }) {
   const { m } = props;
   const d = m.defaults;
-  const first = m.sites.find((s) => (s.instances ?? 0) > 0) ?? m.sites[0];
-  const [site, setSite] = useState(first?.cluster_id ?? "");
+  const candidates = m.deployments.filter((x) => x.shape.key === props.shape && !x.drained);
+  const [target, setTarget] = useState(candidates[0] ? targetKey(candidates[0]) : "");
+  const chosen = candidates.find((x) => targetKey(x) === target);
+  const pods = useLoad(() => (chosen ? api.deploymentPods(chosen.cluster_id, chosen.namespace, chosen.name) : Promise.resolve([])));
   const [pod, setPod] = useState("");
+  const [accept, setAccept] = useState(false);
   const [steps, setSteps] = useState(d.concurrency.join(", "));
+  const [minRequests, setMinRequests] = useState(String(d.min_requests));
   const [stepSeconds, setStepSeconds] = useState(String(d.step_seconds));
   const [sessions, setSessions] = useState(String(d.sessions));
-  const [maxPrompt, setMaxPrompt] = useState(String(d.max_prompt_tokens));
+  const longest = chosen?.max_model_len ? Math.min(d.max_prompt_tokens, chosen.max_model_len - d.max_output_tokens) : d.max_prompt_tokens;
+  const [maxPrompt, setMaxPrompt] = useState(String(longest));
   const [maxOutput, setMaxOutput] = useState(String(d.max_output_tokens));
   const [ttft, setTTFT] = useState(String(d.ttft_p95_ms));
   const [itl, setITL] = useState(String(d.itl_p95_ms));
-  const [cost, setCost] = useState(m.latest ? String(m.latest.settings.instance_cost_per_hour_usd || "") : "");
-  const [utilization, setUtilization] = useState(String(Math.round(d.utilization * 100)));
-
-  const settings: CapacitySettings = {
-    concurrency: steps
-      .split(/[\s,]+/)
-      .filter(Boolean)
-      .map(Number),
-    step_seconds: Number(stepSeconds),
-    sessions: Number(sessions),
-    max_prompt_tokens: Number(maxPrompt),
-    max_output_tokens: Number(maxOutput),
-    ttft_p95_ms: Number(ttft),
-    itl_p95_ms: Number(itl),
-    instance_cost_per_hour_usd: Number(cost || 0),
-    utilization: Number(utilization) / 100,
-  };
-  const chosen = m.sites.find((s) => s.cluster_id === site);
 
   const start = async () => {
-    await api.startCapacityRun(m.model_id, { cluster_id: site, pod: pod.trim() || undefined, settings });
+    if (!chosen) throw new Error("Choose a deployment.");
+    if (!pod) throw new Error("Choose the pod to measure.");
+    if (!accept) throw new Error("Confirm that the pod's users may get slower answers.");
+    await api.startCapacityRun(m.model_id, {
+      cluster_id: chosen.cluster_id,
+      namespace: chosen.namespace,
+      deployment: chosen.name,
+      pod,
+      settings: {
+        concurrency: steps
+          .split(/[\s,]+/)
+          .filter(Boolean)
+          .map(Number),
+        min_requests: Number(minRequests),
+        step_seconds: Number(stepSeconds),
+        sessions: Number(sessions),
+        max_prompt_tokens: Number(maxPrompt),
+        max_output_tokens: Number(maxOutput),
+        ttft_p95_ms: Number(ttft),
+        itl_p95_ms: Number(itl),
+      },
+    });
     await props.onStarted();
   };
 
   return (
-    <FormModal title={`Measure ${m.model_name}`} submitLabel="Start" onClose={props.onClose} onSubmit={start} wide>
+    <FormModal
+      title={`Measure ${m.model_name}: ${chosen?.shape.label ?? ""}`}
+      submitLabel="Start"
+      onClose={props.onClose}
+      onSubmit={start}
+      wide
+    >
       <p className="hint">
         AIPerf runs in a Job on the cluster and sends made-up coding-agent sessions straight to one pod, past the gateway
-        and the scheduler: a shared system prompt and tools, repository files, and a history that grows each turn, as
-        Claude Code or Cursor send. Every step keeps a number of requests in flight; the first step that misses a target
-        ends the measurement. Nothing of a prompt reaches this server, and no tenant is charged.
-      </p>
-      <p className="banner warn">
-        The pod keeps its own traffic while it is measured, and its users see slower answers. Measure a pod that takes
-        no traffic, or a quiet hour.
+        and the scheduler: a shared system prompt and tools, repository files, and a history that grows each turn. Every
+        step keeps a number of requests in flight until enough are answered; the first step that misses a target ends the
+        measurement. The result counts for every deployment of this shape. Nothing of a prompt reaches this server, and no
+        tenant is charged.
       </p>
       <div className="grid-2">
-        <Field label="Site" hint={chosen?.max_model_len ? `Its deployment takes up to ${chosen.max_model_len.toLocaleString("en-US")} tokens.` : undefined}>
-          <select value={site} onChange={(e) => setSite(e.target.value)}>
-            {m.sites.map((s) => (
-              <option key={s.cluster_id} value={s.cluster_id}>
-                {s.cluster_name}
+        <Field
+          label="Deployment"
+          hint={chosen?.max_model_len ? `Takes up to ${chosen.max_model_len.toLocaleString("en-US")} tokens.` : undefined}
+        >
+          <select
+            value={target}
+            onChange={(e) => {
+              setTarget(e.target.value);
+              setPod("");
+              setTimeout(pods.reload);
+            }}
+          >
+            {candidates.map((x) => (
+              <option key={targetKey(x)} value={targetKey(x)}>
+                {x.cluster_name}: {x.namespace}/{x.name} ({x.instances ?? "?"} ready)
               </option>
             ))}
           </select>
         </Field>
-        <Field label="Pod" hint="Optional. Empty takes the first ready pod of the model.">
-          <input value={pod} onChange={(e) => setPod(e.target.value)} placeholder="any ready pod" />
+        <Field label="Pod" hint={pods.error || "A pod that takes no traffic gives the cleanest figure, such as one extra replica."}>
+          <select required value={pod} onChange={(e) => setPod(e.target.value)}>
+            <option value="">
+              {pods.error ? "The pods could not be read" : !pods.data ? "Reading the pods…" : pods.data.length ? "Choose a ready pod" : "No ready pod"}
+            </option>
+            {pods.data?.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
         </Field>
       </div>
+      <label className="check">
+        <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} />
+        <span>The pod keeps its own traffic while it is measured, and its users get slower answers until it ends.</span>
+      </label>
       <h3>Load</h3>
       <div className="grid-3">
         <Field label="Requests in flight, by step" hint="Ascending, up to 12 steps.">
           <input required value={steps} onChange={(e) => setSteps(e.target.value)} />
         </Field>
-        <Field label="Seconds per step" hint="60 to 3600. Long prompts need minutes to settle.">
+        <Field label="Requests per step, at least" hint="Four per request in flight above it. A p95 needs enough.">
+          <input required type="number" min={10} max={2000} value={minRequests} onChange={(e) => setMinRequests(e.target.value)} />
+        </Field>
+        <Field label="Longest a step may take, s" hint="A step that runs out first is marked as having few samples.">
           <input required type="number" min={60} max={3600} value={stepSeconds} onChange={(e) => setStepSeconds(e.target.value)} />
         </Field>
         <Field label="Sessions" hint="Made up once, replayed at every step.">
@@ -418,17 +567,93 @@ function MeasureForm(props: { m: CapacityModel; onClose: () => void; onStarted: 
           <input required type="number" min={1} max={10000} step="any" value={itl} onChange={(e) => setITL(e.target.value)} />
         </Field>
       </div>
-      <h3>Cost</h3>
-      <div className="grid-3">
-        <Field label="One instance, $ per hour" hint="GPUs, power, rack and people. Optional.">
-          <input type="number" min={0} max={100000} step="any" value={cost} onChange={(e) => setCost(e.target.value)} />
-        </Field>
-        <Field label="Expected busy share, %" hint="Of the day, across the instances.">
-          <input required type="number" min={1} max={100} value={utilization} onChange={(e) => setUtilization(e.target.value)} />
-        </Field>
-      </div>
-      <p className="hint">It takes at most {longest(settings)}, and usually less.</p>
     </FormModal>
+  );
+}
+
+function GPUPrices(props: { gpus: CapacityGPU[]; onClose: () => void; onChanged: () => Promise<void> }) {
+  const [rows, setRows] = useState(() => props.gpus.map((g) => ({ ...g, text: g.usd_per_hour == null ? "" : String(g.usd_per_hour) })));
+  const [added, setAdded] = useState("");
+  const action = useAction();
+  const change = (i: number, patch: Partial<(typeof rows)[number]>) => setRows(rows.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const save = (i: number) =>
+    action.run(async () => {
+      await api.setGPUPrice(rows[i].gpu, Number(rows[i].text), rows[i].note);
+      change(i, { usd_per_hour: Number(rows[i].text) });
+      await props.onChanged();
+    });
+  const remove = (i: number) =>
+    action.run(async () => {
+      await api.deleteGPUPrice(rows[i].gpu);
+      change(i, { usd_per_hour: null, text: "" });
+      await props.onChanged();
+    });
+  return (
+    <Modal title="GPU prices" onClose={props.onClose} wide>
+      <ErrorBanner message={action.error} />
+      <p className="hint">
+        What one GPU costs an hour, all in: the hardware over its life, power, cooling, rack, network and the people who
+        run it. An instance costs its GPUs times this. The GPUs are read from the node label{" "}
+        <span className="mono">nvidia.com/gpu.product</span> of the model's pods.
+      </p>
+      <div className="table-wrap">
+        <table className="plain">
+          <thead>
+            <tr>
+              <th>GPU</th>
+              <th className="text-right">Deployments</th>
+              <th>$ an hour</th>
+              <th>Note</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.gpu}>
+                <td className="mono">{r.gpu}</td>
+                <td className="text-right tabular-nums">{r.deployments}</td>
+                <td>
+                  <input
+                    type="number"
+                    min={0.01}
+                    max={1000}
+                    step="any"
+                    value={r.text}
+                    aria-label={`Price of ${r.gpu}`}
+                    onChange={(e) => change(i, { text: e.target.value })}
+                  />
+                </td>
+                <td>
+                  <input value={r.note} maxLength={500} aria-label={`Note on ${r.gpu}`} onChange={(e) => change(i, { note: e.target.value })} />
+                </td>
+                <td className="row-actions">
+                  <button className="primary" disabled={action.busy || !(Number(r.text) > 0)} onClick={() => save(i)}>
+                    Save
+                  </button>
+                  {r.usd_per_hour != null && (
+                    <button className="danger" disabled={action.busy} onClick={() => remove(i)}>
+                      Remove
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="inline-form">
+        <input placeholder="Another GPU, as its node label names it" value={added} onChange={(e) => setAdded(e.target.value)} />
+        <button
+          disabled={!added.trim() || rows.some((r) => r.gpu === added.trim())}
+          onClick={() => {
+            setRows([...rows, { gpu: added.trim(), usd_per_hour: null, note: "", deployments: 0, text: "" }]);
+            setAdded("");
+          }}
+        >
+          Add
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -450,20 +675,13 @@ function RunHistory(props: { m: CapacityModel; onClose: () => void; onChanged: (
         <div key={run.id} className="endpoint">
           <div className="dash-head">
             <div>
-              <span className="strong">{formatTime(run.created_at)}</span> · {run.cluster_name}, pod {run.instance}{" "}
-              <span className={run.status === "succeeded" ? "tag" : "tag warn"}>{run.status}</span>
+              <span className="strong">{formatTime(run.created_at)}</span> · {run.shape.label} · {run.cluster_name}, pod{" "}
+              {run.instance} <span className={run.status === "succeeded" ? "tag" : "tag warn"}>{run.status}</span>
               <p className="detail">
                 {run.result.best
                   ? `${run.result.best.concurrency} in flight within the targets. ${sentence(run.result.limit)}.`
                   : run.detail || "No step has finished."}
               </p>
-              {run.dataset && (
-                <p className="detail">
-                  {run.dataset.sessions} sessions, {run.dataset.requests} requests, prompts of{" "}
-                  {Math.round(run.dataset.prompt_mean).toLocaleString("en-US")} tokens on average and up to{" "}
-                  {run.dataset.prompt_max.toLocaleString("en-US")}.
-                </p>
-              )}
             </div>
             <div className="row-actions">
               <button onClick={() => setOpen(open === run.id ? "" : run.id)}>{open === run.id ? "Hide steps" : "Steps"}</button>
@@ -474,7 +692,7 @@ function RunHistory(props: { m: CapacityModel; onClose: () => void; onChanged: (
               )}
             </div>
           </div>
-          {open === run.id && <Steps run={run} />}
+          {open === run.id && <RunDetail run={run} />}
         </div>
       ))}
     </Modal>
