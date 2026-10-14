@@ -503,7 +503,11 @@ function MeasureForm(props: { m: CapacityModel; shape: string; onClose: () => vo
       <div className="grid-2">
         <Field
           label="Deployment"
-          hint={chosen?.max_model_len ? `Takes up to ${chosen.max_model_len.toLocaleString("en-US")} tokens.` : undefined}
+          hint={
+            chosen?.max_model_len
+              ? `Takes up to ${chosen.max_model_len.toLocaleString("en-US")} tokens.`
+              : "It does not declare how long a request it takes (aigw-ui.io/max-model-len). The Job asks the pod and stops at once if the longest prompt and answer do not fit."
+          }
         >
           <select
             value={target}
