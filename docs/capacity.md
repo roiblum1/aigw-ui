@@ -1,26 +1,57 @@
 # Capacity
 
-The **Capacity** page answers three questions for each model:
+The **Capacity** page answers, for each model:
 
-- How much does one instance serve at the latency you promise?
+- How much does one instance of each of its shapes serve at the latency
+  you promise?
 - How much can the model therefore be given a day, in dollars or tokens?
-- How much of that do the tenants' budgets already take, and how far are
-  they overcommitted?
+- How much of that do the tenants' budgets take, and how far could they
+  go?
+- Which one set of prices pays for its GPUs, and no more?
 
-It also works out the prices that pay for the instances, from what an
-instance costs an hour.
-
-The answer comes from a measurement with
+The figures come from measurements with
 [AIPerf](https://github.com/ai-dynamo/aiperf), NVIDIA's benchmark for model
-servers. It runs in a Job on the cluster. The prompts never reach the hub.
+servers. A measurement runs in a Job on the cluster. The prompts never reach
+the hub.
+
+## Shapes
+
+One model can run in several ways at once: on one node of 8× B300 at one
+site, on 8× H200 at another, on prefill and decode pods spread over several
+nodes at a third. Each serves a different amount. The hub calls what one
+instance is a **shape**, and reads it from each deployment
+(LLMInferenceService) when it polls the cluster:
+
+| Part of a shape | Read from |
+|---|---|
+| GPU | The node label `nvidia.com/gpu.product` of the deployment's ready pods, which the NVIDIA GPU Operator sets |
+| GPUs per instance | What the ready pods ask for (`nvidia.com/gpu`), divided by the ready instances |
+| Topology | One node; several nodes (`spec.worker`); prefill and decode (`spec.prefill`) |
+| Revision | The annotation `aigw-ui.io/model-revision` |
+
+A measurement counts for every deployment of the same model and shape,
+wherever it runs. A new site with a shape that is already measured needs no
+new measurement. A shape that is not measured is listed and not counted.
+
+**Prefill and decode is not measured yet.** One of its instances is several
+pods, so the Job would have to go through the deployment's scheduler, which
+in this platform answers only on the gateway's peer listener with its client
+certificate. Until then such a shape is listed as not measured.
+
+## GPU prices
+
+**GPU prices** on the page holds what one GPU costs an hour, all in: the
+hardware over its life (three or four years), power, cooling, rack, network
+and the people who run it. An instance costs its GPUs times this. The list
+shows every GPU the fleet's deployments run on; one without a price leaves
+the cost of its models out, and the page says so.
 
 ## How a measurement works
 
-1. **One pod.** The hub picks a ready pod of the model's deployment, or the
-   one you name, and starts a Job next to it in the same namespace. The Job
-   sends requests straight to the pod's address, past the gateway and the
-   scheduler, so the result is what one instance serves. The hub multiplies
-   it by the ready instances on every site.
+1. **One pod, chosen on purpose.** **Measure** on a shape's row opens a
+   form: a deployment of that shape, then one of its ready pods. The Job
+   starts in the deployment's namespace and sends requests straight to the
+   pod's address, past the gateway and the scheduler.
 2. **Coding-agent sessions.** AIPerf makes up sessions the way a coding
    agent such as Claude Code or Cursor sends them (`aiperf synthesize
    agentic-code`):
@@ -33,21 +64,22 @@ servers. It runs in a Job on the cluster. The prompts never reach the hub.
    | Answer | about 1,000 tokens, at most 1,500 | |
 
    A session grows until it reaches 167,000 tokens or ends early, so a
-   prompt is about 100,000 tokens on average. Between turns it waits like
-   an agent running a tool (2.5 s on average) or, one turn in three, like a
-   person (40 s). A deployment that takes shorter prompts gets every part
-   scaled down by the same factor. The measurement shows the average and the
-   longest prompt it made up.
+   prompt is about 100,000 tokens on average. There is no pause between
+   turns: a step keeps its requests in flight. A deployment that takes
+   shorter prompts gets every part scaled down by the same factor. The
+   measurement shows the average and the longest prompt it made up.
 3. **Steps.** The Job replays the sessions with a fixed number of requests
-   in flight: 1, 2, 4, 8, 16, 32, 64 by default, each for 5 minutes. The
-   same sessions are replayed at every step, so after the first one the
-   shared parts are in the cache, as on a busy day.
+   in flight: 1, 2, 4, 8, 16, 32, 64 by default. A step sends at least 60
+   requests, and four per request in flight above that, so its 95th
+   percentile rests on enough of them. It stops after 20 minutes even so,
+   and is then marked as having few samples. The same sessions are replayed
+   at every step, so after the first one the shared parts are in the cache,
+   as on a busy day.
 4. **Targets.** A step meets them when at most 1% of its requests failed,
    the 95th percentile of the time to the first token is within its target
    (5 s by default), and the 95th percentile of the time between tokens is
    within its target (50 ms, 20 tokens a second for each user, by default).
-   The Job stops at the first step that misses: a higher load only gets
-   slower.
+   The Job stops at the first step that misses.
 5. **Result.** The highest step that met the targets, with every step
    below it meeting them too.
 
@@ -59,7 +91,7 @@ reads every 20 seconds:
 | Requests answered and failed | AIPerf |
 | Prompt and output tokens | The model server's `usage`, as AIPerf records it |
 | Time to first token, time between tokens: p50 and p95 | AIPerf |
-| Share of prompt tokens from the cache | The pod's own counters, `vllm:prompt_tokens_cached_total` over `vllm:prompt_tokens_total`, before and after the step |
+| Share of prompt tokens from the cache | The pod's own counters before and after the step: `vllm:prompt_tokens_cached_total` over `vllm:prompt_tokens_total`, or `vllm:prefix_cache_hits_total` over `vllm:prefix_cache_queries_total` |
 
 **Nothing of a prompt reaches the hub**: the Job makes its prompts up and
 the hub reads only these lines. **No tenant is charged**: the requests do
@@ -71,99 +103,124 @@ not pass the gateway.
   LLM clusters can pull. The offline bundle builds one from
   `deploy/aiperf/Containerfile` and `load-images.sh` prints the value to
   set. It has the vocabulary of AIPerf's built-in tokenizer inside, so a
-  measurement downloads nothing. Without the setting the page says so and
-  nothing can be measured.
-- **The pod keeps its traffic.** While it is measured, its users get slower
-  answers, and their requests make the result lower. Measure a pod that
-  takes no traffic, such as one extra replica that you then name in the
-  form, or a quiet hour.
+  measurement downloads nothing. CI runs the Job's script in that image
+  against a stand-in for vLLM on every change.
+- **The pod keeps its traffic.** While it is measured its users get slower
+  answers, and their requests make the result lower. The form asks you to
+  confirm. A pod that takes no traffic gives the cleanest figure, such as
+  one extra replica that you then name.
 - **One at a time.** A model is measured on one pod at a time.
-- **Not measured yet.** A deployment with separate prefill pods, where one
-  instance is two pods, and a pod that answers only over HTTPS.
 - **Network.** The Job must reach the pod's port. A NetworkPolicy in the
   namespace that only lets the gateway in also keeps the Job out.
+- **HTTPS.** A pod that answers only over HTTPS is not measured yet.
 
 The Job is called `aigw-capacity-<id>`, asks for 2 CPUs and 4 GiB, never
-restarts, and is stopped by Kubernetes after the longest the steps can take
-(each step plus 6 minutes, plus 15). It is deleted 7 days after it ends.
-**Stop** deletes it at once; the steps it finished are kept.
+restarts, and is stopped by Kubernetes after the longest the steps can take.
+It is deleted 7 days after it ends. **Stop** deletes it at once; the steps it
+finished are kept. See [security](security.md) for what this needs on the
+cluster.
 
 ## Reading the result
 
-**One instance.** The requests in flight it serves within the targets, the
-tokens a second at that load, and the share of prompt tokens from the cache.
+**The shapes table.** For each shape: its sites, its ready instances, the
+requests in flight one instance serves within the targets, what one
+instance serves in a day busy all day, what it costs an hour, and what a
+million input-equivalent tokens cost on it busy all day. The last column
+shows which hardware serves the model for the least.
+
+What an instance serves a second is valued in the model's unit:
+
+```
+priced model:   (prompt - cached) x input price + cached x cached price + output x output price
+otherwise:      prompt + output tokens
+```
+
+The second is what a quota counts unless the model has its own cost
+expression.
 
 **What the model can be given a day.**
 
 ```
-per instance a day = what one instance serves a second, in the model's unit x 86,400
-can be given       = per instance a day x ready instances x expected busy share
+busy all day   = sum over measured shapes of: one instance a day x ready instances
+can be given   = busy all day x expected busy share
 ```
 
-What an instance serves a second is valued at the model's prices:
+Instances on a drained site are not counted. **Given to tenants** is every
+enabled tenant's enforced daily budget on the model. Quotas per minute or
+per hour limit a rate and are not budgets, so they are not added; the page
+says how many there are. **Overcommit** is given divided by can be given.
+
+**How far the budgets could go.** If tenants keep using their budgets as on
+the busiest day of the last 30, the budgets could add up to
 
 ```
-(prompt - cached) x input price + cached x cached price + output x output price
+can be given x given / busiest day
 ```
 
-For a model without prices it is prompt plus output tokens, which is what a
-quota counts unless the model has its own cost expression. The busy share
-is set in the form, 60% by default.
-
-**Given to tenants.** Every enabled tenant's enforced limit on the model,
-as an amount a day: a limit per hour counts 24 times. Dry-run quotas are
-left out.
-
-**Overcommit** is given divided by can be given. Above 1 is usual: not
-every tenant uses its whole budget, and not on the same day. How far is
-safe shows in the next figure.
+before such a day fills what the model can be given.
 
 **Busiest day in 30 days** is the most the model was used in one day,
-best-effort included, against what every ready instance serves busy all day.
-A model given 3× its capacity whose busiest day used 25% of it has room;
-one whose busiest day used 90% has none.
+best-effort included, against what the measured instances serve busy all
+day. **An average day** is the same for the mean of the 30 days.
 
-**Cost and price.** With the cost of one instance an hour, the page works
-out the prices that pay for the instances at the expected busy share, the
-same arithmetic as [setting a price without profit](pricing.md#setting-a-price-without-profit):
+**Expected busy share.** Each model has one, 60% until you change it. The
+prices are worked out at it. The page shows next to it the share an average
+day really used. Raising it lowers the price; it should follow what the
+platform sustains, not be set high to make the price low, because a share
+the platform does not reach leaves the GPUs' cost unpaid. Dividing by
+actual use instead would raise the price in a quiet month, which makes
+tenants use less, which raises it again.
+
+**Cost and price.** With every measured shape's GPU priced:
 
 ```
-input price per 1M = cost an hour / (3,600 x weighted tokens a second x busy share) x 1,000,000
-weighted           = (prompt - cached) + cached ratio x cached + output ratio x output
+cost an hour        = sum over measured shapes of: GPUs per instance x GPU price x ready instances
+input price per 1M  = cost an hour / (3,600 x weighted tokens a second x expected busy share) x 1,000,000
+weighted            = sum over measured shapes of: ready instances x
+                      ((prompt - cached) + cached ratio x cached + output ratio x output)
 ```
 
 The ratios are the model's own prices (cached over input, output over
-input), or a tenth and four for a model without prices. For a priced model
-the page also shows what one busy instance is charged an hour, and that
-divided by its cost.
+input), or a tenth and four for a model without prices. The result is one
+set of prices for the model: tenants pay the same whichever shape serves
+them, and at the expected busy share the prices pay for the GPUs exactly,
+without profit. For a priced model the page also shows what the measured
+instances are charged busy for an hour, and that divided by their cost.
 
-**Load steps.** A chart of the output tokens a second and the time to first
-token at each step, against its target, and a table with every figure.
-**Measurements** lists the earlier ones of the model.
+**Steps.** A shape's row opens the chart of its latest measurement (output
+tokens a second and time to first token at each step, against its target)
+and a table of every step. **Measurements** lists the earlier ones.
 
 ## What the figures leave out
 
-- One pod and one kind of traffic. A model with other prompts, another
-  quantization or other GPUs needs its own measurement.
+- One pod and one kind of traffic. A model whose prompts are short, such as
+  a small model used for chat, is better measured with a shorter longest
+  prompt.
 - The cache share depends on the replay: every session's shared part is
   cached after the first step. Real traffic with many repositories caches
   less.
 - The pod's counters include any other traffic it served during a step.
 - The scheduler's choice of replica by cache is not part of it. Multiplying
   by the ready instances assumes it spreads the load evenly.
+- The site weights of the entry route do not use the measurements yet; they
+  still follow `aigw-ui.io/capacity-per-instance`.
 
 ## API
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| GET | `/capacity` | | `{"image", "models": [...]}`: for each model its sites, the defaults for a new measurement, the latest result, the plan and the one running |
+| GET | `/capacity` | | `{"image", "gpus", "models"}`: for each model its deployments with their shapes, the expected busy share, the defaults for a new measurement, the latest result of each shape, the plan and the measurement running |
+| PUT | `/models/{id}/target-utilization` | `{"utilization"}` | 204. 0.05 to 1 |
+| PUT | `/gpu-prices/{gpu}` | `{"usd_per_hour", "note"}` | 204 |
+| DELETE | `/gpu-prices/{gpu}` | | 204 |
+| GET | `/clusters/{id}/deployments/{namespace}/{name}/pods` | | The deployment's ready pods, read from the cluster |
 | GET | `/models/{id}/capacity-runs` | | The model's measurements, newest first |
-| POST | `/models/{id}/capacity-runs` | `{"cluster_id", "pod", "settings"}` | 201 and the measurement. 409 with the reason when it cannot start |
-| GET | `/capacity-runs/{id}` | | One measurement |
+| POST | `/models/{id}/capacity-runs` | `{"cluster_id", "namespace", "deployment", "pod", "settings"}` | 201 and the measurement. 409 with the reason when it cannot start |
+| GET | `/capacity-runs/{id}` | | One measurement, with `result.steps` saying of each step whether it met the targets |
 | POST | `/capacity-runs/{id}/cancel` | | The measurement, stopped |
 | DELETE | `/capacity-runs/{id}` | | 204. 409 while it runs |
 
-`settings` holds `concurrency` (a list), `step_seconds`, `sessions`,
-`max_prompt_tokens`, `max_output_tokens`, `ttft_p95_ms`, `itl_p95_ms`,
-`instance_cost_per_hour_usd` and `utilization` (0 to 1). What is left out
-takes its default for the site's deployment.
+`settings` holds `concurrency` (a list), `min_requests`, `step_seconds`
+(the longest a step may take), `sessions`, `max_prompt_tokens`,
+`max_output_tokens`, `ttft_p95_ms` and `itl_p95_ms`. What is left out takes
+its default for the deployment.
