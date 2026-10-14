@@ -18,7 +18,7 @@ podman load -i images.tar
 # The chart drops an image's own registry host and keeps the rest of its path.
 strip_host() { case "${1%%/*}" in *.*|*:*|localhost) echo "${1#*/}" ;; *) echo "$1" ;; esac; }
 
-for image in "$APP_IMAGE" "$PG_IMAGE"; do
+for image in "$APP_IMAGE" "$AIPERF_IMAGE" "$PG_IMAGE"; do
   target="${REGISTRY}/$(strip_host "$image")"
   echo ">> ${image} -> ${target}"
   podman tag "$image" "$target"
@@ -31,5 +31,6 @@ Images are in ${REGISTRY}. Install with:
 
   helm upgrade --install aigw-ui ./aigw-ui-*.tgz \\
     --namespace aigw-ui --create-namespace \\
-    --set global.imageRegistry=${REGISTRY}
+    --set global.imageRegistry=${REGISTRY} \\
+    --set capacity.image=${REGISTRY}/$(strip_host "$AIPERF_IMAGE")
 MSG

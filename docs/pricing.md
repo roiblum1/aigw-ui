@@ -57,7 +57,8 @@ that hour.
    people who run it) divided by the number of GPUs times 8,760.
 2. **What a GPU serves.** Measure the model under load at the latency you
    promise: input tokens per second plus four times the output tokens per
-   second.
+   second. The [Capacity](capacity.md) page measures it and does this
+   arithmetic for you.
 3. **Target utilization.** The share of the day you expect the GPUs to be
    busy, for example 0.6.
 

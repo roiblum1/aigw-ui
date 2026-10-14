@@ -1,0 +1,15 @@
+# The image a capacity measurement runs on the LLM clusters: AIPerf, with the
+# vocabulary of its built-in tokenizer inside, so a measurement downloads
+# nothing. Built by deploy/offline/build-bundle.sh.
+FROM docker.io/library/python:3.13-slim
+ARG AIPERF_VERSION=0.13.0
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TIKTOKEN_CACHE_DIR=/opt/tiktoken \
+    HF_HUB_OFFLINE=1 \
+    HOME=/tmp
+RUN pip install "aiperf==${AIPERF_VERSION}" \
+ && python -c "import tiktoken; tiktoken.get_encoding('o200k_base')" \
+ && chmod -R a+rX /opt/tiktoken
+WORKDIR /tmp
+USER 1001

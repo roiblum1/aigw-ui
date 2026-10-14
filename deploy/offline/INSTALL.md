@@ -5,7 +5,7 @@ install time or at run time.
 
 | File | What it is |
 |---|---|
-| `images.tar` | The application image and the Postgres image |
+| `images.tar` | The application image, the AIPerf image for capacity measurements, and the Postgres image |
 | `aigw-ui-<version>.tgz` | The Helm chart |
 | `load-images.sh` | Pushes the images to your internal registry |
 
@@ -24,8 +24,12 @@ podman login registry.example.internal:5000
 ```sh
 helm upgrade --install aigw-ui ./aigw-ui-*.tgz \
   --namespace aigw-ui --create-namespace \
-  --set global.imageRegistry=registry.example.internal:5000
+  --set global.imageRegistry=registry.example.internal:5000 \
+  --set capacity.image=registry.example.internal:5000/roiblum1/aigw-aiperf:0.13.0
 ```
+
+`capacity.image` is pulled by the LLM clusters, not the hub: a capacity
+measurement runs there as a Job. `load-images.sh` prints the exact value.
 
 If the registry needs credentials, create a pull secret in the namespace and
 add `--set 'global.imagePullSecrets={my-pull-secret}'`.
@@ -61,4 +65,5 @@ added again. The chart keeps the Secret on `helm uninstall` for that reason.
 ## Network access the hub needs
 
 - From the application pod to the Kubernetes API of every LLM cluster (usually port 6443).
+- From every LLM cluster to the internal registry, for the AIPerf image.
 - From your browser and the self-service portal to the Route.

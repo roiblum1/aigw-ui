@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.13.0](v0.13.0.md) | not released yet | A Capacity page: measure one instance with AIPerf, see what a model can be given a day, the overcommit of its budgets, and the prices that pay for it |
 | [0.12.3](v0.12.3.md) | not released yet | Entry route health check every 3s and no refusal when every site fails it; quotas, model card and self-test for a fleet model served from a pool only; budget plugins for Claude Code and Oh My Pi |
 | [0.12.2](v0.12.2.md) | not released yet | Docs corrected: what best-effort does under load; why a site is not chosen by its cache |
 | [0.12.1](v0.12.1.md) | not released yet | A new quota on a model from a cluster's own chart is counted at once |

@@ -420,6 +420,11 @@ the usage report `dry_run` while nobody is refused.
 `default_limit` and `token_limit` can be at most 4294967295, in either
 unit. The gateway cannot count further in one window.
 
+### Capacity
+
+Measuring what one instance of a model serves, and what the model can be
+given. See [capacity](capacity.md#api) for the paths.
+
 ## Tenants, keys and quotas
 
 | Method | Path | Body | Result |

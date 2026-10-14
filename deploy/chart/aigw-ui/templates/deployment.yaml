@@ -62,6 +62,10 @@ spec:
               value: {{ .Values.config.tenantPage | quote }}
             - name: BEST_EFFORT_PRIORITY
               value: {{ .Values.config.bestEffortPriority | quote }}
+            {{- with .Values.capacity.image }}
+            - name: CAPACITY_IMAGE
+              value: {{ . | quote }}
+            {{- end }}
             {{- if or .Values.redis.url .Values.redis.existingSecret }}
             - name: REDIS_URL
               valueFrom:
