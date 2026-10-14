@@ -34,7 +34,9 @@ gateway resources it manages; create on Secrets plus get, patch and delete on
 the one Secret named `aigw-ui-api-keys`; and get on the `Gateway`. It never
 lists Secrets. Across the cluster it reads LLMInferenceServices, the pods of
 their deployments (`kserve.io/component=workload`) and the nodes' labels, to
-count ready instances and find each deployment's GPU. A ServiceAccount
+count ready instances and find each deployment's GPU. Without list on pods
+and nodes the instances are still counted, the GPUs are not known, and the
+cluster's discovery message says what was not allowed. A ServiceAccount
 kubeconfig limited to that would reduce the damage if the hub were
 compromised.
 

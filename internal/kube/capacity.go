@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -78,6 +79,10 @@ type ModelCapacity struct {
 	// Pools are the InferencePools the model's deployments are served
 	// through, one per deployment that has a scheduler.
 	Pools []Pool
+	// ShapesDenied names what the hub was not allowed to list to find its
+	// deployments' GPUs: "pods", "nodes" or both. Their GPUs are then not
+	// known.
+	ShapesDenied []string
 }
 
 // Pool names an InferencePool: the set of pods of one deployment that its
@@ -143,7 +148,7 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 
 		mc := byModel[model]
 		if mc == nil {
-			mc = &ModelCapacity{Model: model}
+			mc = &ModelCapacity{Model: model, ShapesDenied: gpus.denied}
 			byModel[model] = mc
 		}
 		mc.Known = mc.Known || known
@@ -295,21 +300,29 @@ type Deployment struct {
 type gpuShapes struct {
 	pods     []unstructured.Unstructured
 	products map[string]string // node name -> GPU product
+	denied   []string          // what the hub may not list
 }
 
 // gpuShapes reads the workload pods and the nodes' GPU labels. Not being
 // allowed to read them is not an error: the shapes are then unknown and
-// everything else is counted as before.
+// everything else is counted as before. The refusal is kept, so that it can
+// be shown instead of a GPU that looks unlabelled.
 func (c *Client) gpuShapes(ctx context.Context) gpuShapes {
 	var g gpuShapes
-	if pods, err := c.dyn.Resource(podsGVR).List(ctx, metav1.ListOptions{LabelSelector: "kserve.io/component=workload"}); err == nil {
+	pods, err := c.dyn.Resource(podsGVR).List(ctx, metav1.ListOptions{LabelSelector: "kserve.io/component=workload"})
+	if err == nil {
 		g.pods = pods.Items
+	} else if apierrors.IsForbidden(err) {
+		g.denied = append(g.denied, "pods")
 	}
 	g.products = map[string]string{}
-	if nodes, err := c.dyn.Resource(nodesGVR).List(ctx, metav1.ListOptions{LabelSelector: GPUProductLabel}); err == nil {
+	nodes, err := c.dyn.Resource(nodesGVR).List(ctx, metav1.ListOptions{LabelSelector: GPUProductLabel})
+	if err == nil {
 		for _, n := range nodes.Items {
 			g.products[n.GetName()] = n.GetLabels()[GPUProductLabel]
 		}
+	} else if apierrors.IsForbidden(err) {
+		g.denied = append(g.denied, "nodes")
 	}
 	return g
 }

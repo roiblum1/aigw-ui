@@ -29,6 +29,10 @@ instance is a **shape**, and reads it from each deployment
 | Topology | One node; several nodes (`spec.worker`); prefill and decode (`spec.prefill`) |
 | Revision | The annotation `aigw-ui.io/model-revision` |
 
+The hub must be allowed to list pods and nodes on the cluster to read the
+GPU. When it is not, the GPU is not known and the cluster's discovery
+message on the Clusters page says so; see [security](security.md).
+
 A measurement counts for every deployment of the same model and shape,
 wherever it runs. A new site with a shape that is already measured needs no
 new measurement. A shape that is not measured is listed and not counted.

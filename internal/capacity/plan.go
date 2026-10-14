@@ -241,7 +241,7 @@ func MakePlan(in PlanInput) Plan {
 	case gpuUnknown:
 		// Nothing to price: its nodes carry no nvidia.com/gpu.product, or
 		// its pods ask for no GPU.
-		p.Notes = append(p.Notes, "The GPU of a measured shape is not known, so the cost and the prices that pay for it are not worked out. Its nodes need the label nvidia.com/gpu.product and its pods a request for nvidia.com/gpu.")
+		p.Notes = append(p.Notes, "The GPU of a measured shape is not known, so the cost and the prices that pay for it are not worked out. The hub reads it from the label nvidia.com/gpu.product of the nodes its pods run on and from the pods' requests for nvidia.com/gpu, and must be allowed to list both; the cluster's discovery message says when it is not.")
 	case !costKnown:
 		p.Notes = append(p.Notes, "A measured shape runs on a GPU without a price, so the cost and the prices that pay for it are not worked out. Set it under GPU prices.")
 	}
