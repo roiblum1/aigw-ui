@@ -17,7 +17,9 @@ import (
 // tenants' quotas on it, and it never touches manual endpoints. A model may
 // have no backends: it is then listed, but a quota cannot be attached to it.
 // It reports whether anything that affects rendering changed.
-func (s *Store) ApplyDiscovery(ctx context.Context, clusterID string, found []DiscoveredModel) (bool, error) {
+// note is added to the cluster's discovery message, for what the poll could
+// not read without failing.
+func (s *Store) ApplyDiscovery(ctx context.Context, clusterID string, found []DiscoveredModel, note string) (bool, error) {
 	changed := false
 	var skipped []string
 	names := make([]string, 0, len(found))
@@ -88,6 +90,9 @@ func (s *Store) ApplyDiscovery(ctx context.Context, clusterID string, found []Di
 		msg := fmt.Sprintf("%d models found", len(names))
 		if len(skipped) > 0 {
 			msg += fmt.Sprintf("; skipped %q: the name cannot be used or clashes with another model", skipped)
+		}
+		if note != "" {
+			msg += "; " + note
 		}
 		_, err = tx.Exec(ctx, `UPDATE clusters SET discovery_message = $2, discovered_at = now() WHERE id = $1`, clusterID, msg)
 		return err

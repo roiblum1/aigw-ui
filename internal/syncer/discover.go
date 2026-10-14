@@ -104,7 +104,7 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 			models = append(models, store.DiscoveredModel{Name: mc.Model, OnlyIfKnown: true})
 		}
 	}
-	changed, err := s.st.ApplyDiscovery(ctx, id, models)
+	changed, err := s.st.ApplyDiscovery(ctx, id, models, shapesNote(capacity))
 	if err != nil {
 		return 0, err
 	}
@@ -113,6 +113,17 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 	}
 	s.observeCapacity(ctx, c, capacity)
 	return len(found), nil
+}
+
+// shapesNote says what the hub was not allowed to list to find the GPUs of
+// the cluster's deployments, or "" when it was allowed.
+func shapesNote(capacity []kube.ModelCapacity) string {
+	for _, mc := range capacity {
+		if len(mc.ShapesDenied) > 0 {
+			return "not allowed to list " + strings.Join(mc.ShapesDenied, " or ") + ", so the GPUs of its deployments are not known"
+		}
+	}
+	return ""
 }
 
 // observeCapacity stores how many instances of each model the cluster has
