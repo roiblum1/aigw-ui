@@ -146,6 +146,7 @@ func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, found []k
 		}
 		reported = append(reported, c)
 	}
+	s.measuredBasis(ctx, c.ID, reported)
 	if err := s.st.ApplyCapacity(ctx, c.ID, reported); err != nil {
 		slog.Error("store model capacity", "cluster", c.Name, "err", err)
 	}

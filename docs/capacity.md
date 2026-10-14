@@ -263,8 +263,10 @@ and a table of every step. **Measurements** lists the earlier ones.
 - The pod's counters include any other traffic it served during a step.
 - The scheduler's choice of replica by cache is not part of it. Multiplying
   by the ready instances assumes it spreads the load evenly.
-- The site weights of the entry route do not use the measurements yet; they
-  still follow `aigw-ui.io/capacity-per-instance`.
+- The site weights of the entry route use the measurements only when every
+  deployment of the model with a ready instance has a measured shape;
+  until then they follow `aigw-ui.io/capacity-per-instance`. See
+  [architecture](architecture.md).
 
 ## API
 

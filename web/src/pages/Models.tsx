@@ -297,9 +297,13 @@ function SiteWeight({ model, endpoint }: { model: Model; endpoint: Endpoint }) {
   const target = c.drained ? 0 : c.observed;
   const moving = target !== null && target !== c.weight;
   const goal = target === null ? "" : ` → ${Math.max(1, Math.round(target * 100))}`;
+  const measured = c.basis === "measured";
   const title =
     `${c.detail}\nCapacity applied ${c.weight ?? "unknown"}, last read ${c.observed ?? "unknown"} at ${formatTime(c.observed_at)}; ` +
     `changed ${formatTime(c.changed_at)}.\nThe weight is the capacity × 100, and at least 1.` +
+    (measured
+      ? "\nThe capacity comes from the measured shapes of the model's deployments, because every site's are measured."
+      : "\nThe capacity comes from aigw-ui.io/capacity-per-instance, until every site's deployments of the model are measured.") +
     (moving ? "\nIt moves one instance per poll, and drops only after two polls agree." : "");
   return (
     <span className={moving || c.drained ? "tag warn" : "tag manual"} title={title}>
@@ -307,6 +311,7 @@ function SiteWeight({ model, endpoint }: { model: Model; endpoint: Endpoint }) {
       weight {mine.weight}
       {moving ? goal : ""}
       {share}
+      {measured && " · measured"}
     </span>
   );
 }

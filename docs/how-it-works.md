@@ -245,7 +245,9 @@ serve of the model.
 
 **How.** A site's capacity is its ready instances times the capacity of one
 instance, which you declare on the `LLMInferenceService` with
-`aigw-ui.io/capacity-per-instance`. The weight is the capacity times 100.
+`aigw-ui.io/capacity-per-instance`, or which the hub takes from the
+measurements once every deployment of the model is measured. The weight is
+the capacity times 100.
 
 **Why.**
 

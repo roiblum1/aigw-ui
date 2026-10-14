@@ -145,6 +145,46 @@ func TestDeploymentsFromDiscovery(t *testing.T) {
 	}
 }
 
+// A capacity that changes basis changes unit, and is taken at once. Within one
+// basis it still rises one instance per poll.
+func TestCapacityBasisChange(t *testing.T) {
+	s, ctx := open(t)
+	glm := model(t, s, ctx, "glm", false)
+	site, err := s.CreateCluster(ctx, Cluster{Name: "site-a", Namespace: "ai-gateway", GatewayName: "gw"}, []byte("kubeconfig"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(ctx, `INSERT INTO model_endpoints (model_id, cluster_id, upstream_model, source, backends) VALUES ($1, $2, '', 'discovered', '[]')`, glm, site.ID); err != nil {
+		t.Fatal(err)
+	}
+	applied := func(c Capacity) (float64, string) {
+		t.Helper()
+		if err := s.ApplyCapacity(ctx, site.ID, []Capacity{c}); err != nil {
+			t.Fatal(err)
+		}
+		models, err := s.ListModels(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := models[0].Endpoints[0].Capacity
+		return *e.Weight, e.Basis
+	}
+	if w, b := applied(Capacity{Model: "glm", Capacity: 2, Step: 1, Known: true}); w != 2 || b != BasisDeclared {
+		t.Fatalf("first reading: %v %s", w, b)
+	}
+	if w, _ := applied(Capacity{Model: "glm", Capacity: 4, Step: 1, Known: true}); w != 3 {
+		t.Fatalf("one instance up: %v", w)
+	}
+	// Measured: 2 instances of 20 thousand tokens a second, taken at once.
+	if w, b := applied(Capacity{Model: "glm", Capacity: 40, Step: 20, Known: true, Basis: BasisMeasured}); w != 40 || b != BasisMeasured {
+		t.Fatalf("measured: %v %s", w, b)
+	}
+	// And back to the annotation at once, too.
+	if w, b := applied(Capacity{Model: "glm", Capacity: 2, Step: 1, Known: true}); w != 2 || b != BasisDeclared {
+		t.Fatalf("declared again: %v %s", w, b)
+	}
+}
+
 func TestGPUPricesAndTargetUtilization(t *testing.T) {
 	s, ctx := open(t)
 	glm := model(t, s, ctx, "glm", false)
