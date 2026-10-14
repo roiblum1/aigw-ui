@@ -2,6 +2,7 @@ package capacity
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 )
@@ -103,7 +104,10 @@ func TestPlanAddsUpShapes(t *testing.T) {
 			{Shape: Shape{Topology: "single", GPU: "NVIDIA-H200", GPUsPerInstance: 8}, Instances: 1, Sites: []string{"haifa"}, Measured: &h200, GPUPrice: &gpuH200},
 			{Shape: Shape{Topology: "prefill-decode", GPU: "NVIDIA-H200", GPUsPerInstance: 16}, Instances: 3, Sites: []string{"haifa"}, GPUPrice: &gpuH200},
 		},
-		AllocatedPerDay: 50_000_000, RateLimits: 2, BusiestDay: 10_000_000, TotalUsed: 150_000_000,
+		// $500 a day, and two budgets of $0.01 an hour, which can take $0.24 a day each.
+		Budgets:    []Budget{{Limit: 50_000_000, Window: "1d"}, {Limit: 1_000, Window: "1h"}, {Limit: 1_000, Window: "1h"}},
+		Pool:       &Budget{Limit: 2_000_000, Window: "1h"},
+		BusiestDay: 10_000_000, TotalUsed: 150_000_000,
 	})
 
 	// A B300 second: 1,000 uncached at 0.1 + 9,000 cached at 0.01 + 100 out at 0.4 = 230 credits; H200 half that.
@@ -131,8 +135,19 @@ func TestPlanAddsUpShapes(t *testing.T) {
 	if *p.ChargedPerHour != (2*230+115)*3600 {
 		t.Fatalf("charged = %d", *p.ChargedPerHour)
 	}
+	// Given: $500 + 2 × $0.24. The ceiling is the capacity at the default
+	// 1.5×, and the budgets are past it.
+	if p.GivenDay != 50_048_000 || p.ShortWindows != 2 || p.OvercommitLimit != DefaultOvercommitLimit {
+		t.Fatalf("given = %d, short windows %d, limit %v", p.GivenDay, p.ShortWindows, p.OvercommitLimit)
+	}
+	if p.CeilingDay != p.CapacityDay*3/2 || p.LeftDay != p.CeilingDay-p.GivenDay || p.LeftDay >= 0 {
+		t.Fatalf("ceiling %d left %d capacity %d", p.CeilingDay, p.LeftDay, p.CapacityDay)
+	}
 	if o := *p.Overcommit; o < 2.01 || o > 2.02 {
 		t.Fatalf("overcommit = %v", o)
+	}
+	if p.PoolDay == nil || *p.PoolDay != 48_000_000 {
+		t.Fatalf("pool = %v", p.PoolDay)
 	}
 	if b := *p.BusiestShare; b < 0.2 || b > 0.202 {
 		t.Fatalf("busiest share = %v", b)
@@ -141,11 +156,21 @@ func TestPlanAddsUpShapes(t *testing.T) {
 		t.Fatalf("observed = %v", u)
 	}
 	// The busiest day used a fifth of the budgets, so they could be 5× the capacity.
-	if *p.SafeAllocatedDay != p.CapacityDay*5 {
+	if *p.SafeAllocatedDay != int64(math.Round(float64(p.CapacityDay)*50_048_000/10_000_000)) {
 		t.Fatalf("safe = %d, capacity %d", *p.SafeAllocatedDay, p.CapacityDay)
 	}
-	if len(p.Notes) != 2 { // 3 instances not measured; 2 rate limits
+	// 3 instances not measured; 2 hourly budgets; past the limit; a pool above the capacity.
+	if len(p.Notes) != 4 || !strings.Contains(p.Notes[1], "2 budgets are per minute or hour") ||
+		!strings.Contains(p.Notes[2], "past the overcommit limit") || !strings.Contains(p.Notes[3], "shared pool") {
 		t.Fatalf("notes = %v", p.Notes)
+	}
+
+	// Within the limit, what is left is the ceiling less what is given.
+	q := MakePlan(PlanInput{Unit: "credits", Prices: prices, Utilization: 0.5, OvercommitLimit: 3,
+		Shapes:  []ShapeInput{{Shape: Shape{Topology: "single", GPU: "NVIDIA-B300", GPUsPerInstance: 8}, Instances: 2, Measured: &b300, GPUPrice: &gpuB300}},
+		Budgets: []Budget{{Limit: 10_000_000, Window: "1d"}}})
+	if q.CapacityDay != 230*86400 || q.CeilingDay != 3*230*86400 || q.LeftDay != 3*230*86400-10_000_000 || len(q.Notes) != 0 {
+		t.Fatalf("within: %+v", q)
 	}
 }
 

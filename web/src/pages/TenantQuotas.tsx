@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
-import { api, type Model, type Quota, type Tenant, type Unit, type UsageReport, type Window } from "../api";
-import { LimitInput, WindowSelect, formatAmount, limitText, limitValue, windowLabel } from "../components";
+import { api, type Model, type ModelBudget, type Quota, type Tenant, type Unit, type UsageReport, type Window } from "../api";
+import { LimitInput, WindowSelect, formatAmount, limitText, limitValue, useLoad, windowLabel } from "../components";
 import { UsageMeter, confirmReset } from "./Usage";
 
 /** The quota being changed in its row: the model stays, the budget is edited. */
@@ -9,6 +9,67 @@ interface Edit {
   /** Tokens, or dollars for a model with prices. */
   limit: string;
   window: Window;
+}
+
+/** How many windows fit in a day: an hourly budget can be used 24 times. */
+const perDay: Record<Window, number> = { "1m": 1440, "1h": 24, "1d": 1 };
+
+/** The most a budget lets a tenant use in a day. */
+const dailyMax = (limit: number, window: Window) => limit * perDay[window];
+
+/** What the model's budgets add up to a day if this tenant's budget changes from before to after. */
+function afterChange(b: ModelBudget, before: number, after: number) {
+  const given = b.given_day - before + after;
+  return { given, left: b.ceiling_day - given, overcommit: b.capacity_day > 0 ? given / b.capacity_day : null };
+}
+
+/**
+ * Where a model's budgets stand against what its GPUs serve a day, and where
+ * they would stand with the budget being typed: before is this tenant's
+ * budget now, at its daily maximum, after the one in the form.
+ */
+function BudgetLine(props: { b: ModelBudget | undefined; before: number; after: number | null }) {
+  const { b } = props;
+  if (!b) return null;
+  const show = (n: number) => formatAmount(n, b.unit);
+  if (!b.measured) {
+    return (
+      <p className="hint">
+        {b.model_name} is not measured yet, so what it can be given is not known. Measure it on the Capacity page.
+      </p>
+    );
+  }
+  const next = props.after == null ? null : afterChange(b, props.before, props.after);
+  return (
+    <p className="hint">
+      {b.model_name} can be given {show(b.capacity_day)} a day, up to {show(b.ceiling_day)} with its{" "}
+      {b.overcommit_limit}× overcommit limit. The budgets take {show(b.given_day)}
+      {b.left_day >= 0 ? `, so ${show(b.left_day)} is left.` : `, ${show(-b.left_day)} past the ceiling.`}
+      {next && (
+        <>
+          {" "}
+          With this budget:{" "}
+          <span className={next.left < 0 ? "strong warn-text" : "strong"}>
+            {show(next.given)} given{next.overcommit != null && ` (${next.overcommit.toFixed(2)}×)`},{" "}
+            {next.left >= 0 ? `${show(next.left)} left` : `${show(-next.left)} past the ceiling`}
+          </span>
+          .
+        </>
+      )}
+    </p>
+  );
+}
+
+/** Asks before a budget takes a model past its ceiling. Nothing is refused. */
+function confirmBudget(b: ModelBudget | undefined, before: number, after: number): boolean {
+  if (!b?.measured) return true;
+  const next = afterChange(b, before, after);
+  if (next.left >= 0) return true;
+  const show = (n: number) => formatAmount(n, b.unit);
+  return confirm(
+    `${b.model_name}'s budgets would add up to ${show(next.given)} a day, ${show(-next.left)} past its ceiling of ${show(b.ceiling_day)} ` +
+      `(${b.overcommit_limit}× what its GPUs serve a day). If tenants then use more than the GPUs serve, every answer gets slower. Save it anyway?`,
+  );
 }
 
 /**
@@ -35,24 +96,44 @@ export default function TenantQuotas(props: {
     shadow: false,
   });
   const [edit, setEdit] = useState<Edit | null>(null);
+  const budgets = useLoad(api.budgets);
+  const budgetOf = (modelId: string) => budgets.data?.models.find((b) => b.model_id === modelId);
+  /** Runs a change, then reads the budgets again. */
+  const change = (fn: () => Promise<unknown>) =>
+    act(async () => {
+      await fn();
+      await budgets.reload();
+    });
+  // What this tenant can use a day over the models counted in dollars.
+  const dollarsDay = quotas
+    .filter((q) => q.unit === "credits" && !q.shadow)
+    .reduce((n, q) => n + dailyMax(q.token_limit, q.window), 0);
 
   const usageOf = (modelId: string) => usage?.quotas.find((u) => u.model_id === modelId);
   const withQuota = new Set(quotas.map((q) => q.model_id));
   const free = props.models.filter((m) => !withQuota.has(m.id));
   const addedUnit: Unit = props.models.find((m) => m.id === added.model_id)?.unit ?? "tokens";
 
+  const addedAfter = added.limit === "" || added.shadow ? null : dailyMax(limitValue(added.limit, addedUnit), added.window);
   const add = (e: FormEvent) => {
     e.preventDefault();
-    act(async () => {
+    if (addedAfter != null && !confirmBudget(budgetOf(added.model_id), 0, addedAfter)) return;
+    change(async () => {
       await api.setQuota(tenant.id, added.model_id, limitValue(added.limit, addedUnit), added.window, added.shadow);
       setAdded({ model_id: "", limit: "", window: added.window, shadow: false });
     });
   };
 
+  /** A quota's budget a day as counted against the model, 0 for a dry run. */
+  const counted = (q: Quota) => (q.shadow ? 0 : dailyMax(q.token_limit, q.window));
+  const editedAfter = (q: Quota) =>
+    !edit || edit.limit === "" || q.shadow ? null : dailyMax(limitValue(edit.limit, q.unit), edit.window);
   const save = (e: FormEvent, q: Quota) => {
     e.preventDefault();
     if (!edit) return;
-    act(async () => {
+    const after = editedAfter(q);
+    if (after != null && !confirmBudget(budgetOf(q.model_id), counted(q), after)) return;
+    change(async () => {
       await api.setQuota(tenant.id, q.model_id, limitValue(edit.limit, q.unit), edit.window, q.shadow);
       setEdit(null);
     });
@@ -64,6 +145,13 @@ export default function TenantQuotas(props: {
       <p className="hint">
         One budget per model, counted across every site. A model with prices is counted in dollars, any other in
         tokens.
+        {dollarsDay > 0 && (
+          <>
+            {" "}
+            Over the models in dollars, this tenant can use up to <span className="strong">{formatAmount(dollarsDay, "credits")}</span>{" "}
+            a day.
+          </>
+        )}
       </p>
       {free.length === 0 ? (
         props.models.length > 0 && <p className="hint">Every model has a quota. Change one with Edit in its row.</p>
@@ -97,6 +185,7 @@ export default function TenantQuotas(props: {
           </button>
         </form>
       )}
+      {added.model_id && <BudgetLine b={budgetOf(added.model_id)} before={0} after={addedAfter} />}
       {quotas.length === 0 ? (
         <p className="hint">No quotas yet.</p>
       ) : (
@@ -175,7 +264,7 @@ export default function TenantQuotas(props: {
                         )}
                         <button
                           disabled={busy}
-                          onClick={() => act(() => api.setQuota(tenant.id, q.model_id, q.token_limit, q.window, !q.shadow))}
+                          onClick={() => change(() => api.setQuota(tenant.id, q.model_id, q.token_limit, q.window, !q.shadow))}
                         >
                           {q.shadow ? "Enforce" : "Dry run"}
                         </button>
@@ -183,7 +272,7 @@ export default function TenantQuotas(props: {
                           className="danger"
                           disabled={busy}
                           onClick={() =>
-                            confirm(`Remove the quota of ${tenant.slug} on ${q.model_name}?`) && act(() => api.deleteQuota(q.id))
+                            confirm(`Remove the quota of ${tenant.slug} on ${q.model_name}?`) && change(() => api.deleteQuota(q.id))
                           }
                         >
                           Remove
@@ -197,6 +286,10 @@ export default function TenantQuotas(props: {
           </tbody>
         </table>
       )}
+      {edit &&
+        quotas
+          .filter((q) => q.id === edit.id)
+          .map((q) => <BudgetLine key={q.id} b={budgetOf(q.model_id)} before={counted(q)} after={editedAfter(q)} />)}
       {edit && (
         <p className="hint">
           What the tenant has used in this window stays counted against the new limit. Changing the window starts a new

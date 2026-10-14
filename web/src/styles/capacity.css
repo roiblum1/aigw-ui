@@ -70,6 +70,9 @@
   .nowrap {
     white-space: nowrap;
   }
+  .ok-text {
+    color: var(--success);
+  }
   /* A long column title takes two lines, so the shapes fit beside the menu. */
   th.wrap {
     white-space: normal;

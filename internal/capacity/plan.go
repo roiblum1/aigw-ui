@@ -43,6 +43,41 @@ func ThroughputOf(s Step) Throughput {
 	return t
 }
 
+// InputEquivalent is what one instance serves a second in input-equivalent
+// tokens: uncached prompt tokens, cached ones and output tokens weighted by
+// what each costs against an input token. It is what the input price is
+// multiplied by to give the charge, and the one figure that compares two
+// shapes of a model.
+func InputEquivalent(t Throughput, cachedRatio, outputRatio float64) float64 {
+	return t.InputPerSecond - t.CachedPerSecond + cachedRatio*t.CachedPerSecond + outputRatio*t.OutputPerSecond
+}
+
+// Ratios returns what a cached prompt token and an output token cost against
+// an input token: the model's own prices, or a tenth and four without them.
+func Ratios(p *Prices) (cached, output float64) {
+	if p == nil || p.Input <= 0 {
+		return defaultCachedRatio, defaultOutputRatio
+	}
+	return float64(p.Cached) / float64(p.Input), float64(p.Output) / float64(p.Input)
+}
+
+// Budget is a limit in the model's unit over a window: a tenant's quota, or
+// the model's shared pool.
+type Budget struct {
+	Limit  int64
+	Window string
+}
+
+// PerDay is the most the budget lets be used in a day: a budget per hour can
+// be used 24 times.
+func (b Budget) PerDay() int64 {
+	return b.Limit * PerDay(b.Window)
+}
+
+// DefaultOvercommitLimit is how far the budgets may add up beyond what the
+// GPUs serve a day, until it is set for the model.
+const DefaultOvercommitLimit = 1.5
+
 // ShapeInput is one shape a model runs in, across every site.
 type ShapeInput struct {
 	Shape Shape
@@ -68,12 +103,14 @@ type PlanInput struct {
 	// Utilization is the share of the day the instances are expected to be
 	// busy: what the prices that pay for them are worked out at.
 	Utilization float64
-	Shapes      []ShapeInput
-	// AllocatedPerDay is the tenants' daily budgets on the model, in Unit.
-	// RateLimits counts the quotas per minute or hour, which are limits on
-	// a rate rather than budgets and are not added.
-	AllocatedPerDay int64
-	RateLimits      int
+	// OvercommitLimit is how far the tenants' budgets may add up beyond what
+	// the model can be given a day.
+	OvercommitLimit float64
+	Shapes          []ShapeInput
+	// Budgets are the enforced quotas of the enabled tenants on the model,
+	// in Unit. Pool is the model's shared pool, nil when it is the strict 1.
+	Budgets []Budget
+	Pool    *Budget
 	// The model's use over the last Days days, in Unit: the most in one day
 	// and all of it.
 	BusiestDay int64
@@ -115,12 +152,22 @@ type Plan struct {
 	// given.
 	FullDay     int64 `json:"full_day"`
 	CapacityDay int64 `json:"capacity_day"`
-	// AllocatedDay is the tenants' daily budgets; RateLimits the quotas per
-	// minute or hour, which are not added.
-	AllocatedDay int64 `json:"allocated_day"`
-	RateLimits   int   `json:"rate_limits"`
-	// Overcommit is AllocatedDay over CapacityDay.
+	// GivenDay is what the tenants' budgets let them use in a day: a budget
+	// per hour or minute at the most it allows in a day. ShortWindows counts
+	// those.
+	GivenDay     int64 `json:"given_day"`
+	ShortWindows int   `json:"short_windows"`
+	// Overcommit is GivenDay over CapacityDay.
 	Overcommit *float64 `json:"overcommit"`
+	// OvercommitLimit is how far GivenDay may go beyond CapacityDay,
+	// CeilingDay is CapacityDay times it, and LeftDay what can still be given
+	// under it: negative when the budgets are past it.
+	OvercommitLimit float64 `json:"overcommit_limit"`
+	CeilingDay      int64   `json:"ceiling_day"`
+	LeftDay         int64   `json:"left_day"`
+	// PoolDay is the most the model's shared pool lets be used in a day,
+	// nil when it is the strict 1.
+	PoolDay *int64 `json:"pool_day"`
 	// BusiestDay is the most used in one day, BusiestShare that over
 	// FullDay, and ObservedUtilization the average day over FullDay.
 	BusiestDay          int64    `json:"busiest_day"`
@@ -145,13 +192,22 @@ type Plan struct {
 // MakePlan works out what a model can be given from what each of its
 // shapes serves.
 func MakePlan(in PlanInput) Plan {
-	p := Plan{Unit: in.Unit, Utilization: in.Utilization, Shapes: []ShapePlan{}, AllocatedDay: in.AllocatedPerDay,
-		RateLimits: in.RateLimits, BusiestDay: in.BusiestDay, Notes: []string{}}
-	cachedRatio, outputRatio := defaultCachedRatio, float64(defaultOutputRatio)
-	if in.Prices != nil && in.Prices.Input > 0 {
-		cachedRatio = float64(in.Prices.Cached) / float64(in.Prices.Input)
-		outputRatio = float64(in.Prices.Output) / float64(in.Prices.Input)
+	p := Plan{Unit: in.Unit, Utilization: in.Utilization, OvercommitLimit: in.OvercommitLimit, Shapes: []ShapePlan{},
+		BusiestDay: in.BusiestDay, Notes: []string{}}
+	if p.OvercommitLimit < 1 {
+		p.OvercommitLimit = DefaultOvercommitLimit
 	}
+	for _, b := range in.Budgets {
+		p.GivenDay += b.PerDay()
+		if PerDay(b.Window) > 1 {
+			p.ShortWindows++
+		}
+	}
+	if in.Pool != nil {
+		d := in.Pool.PerDay()
+		p.PoolDay = &d
+	}
+	cachedRatio, outputRatio := Ratios(in.Prices)
 
 	var full, charged, weighted, cost float64
 	costKnown, noCache, gpuUnknown := true, false, false
@@ -174,9 +230,7 @@ func MakePlan(in PlanInput) Plan {
 				perSecond = t.InputPerSecond + t.OutputPerSecond
 			}
 			sp.PerInstanceDay = int64(math.Round(perSecond * 86400))
-			// Input-equivalent tokens a second: what the input price is
-			// multiplied by to give the charge.
-			w := uncached + cachedRatio*t.CachedPerSecond + outputRatio*t.OutputPerSecond
+			w := InputEquivalent(*t, cachedRatio, outputRatio)
 			if sp.CostPerInstanceHour != nil && w > 0 {
 				m := int64(math.Ceil(float64(*sp.CostPerInstanceHour) / (3600 * w) * 1e6))
 				sp.CostPerMillion = &m
@@ -198,8 +252,10 @@ func MakePlan(in PlanInput) Plan {
 
 	p.FullDay = int64(math.Round(full))
 	p.CapacityDay = int64(math.Round(full * in.Utilization))
+	p.CeilingDay = int64(math.Round(float64(p.CapacityDay) * p.OvercommitLimit))
+	p.LeftDay = p.CeilingDay - p.GivenDay
 	if p.CapacityDay > 0 {
-		o := float64(p.AllocatedDay) / float64(p.CapacityDay)
+		o := float64(p.GivenDay) / float64(p.CapacityDay)
 		p.Overcommit = &o
 	}
 	if p.FullDay > 0 {
@@ -210,8 +266,8 @@ func MakePlan(in PlanInput) Plan {
 			p.ObservedUtilization = &u
 		}
 	}
-	if p.BusiestDay > 0 && p.AllocatedDay > 0 && p.CapacityDay > 0 {
-		safe := int64(math.Round(float64(p.CapacityDay) * float64(p.AllocatedDay) / float64(p.BusiestDay)))
+	if p.BusiestDay > 0 && p.GivenDay > 0 && p.CapacityDay > 0 {
+		safe := int64(math.Round(float64(p.CapacityDay) * float64(p.GivenDay) / float64(p.BusiestDay)))
 		p.SafeAllocatedDay = &safe
 	}
 	if in.Prices != nil && p.MeasuredInstances > 0 {
@@ -251,8 +307,14 @@ func MakePlan(in PlanInput) Plan {
 	if in.Prices == nil && in.CostExpression != "" {
 		p.Notes = append(p.Notes, "The model has its own cost expression; the amounts assume a counter of input plus output tokens.")
 	}
-	if p.RateLimits > 0 {
-		p.Notes = append(p.Notes, fmtCount(p.RateLimits, "quota is", "quotas are")+" per minute or hour: limits on a rate, not budgets, so they are not added to what is given.")
+	if p.ShortWindows > 0 {
+		p.Notes = append(p.Notes, fmtCount(p.ShortWindows, "budget is", "budgets are")+" per minute or hour, and counted at the most "+itThey(p.ShortWindows)+" let a tenant use in a day.")
+	}
+	if p.CapacityDay > 0 && p.LeftDay < 0 {
+		p.Notes = append(p.Notes, "The budgets are past the overcommit limit: what is given is more than "+strconvFloat(p.OvercommitLimit)+" times what the GPUs serve a day.")
+	}
+	if p.PoolDay != nil && p.CapacityDay > 0 && *p.PoolDay > p.CapacityDay {
+		p.Notes = append(p.Notes, "The shared pool lets tenants use more in a day than the GPUs serve at the expected busy share; tenants past their budget are then served until it runs out.")
 	}
 	return p
 }
@@ -269,6 +331,13 @@ func isAre(n float64) string {
 		return "is"
 	}
 	return "are"
+}
+
+func itThey(n int) string {
+	if n == 1 {
+		return "it"
+	}
+	return "they"
 }
 
 func fmtCount(n int, one, many string) string {

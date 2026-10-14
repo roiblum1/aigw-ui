@@ -165,14 +165,21 @@ func TestGPUPricesAndTargetUtilization(t *testing.T) {
 		t.Fatalf("second delete: %v", err)
 	}
 
-	if targets, _ := s.TargetUtilizations(ctx); targets[glm] != 0.6 {
+	if targets, _ := s.CapacityTargets(ctx); targets[glm] != (CapacityTarget{Utilization: 0.6, OvercommitLimit: 1.5}) {
 		t.Fatalf("default target = %v", targets[glm])
 	}
 	if name, err := s.SetTargetUtilization(ctx, glm, 0.75); err != nil || name != "glm" {
 		t.Fatalf("set: %q %v", name, err)
 	}
-	if targets, _ := s.TargetUtilizations(ctx); targets[glm] != 0.75 {
+	if name, err := s.SetOvercommitLimit(ctx, glm, 2); err != nil || name != "glm" {
+		t.Fatalf("set limit: %q %v", name, err)
+	}
+	if targets, _ := s.CapacityTargets(ctx); targets[glm] != (CapacityTarget{Utilization: 0.75, OvercommitLimit: 2}) {
 		t.Fatalf("target = %v", targets[glm])
+	}
+	// The database keeps a limit below 1 out, whatever the caller checked.
+	if _, err := s.SetOvercommitLimit(ctx, glm, 0.5); err == nil {
+		t.Fatal("a limit below 1 was stored")
 	}
 }
 

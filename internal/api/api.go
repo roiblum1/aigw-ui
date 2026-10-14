@@ -75,6 +75,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/overage", s.listOverage)
 	api.HandleFunc("GET /api/v1/capacity", s.capacityPlans)
 	api.HandleFunc("PUT /api/v1/models/{id}/target-utilization", s.setTargetUtilization)
+	api.HandleFunc("PUT /api/v1/models/{id}/overcommit-limit", s.setOvercommitLimit)
+	api.HandleFunc("GET /api/v1/budgets", s.budgets)
 	api.HandleFunc("PUT /api/v1/gpu-prices/{gpu}", s.setGPUPrice)
 	api.HandleFunc("DELETE /api/v1/gpu-prices/{gpu}", s.deleteGPUPrice)
 	api.HandleFunc("GET /api/v1/clusters/{id}/deployments/{namespace}/{name}/pods", s.deploymentPods)

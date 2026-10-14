@@ -447,6 +447,29 @@ export interface CapacityShapePlan {
 }
 
 /** What a model can be given. Amounts are in unit, costs in credits. */
+/** Where one model's budgets stand against what its GPUs serve, in its unit, per day. */
+export interface ModelBudget {
+  model_id: string;
+  model_name: string;
+  unit: Unit;
+  /** False until an instance is measured: the amounts are then 0, not a limit. */
+  measured: boolean;
+  capacity_day: number;
+  ceiling_day: number;
+  given_day: number;
+  left_day: number;
+  overcommit: number | null;
+  overcommit_limit: number;
+  short_windows: number;
+  pool_day: number | null;
+}
+
+export interface Budgets {
+  models: ModelBudget[];
+  /** Added up over the measured models counted in dollars. */
+  credits: { capacity_day: number; ceiling_day: number; given_day: number; left_day: number };
+}
+
 export interface CapacityPlan {
   unit: Unit;
   utilization: number;
@@ -455,9 +478,18 @@ export interface CapacityPlan {
   measured_instances: number;
   full_day: number;
   capacity_day: number;
-  allocated_day: number;
-  rate_limits: number;
+  /** What the budgets let tenants use in a day; hourly and per-minute ones at their daily maximum. */
+  given_day: number;
+  /** How many budgets are per hour or minute. */
+  short_windows: number;
   overcommit: number | null;
+  /** How far the budgets may add up beyond capacity_day, the ceiling that follows, and what is left under it. */
+  overcommit_limit: number;
+  ceiling_day: number;
+  /** Negative when the budgets are past the ceiling. */
+  left_day: number;
+  /** The most the shared pool lets be used in a day, or null when it is the strict 1. */
+  pool_day: number | null;
   busiest_day: number;
   busiest_share: number | null;
   observed_utilization: number | null;
@@ -665,6 +697,9 @@ export const api = {
     request<string[]>("GET", `/clusters/${clusterId}/deployments/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/pods`),
   setTargetUtilization: (modelId: string, utilization: number) =>
     request<void>("PUT", `/models/${modelId}/target-utilization`, { utilization }),
+  setOvercommitLimit: (modelId: string, limit: number) =>
+    request<void>("PUT", `/models/${modelId}/overcommit-limit`, { limit }),
+  budgets: () => request<Budgets>("GET", "/budgets"),
   setGPUPrice: (gpu: string, usd_per_hour: number, note: string) =>
     request<void>("PUT", `/gpu-prices/${encodeURIComponent(gpu)}`, { usd_per_hour, note }),
   deleteGPUPrice: (gpu: string) => request<void>("DELETE", `/gpu-prices/${encodeURIComponent(gpu)}`),

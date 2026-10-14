@@ -2,8 +2,10 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 
 	"aigw-ui/internal/benchmark"
 	"aigw-ui/internal/capacity"
+	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
 )
 
@@ -56,46 +59,48 @@ const recentDays = 30
 // what each shape serves, what the model can be given and what it has been
 // given, and the GPUs with their prices.
 func (s *Server) capacityPlans(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	models, err := s.st.ListModels(ctx)
+	models, gpus, err := s.plans(r.Context())
 	if err != nil {
 		fail(w, err)
 		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"image": s.bench.Image(), "gpus": gpus, "models": models})
+}
+
+// plans works out every model's plan from its deployments, its latest
+// measurements, the tenants' budgets on it and its recent use.
+func (s *Server) plans(ctx context.Context) ([]capacityModel, []capacityGPU, error) {
+	models, err := s.st.ListModels(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
 	deployments, err := s.st.ListDeployments(ctx)
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, nil, err
 	}
 	latest, err := s.st.LatestCapacityRuns(ctx)
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, nil, err
 	}
 	running, err := s.st.RunningCapacityRuns(ctx)
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, nil, err
 	}
 	quotas, err := s.st.AllQuotas(ctx)
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, nil, err
 	}
 	used, err := s.st.UsageSince(ctx, time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -recentDays))
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, nil, err
 	}
-	targets, err := s.st.TargetUtilizations(ctx)
+	targets, err := s.st.CapacityTargets(ctx)
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, nil, err
 	}
 	prices, err := s.st.ListGPUPrices(ctx)
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, nil, err
 	}
 	gpus := map[string]*capacityGPU{}
 	for _, p := range prices {
@@ -114,7 +119,7 @@ func (s *Server) capacityPlans(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]capacityModel, 0, len(models))
 	for _, m := range models {
-		cm := capacityModel{ModelID: m.ID, ModelName: m.Name, Unit: m.Unit, TargetUtilization: targets[m.ID], Deployments: []capacityDeployment{}, Latest: []store.CapacityRun{}}
+		cm := capacityModel{ModelID: m.ID, ModelName: m.Name, Unit: m.Unit, TargetUtilization: targets[m.ID].Utilization, Deployments: []capacityDeployment{}, Latest: []store.CapacityRun{}}
 		maxLen := map[string]int{}
 		for _, e := range m.Endpoints {
 			maxLen[e.ClusterID] = maxModelLen(e.Capacity.MaxModelLen)
@@ -164,7 +169,8 @@ func (s *Server) capacityPlans(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		in := capacity.PlanInput{Unit: m.Unit, CostExpression: m.CostExpression, Utilization: targets[m.ID], Days: recentDays}
+		in := capacity.PlanInput{Unit: m.Unit, CostExpression: m.CostExpression, Utilization: targets[m.ID].Utilization,
+			OvercommitLimit: targets[m.ID].OvercommitLimit, Days: recentDays}
 		for _, key := range order {
 			in.Shapes = append(in.Shapes, *byShape[key])
 		}
@@ -172,13 +178,13 @@ func (s *Server) capacityPlans(w http.ResponseWriter, r *http.Request) {
 			in.Prices = &capacity.Prices{Input: m.Prices.Input, Cached: m.Prices.Cached, Output: m.Prices.Output}
 		}
 		for _, q := range quotas {
-			switch {
-			case q.ModelID != m.ID || q.Shadow:
-			case q.Window == "1d":
-				in.AllocatedPerDay += q.TokenLimit
-			default:
-				in.RateLimits++
+			if q.ModelID == m.ID && !q.Shadow {
+				in.Budgets = append(in.Budgets, capacity.Budget{Limit: q.TokenLimit, Window: q.Window})
 			}
+		}
+		// The default pool of 1 holds every tenant to its own budget.
+		if m.DefaultLimit > 1 {
+			in.Pool = &capacity.Budget{Limit: m.DefaultLimit, Window: m.DefaultWindow}
 		}
 		for _, u := range used {
 			if u.ModelID == m.ID && u.Unit == m.Unit {
@@ -194,7 +200,91 @@ func (s *Server) capacityPlans(w http.ResponseWriter, r *http.Request) {
 		gpuList = append(gpuList, *g)
 	}
 	sort.Slice(gpuList, func(i, j int) bool { return gpuList[i].GPU < gpuList[j].GPU })
-	writeJSON(w, http.StatusOK, map[string]any{"image": s.bench.Image(), "gpus": gpuList, "models": out})
+	return out, gpuList, nil
+}
+
+// modelBudget is where one model's budgets stand against what it can be
+// given, in its unit.
+type modelBudget struct {
+	ModelID   string `json:"model_id"`
+	ModelName string `json:"model_name"`
+	Unit      string `json:"unit"`
+	// Measured is false until an instance of the model is measured; the
+	// amounts are then 0, not a limit.
+	Measured        bool     `json:"measured"`
+	CapacityDay     int64    `json:"capacity_day"`
+	CeilingDay      int64    `json:"ceiling_day"`
+	GivenDay        int64    `json:"given_day"`
+	LeftDay         int64    `json:"left_day"`
+	Overcommit      *float64 `json:"overcommit"`
+	OvercommitLimit float64  `json:"overcommit_limit"`
+	ShortWindows    int      `json:"short_windows"`
+	PoolDay         *int64   `json:"pool_day"`
+}
+
+func budgetOf(m capacityModel) modelBudget {
+	p := m.Plan
+	return modelBudget{ModelID: m.ModelID, ModelName: m.ModelName, Unit: m.Unit, Measured: p.MeasuredInstances > 0,
+		CapacityDay: p.CapacityDay, CeilingDay: p.CeilingDay, GivenDay: p.GivenDay, LeftDay: p.LeftDay,
+		Overcommit: p.Overcommit, OvercommitLimit: p.OvercommitLimit, ShortWindows: p.ShortWindows, PoolDay: p.PoolDay}
+}
+
+// budgets returns, for every model, what it can be given a day, what its
+// budgets take and what is left under its overcommit limit, and the same
+// added up over the measured models counted in dollars.
+func (s *Server) budgets(w http.ResponseWriter, r *http.Request) {
+	models, _, err := s.plans(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	out := make([]modelBudget, 0, len(models))
+	var total struct {
+		CapacityDay int64 `json:"capacity_day"`
+		CeilingDay  int64 `json:"ceiling_day"`
+		GivenDay    int64 `json:"given_day"`
+		LeftDay     int64 `json:"left_day"`
+	}
+	for _, m := range models {
+		b := budgetOf(m)
+		out = append(out, b)
+		if b.Unit == store.UnitCredits && b.Measured {
+			total.CapacityDay += b.CapacityDay
+			total.CeilingDay += b.CeilingDay
+			total.GivenDay += b.GivenDay
+			total.LeftDay += b.LeftDay
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": out, "credits": total})
+}
+
+// cents rounds an amount in credits to whole cents for a sentence; what a
+// model can be given is worked out to the credit.
+func cents(n int64, unit string) int64 {
+	if unit != store.UnitCredits {
+		return n
+	}
+	const perCent = render.CreditsPerDollar / 100
+	return (n + perCent/2) / perCent * perCent
+}
+
+// budgetSummary says where a model's budgets stand, for the task log of a
+// change to one of them; "" before the model is measured.
+func (s *Server) budgetSummary(ctx context.Context, modelID string) string {
+	models, _, err := s.plans(ctx)
+	if err != nil {
+		return ""
+	}
+	for _, m := range models {
+		b := budgetOf(m)
+		if m.ModelID != modelID || !b.Measured || b.Overcommit == nil {
+			continue
+		}
+		return fmt.Sprintf("; %s budgets now %s of %s a day (%.2f×, limit %s×)", m.ModelName,
+			store.Amount(cents(b.GivenDay, b.Unit), b.Unit), store.Amount(cents(b.CapacityDay, b.Unit), b.Unit), *b.Overcommit,
+			strconv.FormatFloat(b.OvercommitLimit, 'f', -1, 64))
+	}
+	return ""
 }
 
 func appendNew(list []string, v string) []string {
@@ -216,6 +306,29 @@ func maxModelLen(declared string) int {
 		}
 	}
 	return shortest
+}
+
+// setOvercommitLimit sets how far the budgets on a model may add up beyond
+// what it can be given a day.
+func (s *Server) setOvercommitLimit(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Limit float64 `json:"limit"`
+	}
+	if err := decode(r, &b); err != nil {
+		fail(w, err)
+		return
+	}
+	if !(b.Limit >= 1) || b.Limit > 10 {
+		fail(w, invalid("limit must be from 1 to 10"))
+		return
+	}
+	name, err := s.st.SetOvercommitLimit(r.Context(), r.PathValue("id"), b.Limit)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	note(r, "capacity.overcommit", "Set the overcommit limit of "+name+" to "+strconv.FormatFloat(b.Limit, 'f', -1, 64)+"×")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // setTargetUtilization sets the share of the day a model's instances are
