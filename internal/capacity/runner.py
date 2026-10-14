@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.request
 
 cfg = json.loads(os.environ["AIGW_CAPACITY"])
 url = cfg["url"]
@@ -30,8 +31,6 @@ def tail(path, limit=1500):
 
 def counters():
     """The instance's own token counters, summed over their labels."""
-    import urllib.request
-
     try:
         text = urllib.request.urlopen(url + "/metrics", timeout=15).read().decode()
     except Exception:
@@ -72,6 +71,28 @@ def run(cmd, log):
     with open(log, "w") as out:
         return subprocess.run(cmd, stdout=out, stderr=subprocess.STDOUT).returncode
 
+
+def model_length():
+    """The longest request the instance takes, prompt and answer together, as
+    vLLM lists it under /v1/models. None when it does not say."""
+    try:
+        listed = json.loads(urllib.request.urlopen(url + "/v1/models", timeout=15).read())
+        for m in listed.get("data", []):
+            if m.get("id") == cfg["model"] and isinstance(m.get("max_model_len"), int):
+                return m["max_model_len"]
+    except Exception:
+        pass
+    return None
+
+
+# A request longer than the model takes is refused, so every step would only
+# count errors. The deployment may not declare its length to the hub.
+longest = model_length()
+need = settings["max_prompt_tokens"] + settings["max_output_tokens"]
+if longest is not None and need > longest:
+    emit("ERROR", {"error": "the model takes at most {:,} tokens, prompt and answer together, and the settings ask for up to {:,}: "
+                            "set the longest prompt to at most {:,}".format(longest, need, max(longest - settings["max_output_tokens"], 0))})
+    sys.exit(1)
 
 # The sessions. The same ones are replayed at every step, so the cache holds
 # their shared parts after the first step, as it would on a busy day.

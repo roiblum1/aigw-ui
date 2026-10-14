@@ -109,6 +109,11 @@ not pass the gateway.
   answers, and their requests make the result lower. The form asks you to
   confirm. A pod that takes no traffic gives the cleanest figure, such as
   one extra replica that you then name.
+- **The model's length.** The form fits the longest prompt to the
+  annotation `aigw-ui.io/max-model-len` on the deployment. Without it the
+  form offers AIPerf's 167,000 tokens. Before anything else the Job asks the
+  pod (`/v1/models`) how long a request it takes, and stops at once with
+  the longest prompt to set when the settings do not fit.
 - **One at a time.** A model is measured on one pod at a time.
 - **Network.** The Job must reach the pod's port. A NetworkPolicy in the
   namespace that only lets the gateway in also keeps the Job out.

@@ -48,7 +48,7 @@ async def metrics(_):
     return web.Response(text=text)
 
 async def models(_):
-    return web.json_response({"object": "list", "data": [{"id": "m", "object": "model"}]})
+    return web.json_response({"object": "list", "data": [{"id": "m", "object": "model", "max_model_len": 8192}]})
 
 app = web.Application(client_max_size=64 << 20)
 app.add_routes([web.post("/v1/chat/completions", chat), web.get("/metrics", metrics), web.get("/v1/models", models)])

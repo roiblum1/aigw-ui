@@ -169,10 +169,10 @@ function ModelCard(props: {
                   <th>Shape</th>
                   <th>Sites</th>
                   <th className="text-right">Ready</th>
-                  <th className="text-right">In flight within targets</th>
-                  <th className="text-right">One instance a day</th>
-                  <th className="text-right">Cost an hour</th>
-                  <th className="text-right" title="What a million input-equivalent tokens cost on this shape busy all day">
+                  <th className="text-right wrap">In flight within targets</th>
+                  <th className="text-right wrap">One instance a day</th>
+                  <th className="text-right wrap">Cost an hour</th>
+                  <th className="text-right wrap" title="What a million input-equivalent tokens cost on this shape busy all day">
                     Cost per 1M
                   </th>
                   <th />
@@ -195,7 +195,9 @@ function ModelCard(props: {
                       {open === s.shape.key && run && (
                         <tr>
                           <td colSpan={8}>
-                            <RunDetail run={run} />
+                            <div className="run-cell">
+                              <RunDetail run={run} />
+                            </div>
                           </td>
                         </tr>
                       )}
@@ -273,11 +275,13 @@ function Summary({ plan }: { plan: CapacityPlan }) {
         ) : (
           <p className="detail">Nothing yet: no measured shape has a ready instance.</p>
         )}
-        <p className="detail">
-          What the {plan.measured_instances} measured {plan.measured_instances === 1 ? "instance serves" : "instances serve"}{" "}
-          busy all day, {show(plan.full_day)}, × {percent(plan.utilization)} busy ={" "}
-          <span className="strong">{show(plan.capacity_day)}</span>.
-        </p>
+        {plan.measured_instances > 0 && (
+          <p className="detail">
+            What the {plan.measured_instances} measured {plan.measured_instances === 1 ? "instance serves" : "instances serve"}{" "}
+            busy all day, {show(plan.full_day)}, × {percent(plan.utilization)} busy ={" "}
+            <span className="strong">{show(plan.capacity_day)}</span>.
+          </p>
+        )}
         {plan.overcommit != null && plan.overcommit > 1 && (
           <p className="detail warn-text">
             The daily budgets add up to {plan.overcommit.toFixed(2)}× that. It holds while tenants do not use them all on
@@ -344,9 +348,11 @@ function Running({ run }: { run: CapacityRun }) {
     <div className="banner info">
       Measuring {run.shape.label}: pod {run.namespace}/{run.instance} on {run.cluster_name} since{" "}
       {formatTime(run.created_at)}.{" "}
-      {run.steps.length === 0
-        ? "Making up the sessions and starting the first step."
-        : `${run.steps.length} of ${run.settings.concurrency.length} steps done, the last at ${last.concurrency} in flight.`}{" "}
+      {last
+        ? `${run.steps.length} of ${run.settings.concurrency.length} steps done, the last at ${last.concurrency} in flight.`
+        : run.dataset
+          ? `${run.dataset.sessions} sessions made up, prompts up to ${run.dataset.prompt_max.toLocaleString("en-US")} tokens; the first step is running.`
+          : "Making up the sessions."}{" "}
       It stops at the first step that misses a target.
     </div>
   );
@@ -380,11 +386,11 @@ function Steps({ run }: { run: CapacityRun }) {
           <tr>
             <th className="text-right">In flight</th>
             <th className="text-right">Answered</th>
-            <th className="text-right">Prompt tok/s</th>
-            <th className="text-right">Output tok/s</th>
+            <th className="text-right wrap">Prompt tok/s</th>
+            <th className="text-right wrap">Output tok/s</th>
             <th className="text-right">From cache</th>
-            <th className="text-right">First token p50 / p95</th>
-            <th className="text-right">Between tokens p50 / p95</th>
+            <th className="text-right wrap">First token p50 / p95</th>
+            <th className="text-right wrap">Between tokens p50 / p95</th>
             <th>Targets</th>
           </tr>
         </thead>
@@ -503,7 +509,11 @@ function MeasureForm(props: { m: CapacityModel; shape: string; onClose: () => vo
       <div className="grid-2">
         <Field
           label="Deployment"
-          hint={chosen?.max_model_len ? `Takes up to ${chosen.max_model_len.toLocaleString("en-US")} tokens.` : undefined}
+          hint={
+            chosen?.max_model_len
+              ? `Takes up to ${chosen.max_model_len.toLocaleString("en-US")} tokens.`
+              : "It does not declare how long a request it takes (aigw-ui.io/max-model-len). The Job asks the pod and stops at once if the longest prompt and answer do not fit."
+          }
         >
           <select
             value={target}

@@ -47,7 +47,11 @@ with open(os.path.join(d, "profile_export_aiperf.json"), "w") as f:
     json.dump(summary, f)
 `
 
-func TestRunner(t *testing.T) {
+// runRunner runs the Job's script with the fake aiperf against a stand-in
+// instance that lists the model with the given longest request, and returns
+// what it printed.
+func runRunner(t *testing.T, set Settings, maxModelLen int) string {
+	t.Helper()
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 is not installed")
@@ -63,28 +67,34 @@ func TestRunner(t *testing.T) {
 	// The instance's counters grow by 10,000 prompt tokens, 8,000 of them
 	// cached, every time they are read.
 	var reads atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"object":"list","data":[{"id":"m","object":"model","max_model_len":%d}]}`, maxModelLen)
+	})
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		n := reads.Add(1)
 		fmt.Fprintf(w, "# HELP vllm:prompt_tokens_total x\nvllm:prompt_tokens_total{engine=\"0\",model_name=\"m\"} %d\nvllm:prompt_tokens_cached_total{engine=\"0\",model_name=\"m\"} %d\n", n*10000, n*8000)
-	}))
+	})
+	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	set := Defaults(0)
-	set.Concurrency = []int{1, 2, 4, 8}
-	set.TTFTMillis = 3000 // the step at 4 misses it
 	config, _ := json.Marshal(map[string]any{"url": server.URL, "model": "m", "settings": set, "grace_seconds": 1, "agentic": Agentic(set)})
-
 	cmd := exec.Command(python, "-c", runner)
 	cmd.Env = append(os.Environ(), "AIGW_CAPACITY="+string(config), "AIGW_WORK="+filepath.Join(dir, "work"), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	if err := os.Mkdir(filepath.Join(dir, "work"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("runner: %v\n%s", err, out)
-	}
+	out, _ := cmd.CombinedOutput()
+	return string(out)
+}
 
-	l := ParseLog(string(out))
+func TestRunner(t *testing.T) {
+	set := Defaults(0)
+	set.Concurrency = []int{1, 2, 4, 8}
+	set.TTFTMillis = 3000 // the step at 4 misses it
+	out := runRunner(t, set, 200000)
+
+	l := ParseLog(out)
 	if !l.Done || l.Error != "" {
 		t.Fatalf("not done:\n%s", out)
 	}
@@ -106,5 +116,19 @@ func TestRunner(t *testing.T) {
 	r := Analyze(set, l.Steps)
 	if r.Best == nil || r.Best.Concurrency != 2 || !strings.Contains(r.Limit, "at 4 in flight") {
 		t.Fatalf("result = %+v %q", r.Best, r.Limit)
+	}
+}
+
+// A model shorter than the settings would refuse every request: the Job stops
+// before it makes up any session, and says what to set.
+func TestRunnerModelTooShort(t *testing.T) {
+	out := runRunner(t, Defaults(0), 8192)
+	l := ParseLog(out)
+	if l.Dataset != nil || len(l.Steps) != 0 || l.Done {
+		t.Fatalf("it went on:\n%s", out)
+	}
+	want := "the model takes at most 8,192 tokens, prompt and answer together, and the settings ask for up to 168,500: set the longest prompt to at most 6,692"
+	if l.Error != want {
+		t.Fatalf("error = %q", l.Error)
 	}
 }
