@@ -44,13 +44,23 @@ def counters():
     return found
 
 
-def grew(before, after, *names):
+# Pairs of counters of prompt tokens and the part of them from the cache, in
+# the order they are tried. A pair is used whole, so both figures count the
+# same thing.
+CACHE_COUNTERS = [
+    ("vllm:prompt_tokens_total", "vllm:prompt_tokens_cached_total"),
+    ("vllm:prefix_cache_queries_total", "vllm:prefix_cache_hits_total"),
+]
+
+
+def cache_growth(before, after):
+    """What the instance's prompt and cached-prompt counters grew by."""
     if before is None or after is None:
-        return None
-    for name in names:
-        if name in before and name in after:
-            return max(after[name] - before[name], 0.0)
-    return None
+        return None, None
+    for prompt, cached in CACHE_COUNTERS:
+        if all(name in before and name in after for name in (prompt, cached)):
+            return max(after[prompt] - before[prompt], 0.0), max(after[cached] - before[cached], 0.0)
+    return None, None
 
 
 def stat(summary, name, key="avg"):
@@ -115,6 +125,7 @@ for concurrency in settings["concurrency"]:
         break
     with open(found[0]) as f:
         s = json.load(f)
+    prompt_tokens, cached_tokens = cache_growth(before, after)
     step = {
         "concurrency": concurrency,
         "requests": int(stat(s, "request_count")),
@@ -128,8 +139,8 @@ for concurrency in settings["concurrency"]:
         "ttft_p95_ms": stat(s, "time_to_first_token", "p95"),
         "itl_p50_ms": stat(s, "inter_token_latency", "p50"),
         "itl_p95_ms": stat(s, "inter_token_latency", "p95"),
-        "server_prompt_tokens": grew(before, after, "vllm:prompt_tokens_total", "vllm:prefix_cache_queries_total"),
-        "server_cached_tokens": grew(before, after, "vllm:prompt_tokens_cached_total", "vllm:prefix_cache_hits_total"),
+        "server_prompt_tokens": prompt_tokens,
+        "server_cached_tokens": cached_tokens,
     }
     emit("STEP", step)
     # A higher load only gets slower: stop at the first step that misses.

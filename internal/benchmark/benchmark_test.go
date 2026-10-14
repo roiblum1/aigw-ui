@@ -15,20 +15,27 @@ import (
 )
 
 type fakeStore struct {
-	models []store.Model
-	runs   map[string]*store.CapacityRun
+	deployments []store.Deployment
+	runs        map[string]*store.CapacityRun
 }
 
-func (f *fakeStore) ListModels(context.Context) ([]store.Model, error) { return f.models, nil }
+func (f *fakeStore) GetDeployment(_ context.Context, modelID, clusterID, namespace, name string) (store.Deployment, error) {
+	for _, d := range f.deployments {
+		if d.ModelID == modelID && d.ClusterID == clusterID && d.Namespace == namespace && d.Name == name {
+			return d, nil
+		}
+	}
+	return store.Deployment{}, store.ErrNotFound
+}
 
-func (f *fakeStore) CreateCapacityRun(_ context.Context, id, modelID, clusterID, namespace, jobName, instance string, set capacity.Settings) error {
+func (f *fakeStore) CreateCapacityRun(_ context.Context, n store.NewRun) error {
 	for _, r := range f.runs {
-		if r.ModelID == modelID && r.Status == store.RunRunning {
+		if r.ModelID == n.ModelID && r.Status == store.RunRunning {
 			return store.ErrConflict
 		}
 	}
-	f.runs[id] = &store.CapacityRun{ID: id, ModelID: modelID, ClusterID: clusterID, Namespace: namespace, JobName: jobName, Instance: instance,
-		Settings: set, Status: store.RunRunning, CreatedAt: time.Now()}
+	f.runs[n.ID] = &store.CapacityRun{ID: n.ID, ModelID: n.ModelID, ClusterID: n.ClusterID, Namespace: n.Namespace, Deployment: n.Deployment,
+		JobName: n.JobName, Instance: n.Instance, Shape: n.Shape, Settings: n.Settings, Status: store.RunRunning, CreatedAt: time.Now()}
 	return nil
 }
 
@@ -73,8 +80,17 @@ type fakeCluster struct {
 	deleted  []string
 }
 
-func (c *fakeCluster) FindInstance(context.Context, []string, string) (kube.Instance, error) {
-	return c.instance, c.findErr
+func (c *fakeCluster) Instance(_ context.Context, _, _, pod string) (kube.Instance, error) {
+	if c.findErr != nil {
+		return kube.Instance{}, c.findErr
+	}
+	i := c.instance
+	i.Pod = pod
+	return i, nil
+}
+
+func (c *fakeCluster) ReadyPods(context.Context, string, string) ([]string, error) {
+	return []string{c.instance.Pod}, nil
 }
 
 func (c *fakeCluster) CreateJob(_ context.Context, job *unstructured.Unstructured) error {
@@ -98,8 +114,8 @@ func (c *fakeCluster) DeleteJob(_ context.Context, _, name string) error {
 }
 
 func setup(image string) (*fakeStore, *fakeCluster, *Service) {
-	st := &fakeStore{runs: map[string]*store.CapacityRun{}, models: []store.Model{{ID: "m1", Name: "glm",
-		Endpoints: []store.Endpoint{{ClusterID: "c1", UpstreamModel: "glm-5"}}}}}
+	st := &fakeStore{runs: map[string]*store.CapacityRun{}, deployments: []store.Deployment{{ModelID: "m1", ClusterID: "c1", Namespace: "llm",
+		Name: "glm", Topology: "single", GPU: "NVIDIA-B300", GPUsPerInstance: 8}}}
 	cl := &fakeCluster{instance: kube.Instance{Namespace: "llm", Pod: "glm-0", URL: "http://10.0.0.5:8000", Model: "glm-5", MaxModelLen: 200000}, jobs: map[string]*unstructured.Unstructured{}}
 	return st, cl, New(st, func(context.Context, string) (Cluster, error) { return cl, nil }, image, time.Minute)
 }
@@ -112,14 +128,14 @@ AIGW-STEP {"concurrency":2,"requests":40,"duration_s":300,"input_tokens":4000000
 func TestStartAndFollow(t *testing.T) {
 	st, cl, s := setup("registry/aiperf:1")
 	ctx := context.Background()
-	run, err := s.Start(ctx, "m1", "c1", "", capacity.Defaults(0))
+	run, err := s.Start(ctx, "m1", "c1", "llm", "glm", "glm-0", capacity.Defaults(0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Namespace != "llm" || run.Instance != "glm-0" || cl.jobs[run.JobName] == nil {
+	if run.Namespace != "llm" || run.Instance != "glm-0" || run.Deployment != "glm" || run.Shape.GPU != "NVIDIA-B300" || cl.jobs[run.JobName] == nil {
 		t.Fatalf("run = %+v", run)
 	}
-	if _, err := s.Start(ctx, "m1", "c1", "", capacity.Defaults(0)); !errors.Is(err, ErrBusy) {
+	if _, err := s.Start(ctx, "m1", "c1", "llm", "glm", "glm-0", capacity.Defaults(0)); !errors.Is(err, ErrBusy) {
 		t.Fatalf("second start: %v", err)
 	}
 
@@ -143,21 +159,21 @@ func TestStartAndFollow(t *testing.T) {
 func TestStartRefuses(t *testing.T) {
 	ctx := context.Background()
 	_, _, s := setup("")
-	if _, err := s.Start(ctx, "m1", "c1", "", capacity.Defaults(0)); !errors.Is(err, ErrNoImage) {
+	if _, err := s.Start(ctx, "m1", "c1", "llm", "glm", "glm-0", capacity.Defaults(0)); !errors.Is(err, ErrNoImage) {
 		t.Fatalf("no image: %v", err)
 	}
 	_, _, s = setup("img")
-	if _, err := s.Start(ctx, "m1", "other", "", capacity.Defaults(0)); !errors.Is(err, ErrNotServed) {
+	if _, err := s.Start(ctx, "m1", "c1", "llm", "other", "glm-0", capacity.Defaults(0)); !errors.Is(err, ErrNotServed) {
 		t.Fatalf("not served: %v", err)
 	}
 	_, cl, s := setup("img")
 	cl.instance.MaxModelLen = 8192
-	if _, err := s.Start(ctx, "m1", "c1", "", capacity.Defaults(0)); err == nil || !strings.Contains(err.Error(), "exceed the 8192") {
+	if _, err := s.Start(ctx, "m1", "c1", "llm", "glm", "glm-0", capacity.Defaults(0)); err == nil || !strings.Contains(err.Error(), "exceed the 8192") {
 		t.Fatalf("too long: %v", err)
 	}
 	_, cl, s = setup("img")
 	cl.findErr = errors.New("no pod to measure: llm/glm has no ready pod")
-	if _, err := s.Start(ctx, "m1", "c1", "", capacity.Defaults(0)); err == nil || !strings.Contains(err.Error(), "no ready pod") {
+	if _, err := s.Start(ctx, "m1", "c1", "llm", "glm", "glm-0", capacity.Defaults(0)); err == nil || !strings.Contains(err.Error(), "no ready pod") {
 		t.Fatalf("no pod: %v", err)
 	}
 }
@@ -181,7 +197,7 @@ func TestFollowEndings(t *testing.T) {
 		"nothing passed": {state: kube.JobState{Succeeded: true}, log: `AIGW-STEP {"concurrency":1,"requests":20,"duration_s":300,"ttft_p95_ms":99999,"itl_p95_ms":20}` + "\nAIGW-DONE {}", status: store.RunSucceeded, detail: "no step met"},
 	} {
 		st, cl, s := setup("img")
-		run, err := s.Start(ctx, "m1", "c1", "", capacity.Defaults(0))
+		run, err := s.Start(ctx, "m1", "c1", "llm", "glm", "glm-0", capacity.Defaults(0))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -197,7 +213,7 @@ func TestFollowEndings(t *testing.T) {
 func TestCancel(t *testing.T) {
 	ctx := context.Background()
 	st, cl, s := setup("img")
-	run, _ := s.Start(ctx, "m1", "c1", "", capacity.Defaults(0))
+	run, _ := s.Start(ctx, "m1", "c1", "llm", "glm", "glm-0", capacity.Defaults(0))
 	got, err := s.Cancel(ctx, run.ID)
 	if err != nil || got.Status != store.RunCancelled || len(cl.deleted) != 1 || st.runs[run.ID].Status != store.RunCancelled {
 		t.Fatalf("cancel: %+v %v %v", got, err, cl.deleted)

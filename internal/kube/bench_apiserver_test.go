@@ -60,18 +60,27 @@ func TestRealAPIServerCapacityJob(t *testing.T) {
 	pod("bench-a", "10.0.0.7", false, "")
 	pod("bench-c", "10.0.0.9", true, `,"llm-d.ai/role":"prefill"`)
 
-	inst, err := c.FindInstance(ctx, []string{"other", model}, "")
+	pods, err := c.ReadyPods(ctx, ns, "bench")
+	if err != nil || len(pods) != 1 || pods[0] != "bench-b" {
+		t.Fatalf("ready pods = %v, %v", pods, err)
+	}
+	inst, err := c.Instance(ctx, ns, "bench", "bench-b")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if inst.Namespace != ns || inst.Pod != "bench-b" || inst.URL != "http://10.0.0.8:8000" || inst.Model != model || inst.MaxModelLen != 8192 {
 		t.Fatalf("instance = %+v", inst)
 	}
-	if _, err := c.FindInstance(ctx, []string{model}, "bench-a"); err == nil || !strings.Contains(err.Error(), "no ready pod called bench-a") {
+	if _, err := c.Instance(ctx, ns, "bench", "bench-a"); err == nil || !strings.Contains(err.Error(), "no ready pod called bench-a") {
 		t.Fatalf("a pod that is not ready: %v", err)
 	}
-	if _, err := c.FindInstance(ctx, []string{"missing." + ns}, ""); err == nil || !strings.Contains(err.Error(), "no LLMInferenceService") {
-		t.Fatalf("a model nobody serves: %v", err)
+	if _, err := c.Instance(ctx, ns, "missing", "bench-b"); err == nil || !strings.Contains(err.Error(), "no LLMInferenceService") {
+		t.Fatalf("a deployment that is not there: %v", err)
+	}
+	create(0, `{"apiVersion":"serving.kserve.io/v1alpha2","kind":"LLMInferenceService",
+		"metadata":{"name":"bench-pd"},"spec":{"model":{"name":"`+model+`"},"prefill":{"replicas":1}}}`)
+	if _, err := c.Instance(ctx, ns, "bench-pd", "bench-b"); err == nil || !strings.Contains(err.Error(), "separate prefill pods") {
+		t.Fatalf("prefill and decode: %v", err)
 	}
 
 	set := capacity.Defaults(8192)

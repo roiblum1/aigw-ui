@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -23,16 +22,16 @@ import (
 var (
 	// ErrNoImage is returned when the server has no AIPerf image to run.
 	ErrNoImage = errors.New("no AIPerf image is configured")
-	// ErrNotServed is returned when the cluster does not serve the model.
-	ErrNotServed = errors.New("the cluster does not serve the model")
+	// ErrNotServed is returned when the deployment is not one of the model's.
+	ErrNotServed = errors.New("the deployment does not serve the model")
 	// ErrBusy is returned while a measurement of the model runs.
 	ErrBusy = errors.New("a measurement of the model is running")
 )
 
 // Store is what the service reads and writes in Postgres.
 type Store interface {
-	ListModels(ctx context.Context) ([]store.Model, error)
-	CreateCapacityRun(ctx context.Context, id, modelID, clusterID, namespace, jobName, instance string, set capacity.Settings) error
+	GetDeployment(ctx context.Context, modelID, clusterID, namespace, name string) (store.Deployment, error)
+	CreateCapacityRun(ctx context.Context, r store.NewRun) error
 	GetCapacityRun(ctx context.Context, id string) (store.CapacityRun, error)
 	RunningCapacityRuns(ctx context.Context) ([]store.CapacityRun, error)
 	UpdateCapacityRun(ctx context.Context, id string, dataset *capacity.Dataset, steps []capacity.Step) error
@@ -41,9 +40,10 @@ type Store interface {
 
 // Cluster is what the service does on one cluster.
 type Cluster interface {
-	FindInstance(ctx context.Context, names []string, pod string) (kube.Instance, error)
+	Instance(ctx context.Context, namespace, name, pod string) (kube.Instance, error)
 	CreateJob(ctx context.Context, job *unstructured.Unstructured) error
 	GetJobState(ctx context.Context, namespace, name string) (kube.JobState, error)
+	ReadyPods(ctx context.Context, namespace, name string) ([]string, error)
 	PodLog(ctx context.Context, namespace, selector, container string) (string, bool, error)
 	PodProblem(ctx context.Context, namespace, selector string) string
 	DeleteJob(ctx context.Context, namespace, name string) error
@@ -65,44 +65,28 @@ func New(st Store, client func(ctx context.Context, clusterID string) (Cluster, 
 // Image is the AIPerf image the Jobs run, or "" when there is none.
 func (s *Service) Image() string { return s.image }
 
-// Start aims a measurement at a ready pod of the model on a cluster. pod
-// picks the pod; empty takes the first ready one.
-func (s *Service) Start(ctx context.Context, modelID, clusterID, pod string, set capacity.Settings) (store.CapacityRun, error) {
+// Start aims a measurement at one ready pod of one deployment of a model.
+// The pod is named on purpose: it keeps its own traffic, whose users see
+// slower answers while it runs.
+func (s *Service) Start(ctx context.Context, modelID, clusterID, namespace, deployment, pod string, set capacity.Settings) (store.CapacityRun, error) {
 	if s.image == "" {
 		return store.CapacityRun{}, ErrNoImage
 	}
 	if err := set.Validate(); err != nil {
 		return store.CapacityRun{}, err
 	}
-	models, err := s.st.ListModels(ctx)
+	d, err := s.st.GetDeployment(ctx, modelID, clusterID, namespace, deployment)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.CapacityRun{}, ErrNotServed
+	}
 	if err != nil {
 		return store.CapacityRun{}, err
 	}
-	var names []string
-	for _, m := range models {
-		if m.ID != modelID {
-			continue
-		}
-		for _, e := range m.Endpoints {
-			if e.ClusterID != clusterID {
-				continue
-			}
-			names = append(names, m.Name, e.UpstreamModel)
-			for _, b := range e.Backends {
-				names = append(names, b.Model)
-			}
-		}
-	}
-	names = slices.DeleteFunc(slices.Compact(names), func(n string) bool { return n == "" })
-	if len(names) == 0 {
-		return store.CapacityRun{}, ErrNotServed
-	}
-
 	cl, err := s.client(ctx, clusterID)
 	if err != nil {
 		return store.CapacityRun{}, err
 	}
-	inst, err := cl.FindInstance(ctx, names, pod)
+	inst, err := cl.Instance(ctx, namespace, deployment, pod)
 	if err != nil {
 		return store.CapacityRun{}, err
 	}
@@ -115,13 +99,16 @@ func (s *Service) Start(ctx context.Context, modelID, clusterID, pod string, set
 		return store.CapacityRun{}, err
 	}
 	name := capacity.JobName(id)
-	if err := s.st.CreateCapacityRun(ctx, id, modelID, clusterID, inst.Namespace, name, inst.Pod, set); err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			return store.CapacityRun{}, ErrBusy
-		}
+	shape := capacity.Shape{Topology: d.Topology, GPU: d.GPU, GPUsPerInstance: d.GPUsPerInstance, Revision: d.Revision}
+	err = s.st.CreateCapacityRun(ctx, store.NewRun{ID: id, ModelID: modelID, ClusterID: clusterID, Namespace: namespace, Deployment: deployment,
+		Instance: pod, JobName: name, Shape: shape, Settings: set})
+	if errors.Is(err, store.ErrConflict) {
+		return store.CapacityRun{}, ErrBusy
+	}
+	if err != nil {
 		return store.CapacityRun{}, err
 	}
-	job, err := capacity.Job(capacity.JobSpec{RunID: id, Name: name, Namespace: inst.Namespace, Image: s.image, URL: inst.URL, Model: inst.Model, Settings: set})
+	job, err := capacity.Job(capacity.JobSpec{RunID: id, Name: name, Namespace: namespace, Image: s.image, URL: inst.URL, Model: inst.Model, Settings: set})
 	if err == nil {
 		err = cl.CreateJob(ctx, job)
 	}
@@ -130,6 +117,16 @@ func (s *Service) Start(ctx context.Context, modelID, clusterID, pod string, set
 		return store.CapacityRun{}, fmt.Errorf("create the Job: %w", err)
 	}
 	return s.st.GetCapacityRun(ctx, id)
+}
+
+// Pods returns the ready pods of a deployment that a measurement can be
+// aimed at.
+func (s *Service) Pods(ctx context.Context, clusterID, namespace, deployment string) ([]string, error) {
+	cl, err := s.client(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return cl.ReadyPods(ctx, namespace, deployment)
 }
 
 // Cancel stops a running measurement and deletes its Job. The steps it has

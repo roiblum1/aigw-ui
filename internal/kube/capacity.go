@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -64,9 +65,8 @@ type ModelCapacity struct {
 	// waiting for it would keep the weight up while the others lose pods.
 	Capacity float64
 	Known    bool
-	// Instances is the number of ready instances, whatever one is declared
-	// to serve.
-	Instances float64
+	// Deployments are the model's LLMInferenceServices with their shapes.
+	Deployments []Deployment
 	// Step is the capacity of the model's largest single instance.
 	Step float64
 	// Detail says how the number came about, for display.
@@ -127,6 +127,7 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 		return nil, err
 	}
 
+	gpus := c.gpuShapes(ctx)
 	byModel := map[string]*ModelCapacity{}
 	for i := range items {
 		svc := &items[i]
@@ -147,7 +148,9 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 		}
 		mc.Known = mc.Known || known
 		mc.Capacity += instances * w.PerInstance
-		mc.Instances += instances
+		d := gpus.of(svc, instances, known)
+		d.Revision = svc.GetAnnotations()[RevisionAnnotation]
+		mc.Deployments = append(mc.Deployments, d)
 		mc.Step = max(mc.Step, w.PerInstance)
 		if mc.Detail != "" {
 			mc.Detail += "; "
@@ -252,4 +255,118 @@ func addValue(list, value string) string {
 	values = append(values, value)
 	sort.Strings(values)
 	return strings.Join(values, ", ")
+}
+
+// Topologies of a deployment: what one of its instances is.
+const (
+	// TopologySingle is one pod on one node.
+	TopologySingle = "single"
+	// TopologyMultiNode is a group of pods on several nodes.
+	TopologyMultiNode = "multi-node"
+	// TopologyPrefillDecode is decode pods with prefill pods next to them.
+	TopologyPrefillDecode = "prefill-decode"
+)
+
+// GPUProductLabel is the label the NVIDIA GPU Operator puts on a node with
+// the name of its GPU, such as NVIDIA-H200.
+const GPUProductLabel = "nvidia.com/gpu.product"
+
+// gpuResource is what a pod asks for to get GPUs.
+const gpuResource = "nvidia.com/gpu"
+
+// Deployment is one LLMInferenceService of a model and its shape.
+type Deployment struct {
+	Namespace string
+	Name      string
+	Topology  string
+	// GPU is the GPU of its ready pods' nodes, "" when unknown or none.
+	GPU string
+	// GPUsPerInstance is what its ready pods ask for, divided by its ready
+	// instances. 0 when unknown.
+	GPUsPerInstance float64
+	Revision        string
+	// Instances is its ready instances; Known is false until it reports them.
+	Instances float64
+	Known     bool
+}
+
+// gpuShapes holds what the workload pods ask for and where they run, read
+// once per look at the cluster.
+type gpuShapes struct {
+	pods     []unstructured.Unstructured
+	products map[string]string // node name -> GPU product
+}
+
+// gpuShapes reads the workload pods and the nodes' GPU labels. Not being
+// allowed to read them is not an error: the shapes are then unknown and
+// everything else is counted as before.
+func (c *Client) gpuShapes(ctx context.Context) gpuShapes {
+	var g gpuShapes
+	if pods, err := c.dyn.Resource(podsGVR).List(ctx, metav1.ListOptions{LabelSelector: "kserve.io/component=workload"}); err == nil {
+		g.pods = pods.Items
+	}
+	g.products = map[string]string{}
+	if nodes, err := c.dyn.Resource(nodesGVR).List(ctx, metav1.ListOptions{LabelSelector: GPUProductLabel}); err == nil {
+		for _, n := range nodes.Items {
+			g.products[n.GetName()] = n.GetLabels()[GPUProductLabel]
+		}
+	}
+	return g
+}
+
+// of returns the shape of one LLMInferenceService.
+func (g gpuShapes) of(svc *unstructured.Unstructured, instances float64, known bool) Deployment {
+	d := Deployment{Namespace: svc.GetNamespace(), Name: svc.GetName(), Topology: TopologySingle, Instances: instances, Known: known}
+	if _, ok, _ := unstructured.NestedMap(svc.Object, "spec", "prefill"); ok {
+		d.Topology = TopologyPrefillDecode
+	} else if _, ok, _ := unstructured.NestedMap(svc.Object, "spec", "worker"); ok {
+		d.Topology = TopologyMultiNode
+	}
+	var gpus float64
+	products := map[string]int{}
+	for i := range g.pods {
+		p := &g.pods[i]
+		if p.GetNamespace() != svc.GetNamespace() || p.GetLabels()["app.kubernetes.io/name"] != svc.GetName() || !isReady(p) {
+			continue
+		}
+		gpus += podGPUs(p)
+		if node, _, _ := unstructured.NestedString(p.Object, "spec", "nodeName"); g.products[node] != "" {
+			products[g.products[node]]++
+		}
+	}
+	if instances > 0 {
+		d.GPUsPerInstance = gpus / instances
+	}
+	most := 0
+	for product, n := range products {
+		if n > most || (n == most && product < d.GPU) {
+			d.GPU, most = product, n
+		}
+	}
+	return d
+}
+
+// podGPUs is the GPUs a pod's containers ask for.
+func podGPUs(p *unstructured.Unstructured) float64 {
+	containers, _, _ := unstructured.NestedSlice(p.Object, "spec", "containers")
+	var n float64
+	for _, c := range containers {
+		m, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, field := range []string{"limits", "requests"} {
+			if v, ok, _ := unstructured.NestedString(m, "resources", field, gpuResource); ok {
+				if q, err := strconv.ParseFloat(v, 64); err == nil {
+					n += q
+					break
+				}
+			}
+			if v, ok, _ := unstructured.NestedInt64(m, "resources", field, gpuResource); ok {
+				n += float64(v)
+				break
+			}
+		}
+	}
+	return n
 }

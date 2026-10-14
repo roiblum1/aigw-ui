@@ -3,20 +3,21 @@ package kube
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 var (
-	podsGVR = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	jobsGVR = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+	podsGVR  = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	nodesGVR = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
+	jobsGVR  = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
 )
 
 // Instance is one ready pod of a model's deployment: what a capacity
@@ -33,66 +34,79 @@ type Instance struct {
 	MaxModelLen int
 }
 
-// FindInstance returns a ready pod of a deployment of the model, by any of
-// its names. pod picks one by name; empty takes the first.
+// ReadyPods returns the names of the ready pods of a deployment that answer
+// requests, by name.
+func (c *Client) ReadyPods(ctx context.Context, namespace, name string) ([]string, error) {
+	pods, err := c.deploymentPods(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	names := []string{}
+	for _, p := range readyPods(pods) {
+		names = append(names, p.GetName())
+	}
+	return names, nil
+}
+
+// Instance returns a ready pod of a deployment, to aim a measurement at.
 //
-// A deployment with separate prefill pods is left out: one of its instances
+// A deployment with separate prefill pods is refused: one of its instances
 // is a prefill and a decode pod together, and a single pod is not one.
-func (c *Client) FindInstance(ctx context.Context, names []string, pod string) (Instance, error) {
-	services, err := c.llmServices(ctx)
+func (c *Client) Instance(ctx context.Context, namespace, name, pod string) (Instance, error) {
+	svc, err := c.llmService(ctx, namespace, name)
 	if err != nil {
 		return Instance{}, err
 	}
-	var notes []string
-	for i := range services {
-		svc := &services[i]
+	if _, separate, _ := unstructured.NestedMap(svc.Object, "spec", "prefill"); separate {
+		return Instance{}, fmt.Errorf("%s/%s has separate prefill pods, and one pod of it is not an instance; such a deployment is not measured yet", namespace, name)
+	}
+	pods, err := c.deploymentPods(ctx, namespace, name)
+	if err != nil {
+		return Instance{}, err
+	}
+	for _, p := range readyPods(pods) {
+		if p.GetName() != pod {
+			continue
+		}
+		url, err := serverURL(p)
+		if err != nil {
+			return Instance{}, fmt.Errorf("%s: %w", pod, err)
+		}
 		model, _, _ := unstructured.NestedString(svc.Object, "spec", "model", "name")
 		if model == "" {
 			model = svc.GetName()
 		}
-		if !slices.Contains(names, model) || svc.GetAnnotations()[IgnoreAnnotation] == "true" {
-			continue
-		}
-		name := svc.GetNamespace() + "/" + svc.GetName()
-		if _, separate, _ := unstructured.NestedMap(svc.Object, "spec", "prefill"); separate {
-			notes = append(notes, name+" has separate prefill pods, which a single pod does not measure")
-			continue
-		}
-		pods, err := c.dyn.Resource(podsGVR).Namespace(svc.GetNamespace()).List(ctx, metav1.ListOptions{
-			LabelSelector: "app.kubernetes.io/name=" + svc.GetName() + ",kserve.io/component=workload",
-		})
-		if err != nil {
-			return Instance{}, fmt.Errorf("list the pods of %s: %w", name, err)
-		}
-		ready := readyPods(pods.Items)
-		if len(ready) == 0 {
-			notes = append(notes, name+" has no ready pod")
-			continue
-		}
-		chosen := ready[0]
-		if pod != "" {
-			found := false
-			for _, p := range ready {
-				if p.GetName() == pod {
-					chosen, found = p, true
-				}
-			}
-			if !found {
-				notes = append(notes, name+" has no ready pod called "+pod)
-				continue
-			}
-		}
-		url, err := serverURL(chosen)
-		if err != nil {
-			return Instance{}, fmt.Errorf("%s: %w", name, err)
-		}
 		maxLen, _ := strconv.Atoi(svc.GetAnnotations()[MaxModelLenAnnotation])
-		return Instance{Namespace: svc.GetNamespace(), Pod: chosen.GetName(), URL: url, Model: model, MaxModelLen: maxLen}, nil
+		return Instance{Namespace: namespace, Pod: pod, URL: url, Model: model, MaxModelLen: maxLen}, nil
 	}
-	if len(notes) == 0 {
-		return Instance{}, fmt.Errorf("no LLMInferenceService on this cluster serves %s", strings.Join(names, " or "))
+	return Instance{}, fmt.Errorf("%s/%s has no ready pod called %s", namespace, name, pod)
+}
+
+// llmService reads one LLMInferenceService, in the newest version the
+// cluster has.
+func (c *Client) llmService(ctx context.Context, namespace, name string) (*unstructured.Unstructured, error) {
+	for i, gvr := range llmServiceGVRs {
+		svc, err := c.dyn.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if meta.IsNoMatchError(err) && i < len(llmServiceGVRs)-1 {
+			continue
+		}
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("no LLMInferenceService %s/%s on this cluster", namespace, name)
+		}
+		return svc, err
 	}
-	return Instance{}, fmt.Errorf("no pod to measure: %s", strings.Join(notes, "; "))
+	return nil, fmt.Errorf("no LLMInferenceService %s/%s on this cluster", namespace, name)
+}
+
+// deploymentPods lists the workload pods of an LLMInferenceService.
+func (c *Client) deploymentPods(ctx context.Context, namespace, name string) ([]unstructured.Unstructured, error) {
+	pods, err := c.dyn.Resource(podsGVR).Namespace(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/name=" + name + ",kserve.io/component=workload",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list the pods of %s/%s: %w", namespace, name, err)
+	}
+	return pods.Items, nil
 }
 
 // llmServices lists the LLMInferenceServices in every namespace, in the
@@ -119,25 +133,33 @@ func (c *Client) llmServices(ctx context.Context) ([]unstructured.Unstructured, 
 func readyPods(pods []unstructured.Unstructured) []unstructured.Unstructured {
 	var out []unstructured.Unstructured
 	for _, p := range pods {
-		if p.GetDeletionTimestamp() != nil || p.GetLabels()["llm-d.ai/role"] == "prefill" {
-			continue
-		}
-		if phase, _, _ := unstructured.NestedString(p.Object, "status", "phase"); phase != "Running" {
-			continue
-		}
-		if ip, _, _ := unstructured.NestedString(p.Object, "status", "podIP"); ip == "" {
-			continue
-		}
-		conditions, _, _ := unstructured.NestedSlice(p.Object, "status", "conditions")
-		for _, c := range conditions {
-			if m, ok := c.(map[string]any); ok && m["type"] == "Ready" && m["status"] == "True" {
-				out = append(out, p)
-				break
-			}
+		if p.GetLabels()["llm-d.ai/role"] != "prefill" && isReady(&p) {
+			out = append(out, p)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].GetName() < out[j].GetName() })
 	return out
+}
+
+// isReady says whether a pod is running, has an address and passes its
+// readiness check.
+func isReady(p *unstructured.Unstructured) bool {
+	if p.GetDeletionTimestamp() != nil {
+		return false
+	}
+	if phase, _, _ := unstructured.NestedString(p.Object, "status", "phase"); phase != "Running" {
+		return false
+	}
+	if ip, _, _ := unstructured.NestedString(p.Object, "status", "podIP"); ip == "" {
+		return false
+	}
+	conditions, _, _ := unstructured.NestedSlice(p.Object, "status", "conditions")
+	for _, c := range conditions {
+		if m, ok := c.(map[string]any); ok && m["type"] == "Ready" && m["status"] == "True" {
+			return true
+		}
+	}
+	return false
 }
 
 // serverURL reads where a pod's model server listens from the readiness

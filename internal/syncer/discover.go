@@ -120,10 +120,18 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, found []kube.ModelCapacity) {
 	reported := make([]store.Capacity, 0, len(found))
 	for _, f := range found {
-		c := store.Capacity{Model: f.Model, Capacity: f.Capacity, Instances: f.Instances, Step: f.Step, Detail: f.Detail,
+		c := store.Capacity{Model: f.Model, Capacity: f.Capacity, Step: f.Step, Detail: f.Detail,
 			Revision: f.Revision, MaxModelLen: f.MaxModelLen, Known: f.Known}
 		for _, p := range f.Pools {
 			c.Pools = append(c.Pools, store.Pool{Namespace: p.Namespace, Name: p.Name, Group: p.Group})
+		}
+		for _, d := range f.Deployments {
+			sd := store.Deployment{Namespace: d.Namespace, Name: d.Name, Topology: d.Topology, GPU: d.GPU,
+				GPUsPerInstance: d.GPUsPerInstance, Revision: d.Revision}
+			if d.Known {
+				sd.Instances = &d.Instances
+			}
+			c.Deployments = append(c.Deployments, sd)
 		}
 		reported = append(reported, c)
 	}

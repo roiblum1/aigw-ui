@@ -23,7 +23,11 @@ type CapacityRun struct {
 	ClusterID   string `json:"cluster_id"`
 	ClusterName string `json:"cluster_name"`
 	Namespace   string `json:"namespace"`
-	JobName     string `json:"job_name"`
+	// Deployment is the LLMInferenceService measured, and Shape its shape
+	// when the measurement started.
+	Deployment string         `json:"deployment"`
+	Shape      capacity.Shape `json:"shape"`
+	JobName    string         `json:"job_name"`
 	// Instance is the pod that was measured.
 	Instance string            `json:"instance"`
 	Settings capacity.Settings `json:"settings"`
@@ -37,14 +41,15 @@ type CapacityRun struct {
 	FinishedAt *time.Time      `json:"finished_at"`
 }
 
-const runSelect = `SELECT r.id, r.model_id, m.name, r.cluster_id, c.name, r.namespace, r.job_name, r.instance, r.settings,
+const runSelect = `SELECT r.id, r.model_id, m.name, r.cluster_id, c.name, r.namespace, r.deployment, r.topology, r.gpu, r.gpus_per_instance,
+	r.revision, r.job_name, r.instance, r.settings,
 	r.status, r.detail, r.dataset, r.steps, r.created_at, r.finished_at
 	FROM capacity_runs r JOIN models m ON m.id = r.model_id JOIN clusters c ON c.id = r.cluster_id`
 
 func scanRun(r scanner) (CapacityRun, error) {
 	var run CapacityRun
-	err := r.Scan(&run.ID, &run.ModelID, &run.ModelName, &run.ClusterID, &run.ClusterName, &run.Namespace, &run.JobName,
-		&run.Instance, &run.Settings, &run.Status, &run.Detail, &run.Dataset, &run.Steps, &run.CreatedAt, &run.FinishedAt)
+	err := r.Scan(&run.ID, &run.ModelID, &run.ModelName, &run.ClusterID, &run.ClusterName, &run.Namespace, &run.Deployment,
+		&run.Shape.Topology, &run.Shape.GPU, &run.Shape.GPUsPerInstance, &run.Shape.Revision, &run.JobName, &run.Instance, &run.Settings, &run.Status, &run.Detail, &run.Dataset, &run.Steps, &run.CreatedAt, &run.FinishedAt)
 	if run.Steps == nil {
 		run.Steps = []capacity.Step{}
 	}
@@ -52,12 +57,22 @@ func scanRun(r scanner) (CapacityRun, error) {
 	return run, err
 }
 
+// NewRun is a run that is about to start.
+type NewRun struct {
+	ID, ModelID, ClusterID, Namespace, Deployment, Instance, JobName string
+	Shape                                                            capacity.Shape
+	Settings                                                         capacity.Settings
+}
+
 // CreateCapacityRun records a run that is about to start. A model with a run
 // that has not ended gives ErrConflict.
-func (s *Store) CreateCapacityRun(ctx context.Context, id, modelID, clusterID, namespace, jobName, instance string, set capacity.Settings) error {
+func (s *Store) CreateCapacityRun(ctx context.Context, r NewRun) error {
 	_, err := s.db.Exec(ctx,
-		`INSERT INTO capacity_runs (id, model_id, cluster_id, namespace, job_name, instance, settings, status)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, 'running')`, id, modelID, clusterID, namespace, jobName, instance, set)
+		`INSERT INTO capacity_runs (id, model_id, cluster_id, namespace, deployment, instance, topology, gpu, gpus_per_instance, revision,
+		     job_name, settings, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'running')`,
+		r.ID, r.ModelID, r.ClusterID, r.Namespace, r.Deployment, r.Instance, r.Shape.Topology, r.Shape.GPU, r.Shape.GPUsPerInstance,
+		r.Shape.Revision, r.JobName, r.Settings)
 	return mapErr(err)
 }
 
@@ -77,18 +92,21 @@ func (s *Store) RunningCapacityRuns(ctx context.Context) ([]CapacityRun, error) 
 	return list(ctx, s, scanRun, runSelect+` WHERE r.status = 'running' ORDER BY r.created_at`)
 }
 
-// LatestCapacityRuns returns the newest run of every model that found a load
-// the instance serves at the promised latency.
+// LatestCapacityRuns returns, for every model and shape, the newest run
+// that found a load the instance serves at the promised latency.
 func (s *Store) LatestCapacityRuns(ctx context.Context) ([]CapacityRun, error) {
 	runs, err := list(ctx, s, scanRun, runSelect+` WHERE r.status = 'succeeded' ORDER BY r.model_id, r.created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
 	out := []CapacityRun{}
+	seen := map[string]bool{}
 	for _, run := range runs {
-		if run.Result.Best == nil || (len(out) > 0 && out[len(out)-1].ModelID == run.ModelID) {
+		key := run.ModelID + "|" + run.Shape.Key()
+		if run.Result.Best == nil || seen[key] {
 			continue
 		}
+		seen[key] = true
 		out = append(out, run)
 	}
 	return out, nil
@@ -114,25 +132,26 @@ func (s *Store) DeleteCapacityRun(ctx context.Context, id string) error {
 	return affected(s.db.Exec(ctx, `DELETE FROM capacity_runs WHERE id = $1 AND status <> 'running'`, id))
 }
 
-// DayUsage is what one model was used for in its busiest recent day.
-type DayUsage struct {
+// RecentUsage is what one model was used for since a point in time, in one
+// unit, best-effort included.
+type RecentUsage struct {
 	ModelID string
 	Unit    string
-	Day     time.Time
-	Used    int64
+	// Busiest is the most in one day (UTC), Total all of it.
+	Busiest int64
+	Total   int64
 }
 
-// BusiestDays returns, for every model, the day since from on which it was
-// used the most, best-effort included, in the unit it is counted in now.
-func (s *Store) BusiestDays(ctx context.Context, from time.Time) ([]DayUsage, error) {
-	return list(ctx, s, func(r scanner) (DayUsage, error) {
-		var d DayUsage
-		err := r.Scan(&d.ModelID, &d.Unit, &d.Day, &d.Used)
-		return d, err
-	}, `SELECT DISTINCT ON (model_id, unit) model_id, unit, day, used FROM (
-	        SELECT model_id, unit, date_trunc('day', hour, 'UTC') AS day, sum(used + best_effort)::bigint AS used
+// UsageSince returns, for every model and unit, its use since from.
+func (s *Store) UsageSince(ctx context.Context, from time.Time) ([]RecentUsage, error) {
+	return list(ctx, s, func(r scanner) (RecentUsage, error) {
+		var u RecentUsage
+		err := r.Scan(&u.ModelID, &u.Unit, &u.Busiest, &u.Total)
+		return u, err
+	}, `SELECT model_id, unit, max(used)::bigint, sum(used)::bigint FROM (
+	        SELECT model_id, unit, date_trunc('day', hour, 'UTC') AS day, sum(used + best_effort) AS used
 	        FROM usage_hours WHERE hour >= $1 GROUP BY model_id, unit, day
-	    ) d ORDER BY model_id, unit, used DESC`, from)
+	    ) d GROUP BY model_id, unit`, from)
 }
 
 // AllQuotas returns every tenant's quota on every model.

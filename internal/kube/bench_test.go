@@ -59,3 +59,43 @@ func TestServerURL(t *testing.T) {
 		t.Fatalf("https: %v", err)
 	}
 }
+
+func TestShapeOfADeployment(t *testing.T) {
+	gpuPod := func(name, node, role string, gpus any) unstructured.Unstructured {
+		p := pod(name, "Running", "10.0.0.1", true, role, nil)
+		p.SetNamespace("llm")
+		labels := p.GetLabels()
+		labels["app.kubernetes.io/name"] = "glm"
+		p.SetLabels(labels)
+		p.Object["spec"].(map[string]any)["nodeName"] = node
+		c := p.Object["spec"].(map[string]any)["containers"].([]any)[1].(map[string]any)
+		c["resources"] = map[string]any{"limits": map[string]any{"nvidia.com/gpu": gpus}}
+		return p
+	}
+	g := gpuShapes{
+		pods: []unstructured.Unstructured{
+			gpuPod("glm-decode-0", "n1", "decode", int64(8)),
+			gpuPod("glm-decode-1", "n2", "decode", "8"),
+			gpuPod("glm-prefill-0", "n3", "prefill", int64(8)),
+			gpuPod("glm-prefill-1", "n4", "prefill", int64(8)),
+		},
+		products: map[string]string{"n1": "NVIDIA-H200", "n2": "NVIDIA-H200", "n3": "NVIDIA-H200", "n4": "NVIDIA-B200"},
+	}
+	svc := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": "glm", "namespace": "llm"},
+		"spec":     map[string]any{"prefill": map[string]any{"replicas": int64(2)}},
+	}}
+	// Two prefill and decode instances: 32 GPUs, 16 each, mostly H200.
+	d := g.of(svc, 2, true)
+	if d.Topology != TopologyPrefillDecode || d.GPU != "NVIDIA-H200" || d.GPUsPerInstance != 16 || d.Instances != 2 {
+		t.Fatalf("shape = %+v", d)
+	}
+	single := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "other", "namespace": "llm"}, "spec": map[string]any{}}}
+	if d := g.of(single, 0, false); d.Topology != TopologySingle || d.GPU != "" || d.GPUsPerInstance != 0 {
+		t.Fatalf("no pods = %+v", d)
+	}
+	multi := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "x", "namespace": "llm"}, "spec": map[string]any{"worker": map[string]any{}}}}
+	if d := g.of(multi, 1, true); d.Topology != TopologyMultiNode {
+		t.Fatalf("multi-node = %+v", d)
+	}
+}

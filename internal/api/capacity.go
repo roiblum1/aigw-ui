@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,37 +17,52 @@ import (
 	"aigw-ui/internal/store"
 )
 
-// capacitySite is one cluster that serves a model.
-type capacitySite struct {
-	ClusterID   string   `json:"cluster_id"`
-	ClusterName string   `json:"cluster_name"`
-	Instances   *float64 `json:"instances"`
-	MaxModelLen int      `json:"max_model_len"`
+// capacityDeployment is a deployment of a model as the capacity page shows it.
+type capacityDeployment struct {
+	store.Deployment
+	Shape       capacity.Shape `json:"shape"`
+	MaxModelLen int            `json:"max_model_len"`
 }
 
 // capacityModel is what the capacity page shows of one model.
 type capacityModel struct {
-	ModelID   string         `json:"model_id"`
-	ModelName string         `json:"model_name"`
-	Unit      string         `json:"unit"`
-	Sites     []capacitySite `json:"sites"`
+	ModelID           string               `json:"model_id"`
+	ModelName         string               `json:"model_name"`
+	Unit              string               `json:"unit"`
+	TargetUtilization float64              `json:"target_utilization"`
+	Deployments       []capacityDeployment `json:"deployments"`
 	// Defaults are the settings a new measurement starts from.
 	Defaults capacity.Settings `json:"defaults"`
-	// Latest is the newest measurement that found a load the instance
-	// serves at the promised latency, and Plan what follows from it.
-	Latest  *store.CapacityRun `json:"latest"`
-	Plan    *capacity.Plan     `json:"plan"`
-	Running *store.CapacityRun `json:"running"`
+	// Latest is the newest measurement of each shape that found a load
+	// within the targets, and Plan what follows from them.
+	Latest  []store.CapacityRun `json:"latest"`
+	Plan    capacity.Plan       `json:"plan"`
+	Running *store.CapacityRun  `json:"running"`
 }
 
-// busiestDays is how far back the busiest day of a model is looked for.
-const busiestDays = 30 * 24 * time.Hour
+// capacityGPU is a GPU the fleet runs on, or one with a price.
+type capacityGPU struct {
+	GPU        string   `json:"gpu"`
+	USDPerHour *float64 `json:"usd_per_hour"`
+	Note       string   `json:"note"`
+	// Deployments counts the deployments on it.
+	Deployments int `json:"deployments"`
+}
 
-// capacityPlans returns, for every model, what one instance serves, what
-// the model can be given and what it has been given.
+// recentDays is how far back the use of a model is looked at.
+const recentDays = 30
+
+// capacityPlans returns, for every model, its deployments and their shapes,
+// what each shape serves, what the model can be given and what it has been
+// given, and the GPUs with their prices.
 func (s *Server) capacityPlans(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	models, err := s.st.ListModels(ctx)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	deployments, err := s.st.ListDeployments(ctx)
 	if err != nil {
 		fail(w, err)
 		return
@@ -65,29 +82,69 @@ func (s *Server) capacityPlans(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	busiest, err := s.st.BusiestDays(ctx, time.Now().Add(-busiestDays))
+	used, err := s.st.UsageSince(ctx, time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -recentDays))
 	if err != nil {
 		fail(w, err)
 		return
 	}
+	targets, err := s.st.TargetUtilizations(ctx)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	prices, err := s.st.ListGPUPrices(ctx)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	gpus := map[string]*capacityGPU{}
+	for _, p := range prices {
+		usd := p.USDPerHour
+		gpus[p.GPU] = &capacityGPU{GPU: p.GPU, USDPerHour: &usd, Note: p.Note}
+	}
+	for _, d := range deployments {
+		if d.GPU == "" {
+			continue
+		}
+		if gpus[d.GPU] == nil {
+			gpus[d.GPU] = &capacityGPU{GPU: d.GPU}
+		}
+		gpus[d.GPU].Deployments++
+	}
 
 	out := make([]capacityModel, 0, len(models))
 	for _, m := range models {
-		cm := capacityModel{ModelID: m.ID, ModelName: m.Name, Unit: m.Unit, Sites: []capacitySite{}}
-		var instances float64
-		shortest := 0
+		cm := capacityModel{ModelID: m.ID, ModelName: m.Name, Unit: m.Unit, TargetUtilization: targets[m.ID], Deployments: []capacityDeployment{}, Latest: []store.CapacityRun{}}
+		maxLen := map[string]int{}
 		for _, e := range m.Endpoints {
-			if !e.Capacity.Serving {
+			maxLen[e.ClusterID] = maxModelLen(e.Capacity.MaxModelLen)
+		}
+		shortest := 0
+		byShape := map[string]*capacity.ShapeInput{}
+		var order []string
+		for _, d := range deployments {
+			if d.ModelID != m.ID {
 				continue
 			}
-			site := capacitySite{ClusterID: e.ClusterID, ClusterName: e.ClusterName, Instances: e.Capacity.Instances, MaxModelLen: maxModelLen(e.Capacity.MaxModelLen)}
-			cm.Sites = append(cm.Sites, site)
-			if site.Instances != nil && !e.Capacity.Drained {
-				instances += *site.Instances
+			shape := capacity.Shape{Topology: d.Topology, GPU: d.GPU, GPUsPerInstance: d.GPUsPerInstance, Revision: d.Revision}
+			cm.Deployments = append(cm.Deployments, capacityDeployment{Deployment: d, Shape: shape, MaxModelLen: maxLen[d.ClusterID]})
+			if l := maxLen[d.ClusterID]; l > 0 && (shortest == 0 || l < shortest) {
+				shortest = l
 			}
-			if site.MaxModelLen > 0 && (shortest == 0 || site.MaxModelLen < shortest) {
-				shortest = site.MaxModelLen
+			in := byShape[shape.Key()]
+			if in == nil {
+				in = &capacity.ShapeInput{Shape: shape}
+				if p := gpus[d.GPU]; p != nil && p.USDPerHour != nil {
+					c := capacity.CreditsPerHour(*p.USDPerHour)
+					in.GPUPrice = &c
+				}
+				byShape[shape.Key()] = in
+				order = append(order, shape.Key())
 			}
+			if d.Instances != nil && !d.Drained {
+				in.Instances += *d.Instances
+			}
+			in.Sites = appendNew(in.Sites, d.ClusterName)
 		}
 		cm.Defaults = capacity.Defaults(shortest)
 		for i := range running {
@@ -96,36 +153,57 @@ func (s *Server) capacityPlans(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for i := range latest {
-			if latest[i].ModelID != m.ID {
+			run := latest[i]
+			if run.ModelID != m.ID {
 				continue
 			}
-			cm.Latest = &latest[i]
-			in := capacity.PlanInput{
-				Unit:           m.Unit,
-				CostExpression: m.CostExpression,
-				Throughput:     capacity.ThroughputOf(*latest[i].Result.Best),
-				Settings:       latest[i].Settings,
-				Instances:      instances,
+			cm.Latest = append(cm.Latest, run)
+			if in := byShape[run.Shape.Key()]; in != nil {
+				t := capacity.ThroughputOf(*run.Result.Best)
+				in.Measured = &t
 			}
-			if m.Prices != nil {
-				in.Prices = &capacity.Prices{Input: m.Prices.Input, Cached: m.Prices.Cached, Output: m.Prices.Output}
-			}
-			for _, q := range quotas {
-				if q.ModelID == m.ID && !q.Shadow {
-					in.AllocatedPerDay += q.TokenLimit * capacity.PerDay(q.Window)
-				}
-			}
-			for _, d := range busiest {
-				if d.ModelID == m.ID && d.Unit == m.Unit {
-					in.BusiestDay = d.Used
-				}
-			}
-			plan := capacity.MakePlan(in)
-			cm.Plan = &plan
 		}
+
+		in := capacity.PlanInput{Unit: m.Unit, CostExpression: m.CostExpression, Utilization: targets[m.ID], Days: recentDays}
+		for _, key := range order {
+			in.Shapes = append(in.Shapes, *byShape[key])
+		}
+		if m.Prices != nil {
+			in.Prices = &capacity.Prices{Input: m.Prices.Input, Cached: m.Prices.Cached, Output: m.Prices.Output}
+		}
+		for _, q := range quotas {
+			switch {
+			case q.ModelID != m.ID || q.Shadow:
+			case q.Window == "1d":
+				in.AllocatedPerDay += q.TokenLimit
+			default:
+				in.RateLimits++
+			}
+		}
+		for _, u := range used {
+			if u.ModelID == m.ID && u.Unit == m.Unit {
+				in.BusiestDay, in.TotalUsed = u.Busiest, u.Total
+			}
+		}
+		cm.Plan = capacity.MakePlan(in)
 		out = append(out, cm)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"image": s.bench.Image(), "models": out})
+
+	gpuList := make([]capacityGPU, 0, len(gpus))
+	for _, g := range gpus {
+		gpuList = append(gpuList, *g)
+	}
+	sort.Slice(gpuList, func(i, j int) bool { return gpuList[i].GPU < gpuList[j].GPU })
+	writeJSON(w, http.StatusOK, map[string]any{"image": s.bench.Image(), "gpus": gpuList, "models": out})
+}
+
+func appendNew(list []string, v string) []string {
+	for _, x := range list {
+		if x == v {
+			return list
+		}
+	}
+	return append(list, v)
 }
 
 // maxModelLen reads the longest request a site's deployments take. Several
@@ -140,6 +218,87 @@ func maxModelLen(declared string) int {
 	return shortest
 }
 
+// setTargetUtilization sets the share of the day a model's instances are
+// expected to be busy.
+func (s *Server) setTargetUtilization(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Utilization float64 `json:"utilization"`
+	}
+	if err := decode(r, &b); err != nil {
+		fail(w, err)
+		return
+	}
+	if !(b.Utilization >= 0.05) || b.Utilization > 1 {
+		fail(w, invalid("utilization must be from 0.05 to 1"))
+		return
+	}
+	name, err := s.st.SetTargetUtilization(r.Context(), r.PathValue("id"), b.Utilization)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	note(r, "capacity.utilization", "Set the expected busy share of "+name+" to "+strconv.Itoa(int(math.Round(b.Utilization*100)))+"%")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// maxGPUPrice catches a price typed in the wrong unit: no GPU costs a
+// thousand dollars an hour.
+const maxGPUPrice = 1000
+
+func (s *Server) setGPUPrice(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		USDPerHour float64 `json:"usd_per_hour"`
+		Note       string  `json:"note"`
+	}
+	if err := decode(r, &b); err != nil {
+		fail(w, err)
+		return
+	}
+	gpu := r.PathValue("gpu")
+	switch {
+	case gpu == "" || len(gpu) > 100:
+		fail(w, invalid("the GPU must be named, in at most 100 characters"))
+		return
+	case !(b.USDPerHour > 0) || b.USDPerHour > maxGPUPrice:
+		fail(w, invalid("usd_per_hour must be more than 0 and at most %d", maxGPUPrice))
+		return
+	case len(b.Note) > 500:
+		fail(w, invalid("note must be at most 500 characters"))
+		return
+	}
+	if err := s.st.SetGPUPrice(r.Context(), store.GPUPrice{GPU: gpu, USDPerHour: b.USDPerHour, Note: b.Note}); err != nil {
+		fail(w, err)
+		return
+	}
+	note(r, "capacity.gpu-price", "Set the price of "+gpu+" to $"+strconv.FormatFloat(b.USDPerHour, 'f', -1, 64)+" an hour")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteGPUPrice(w http.ResponseWriter, r *http.Request) {
+	gpu := r.PathValue("gpu")
+	if err := s.st.DeleteGPUPrice(r.Context(), gpu); err != nil {
+		fail(w, err)
+		return
+	}
+	note(r, "capacity.gpu-price", "Removed the price of "+gpu)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deploymentPods lists the ready pods of a deployment that a measurement can
+// be aimed at. It asks the cluster.
+func (s *Server) deploymentPods(w http.ResponseWriter, r *http.Request) {
+	pods, err := s.bench.Pods(r.Context(), r.PathValue("id"), r.PathValue("namespace"), r.PathValue("name"))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, err)
+			return
+		}
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, pods)
+}
+
 func (s *Server) listCapacityRuns(w http.ResponseWriter, r *http.Request) {
 	runs, err := s.st.ListCapacityRuns(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -149,12 +308,14 @@ func (s *Server) listCapacityRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runs)
 }
 
-// capacityRunBody starts a measurement. Settings that are left out take
-// their defaults for the site's deployment.
+// capacityRunBody starts a measurement of one pod of one deployment.
+// Settings that are left out take their defaults for the deployment.
 type capacityRunBody struct {
-	ClusterID string            `json:"cluster_id"`
-	Pod       string            `json:"pod"`
-	Settings  capacity.Settings `json:"settings"`
+	ClusterID  string            `json:"cluster_id"`
+	Namespace  string            `json:"namespace"`
+	Deployment string            `json:"deployment"`
+	Pod        string            `json:"pod"`
+	Settings   capacity.Settings `json:"settings"`
 }
 
 func (s *Server) startCapacityRun(w http.ResponseWriter, r *http.Request) {
@@ -172,8 +333,12 @@ func (s *Server) startCapacityRun(w http.ResponseWriter, r *http.Request) {
 		fail(w, invalid("invalid JSON body: %v", err))
 		return
 	}
-	if b.ClusterID == "" {
-		fail(w, invalid("cluster_id is required"))
+	switch {
+	case b.ClusterID == "" || b.Namespace == "" || b.Deployment == "":
+		fail(w, invalid("cluster_id, namespace and deployment are required"))
+		return
+	case b.Pod == "":
+		fail(w, invalid("pod is required: the pod keeps its own traffic while it is measured, so it is chosen on purpose"))
 		return
 	}
 	models, err := s.st.ListModels(ctx)
@@ -208,13 +373,13 @@ func (s *Server) startCapacityRun(w http.ResponseWriter, r *http.Request) {
 		fail(w, invalid("%s", err.Error()))
 		return
 	}
-	run, err := s.bench.Start(ctx, modelID, b.ClusterID, b.Pod, b.Settings)
+	run, err := s.bench.Start(ctx, modelID, b.ClusterID, b.Namespace, b.Deployment, b.Pod, b.Settings)
 	switch {
 	case errors.Is(err, benchmark.ErrNoImage):
 		writeError(w, http.StatusConflict, "The server has no AIPerf image to run. Set capacity.image in the chart (CAPACITY_IMAGE) to an image in a registry the clusters can pull from.")
 		return
 	case errors.Is(err, benchmark.ErrNotServed):
-		writeError(w, http.StatusNotFound, model.Name+" is not served on that cluster.")
+		writeError(w, http.StatusNotFound, b.Namespace+"/"+b.Deployment+" is not a deployment of "+model.Name+" on that cluster.")
 		return
 	case errors.Is(err, benchmark.ErrBusy):
 		writeError(w, http.StatusConflict, "A measurement of "+model.Name+" is running. Wait for it or stop it first: two at once would share the GPUs and both be wrong.")
@@ -226,7 +391,7 @@ func (s *Server) startCapacityRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	note(r, "capacity.start", "Started measuring "+model.Name+" on "+run.ClusterName+" ("+run.Namespace+"/"+run.Instance+")")
+	note(r, "capacity.start", "Started measuring "+model.Name+" on "+run.ClusterName+" ("+run.Namespace+"/"+run.Instance+", "+run.Shape.Label()+")")
 	writeJSON(w, http.StatusCreated, run)
 }
 

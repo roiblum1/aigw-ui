@@ -13,10 +13,8 @@ import (
 
 // Capacity is what one cluster reported for one model.
 type Capacity struct {
-	Model    string
-	Capacity float64
-	// Instances is the number of ready instances.
-	Instances   float64
+	Model       string
+	Capacity    float64
 	Step        float64
 	Detail      string
 	Revision    string
@@ -26,6 +24,9 @@ type Capacity struct {
 	Known bool
 	// Pools are the InferencePools the model is served through.
 	Pools []Pool
+	// Deployments are its LLMInferenceServices on the cluster, with their
+	// shapes.
+	Deployments []Deployment
 }
 
 // Pool names an InferencePool on a cluster.
@@ -43,9 +44,7 @@ type EndpointCapacity struct {
 	// Drained is set by an operator; the weight goes to 0 and stays there.
 	Drained bool `json:"drained"`
 	// Observed is ready instances times the capacity of one, as last read.
-	Observed *float64 `json:"observed"`
-	// Instances is the number of ready instances, as last read.
-	Instances  *float64   `json:"instances"`
+	Observed   *float64   `json:"observed"`
 	ObservedAt *time.Time `json:"observed_at"`
 	// Weight is the value applied as the site's share of the model's
 	// traffic. It follows Observed slowly.
@@ -77,27 +76,28 @@ func (s *Store) ApplyCapacity(ctx context.Context, clusterID string, reported []
 	}
 	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT e.id, m.name, e.upstream_model, e.backends, e.capacity_applied, e.capacity_low_streak, e.capacity_step, e.drained
+			`SELECT e.id, e.model_id, m.name, e.upstream_model, e.backends, e.capacity_applied, e.capacity_low_streak, e.capacity_step, e.drained
 			 FROM model_endpoints e JOIN models m ON m.id = e.model_id WHERE e.cluster_id = $1 FOR UPDATE OF e`, clusterID)
 		if err != nil {
 			return err
 		}
 		type endpoint struct {
-			id, model, upstream string
-			backends            []BackendRef
-			applied             *float64
-			lowStreak           int
-			step                float64
-			drained             bool
+			id, modelID, model, upstream string
+			backends                     []BackendRef
+			applied                      *float64
+			lowStreak                    int
+			step                         float64
+			drained                      bool
 		}
 		endpoints, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (endpoint, error) {
 			var e endpoint
-			err := r.Scan(&e.id, &e.model, &e.upstream, &e.backends, &e.applied, &e.lowStreak, &e.step, &e.drained)
+			err := r.Scan(&e.id, &e.modelID, &e.model, &e.upstream, &e.backends, &e.applied, &e.lowStreak, &e.step, &e.drained)
 			return e, err
 		})
 		if err != nil {
 			return err
 		}
+		kept := []string{}
 		for _, e := range endpoints {
 			names := []string{e.model, e.upstream}
 			for _, b := range e.backends {
@@ -108,6 +108,14 @@ func (s *Store) ApplyCapacity(ctx context.Context, clusterID string, reported []
 			for _, name := range names {
 				if c, found = byName[name]; found {
 					break
+				}
+			}
+			if found {
+				for _, d := range c.Deployments {
+					if err := upsertDeployment(ctx, tx, clusterID, e.modelID, d); err != nil {
+						return err
+					}
+					kept = append(kept, d.Namespace+"/"+d.Name)
 				}
 			}
 			// A drained site that already sat at the lowest weight for a poll
@@ -141,14 +149,17 @@ func (s *Store) ApplyCapacity(ctx context.Context, clusterID string, reported []
 			_, err := tx.Exec(ctx,
 				`UPDATE model_endpoints SET serving = $8, capacity_observed = $2, capacity_step = $3, capacity_detail = $4, capacity_observed_at = now(),
 				        capacity_applied = $5, capacity_low_streak = $6, revision = $9, max_model_len = $10, unlisted = $11, pools = $12,
-				        capacity_changed_at = CASE WHEN $7 THEN now() ELSE capacity_changed_at END, instances = $13
+				        capacity_changed_at = CASE WHEN $7 THEN now() ELSE capacity_changed_at END
 				 WHERE id = $1`,
-				e.id, c.Capacity, c.Step, c.Detail, next, streak, moved, found, c.Revision, c.MaxModelLen, unlisted, pools(c), c.Instances)
+				e.id, c.Capacity, c.Step, c.Detail, next, streak, moved, found, c.Revision, c.MaxModelLen, unlisted, pools(c))
 			if err != nil {
 				return err
 			}
 		}
-		return nil
+		// A deployment that is gone, or no longer serves a model in the
+		// catalog, is no longer counted.
+		_, err = tx.Exec(ctx, `DELETE FROM model_deployments WHERE cluster_id = $1 AND NOT (namespace || '/' || name = ANY($2))`, clusterID, kept)
+		return err
 	})
 	return mapErr(err)
 }

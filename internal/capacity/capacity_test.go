@@ -37,8 +37,7 @@ func TestValidate(t *testing.T) {
 		"zero in flight":     func(s *Settings) { s.Concurrency = []int{0, 1} },
 		"short step":         func(s *Settings) { s.StepSeconds = 10 },
 		"no ttft target":     func(s *Settings) { s.TTFTMillis = 0 },
-		"utilization 1.5":    func(s *Settings) { s.Utilization = 1.5 },
-		"negative cost":      func(s *Settings) { s.CostPerHour = -1 },
+		"few requests":       func(s *Settings) { s.MinRequests = 2 },
 		"tiny prompt":        func(s *Settings) { s.MaxPromptTokens = 10 },
 		"too many steps":     func(s *Settings) { s.Concurrency = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13} },
 		"too many in flight": func(s *Settings) { s.Concurrency = []int{1, 2000} },
@@ -89,59 +88,117 @@ func TestCheckErrors(t *testing.T) {
 	}
 }
 
-func TestPlanInCredits(t *testing.T) {
-	// One instance: 10,000 prompt tokens a second, 90% from the cache, and
-	// 100 output tokens a second.
-	thr := Throughput{Concurrency: 8, InputPerSecond: 10000, CachedPerSecond: 9000, OutputPerSecond: 100, CachedShare: ptr(0.9)}
-	set := Defaults(0)
-	set.CostPerHour = 20
-	set.Utilization = 0.5
+func TestPlanAddsUpShapes(t *testing.T) {
+	// GLM on two measured shapes: 8× B300 in one node, two instances, and
+	// 8× H200, one instance. A third shape is not measured.
+	b300 := Throughput{Concurrency: 16, InputPerSecond: 10000, CachedPerSecond: 9000, OutputPerSecond: 100, CachedShare: ptr(0.9)}
+	h200 := Throughput{Concurrency: 8, InputPerSecond: 5000, CachedPerSecond: 4500, OutputPerSecond: 50, CachedShare: ptr(0.9)}
+	gpuB300, gpuH200 := int64(500_000), int64(300_000) // $5 and $3 an hour
 	// $1 per 1M input, $0.10 cached, $4 output.
 	prices := &Prices{Input: 100000, Cached: 10000, Output: 400000}
-	p := MakePlan(PlanInput{Unit: "credits", Prices: prices, Throughput: thr, Settings: set, Instances: 2, AllocatedPerDay: 50_000_000, BusiestDay: 10_000_000})
+	p := MakePlan(PlanInput{
+		Unit: "credits", Prices: prices, Utilization: 0.5, Days: 30,
+		Shapes: []ShapeInput{
+			{Shape: Shape{Topology: "single", GPU: "NVIDIA-B300", GPUsPerInstance: 8}, Instances: 2, Sites: []string{"tlv"}, Measured: &b300, GPUPrice: &gpuB300},
+			{Shape: Shape{Topology: "single", GPU: "NVIDIA-H200", GPUsPerInstance: 8}, Instances: 1, Sites: []string{"haifa"}, Measured: &h200, GPUPrice: &gpuH200},
+			{Shape: Shape{Topology: "prefill-decode", GPU: "NVIDIA-H200", GPUsPerInstance: 16}, Instances: 3, Sites: []string{"haifa"}, GPUPrice: &gpuH200},
+		},
+		AllocatedPerDay: 50_000_000, RateLimits: 2, BusiestDay: 10_000_000, TotalUsed: 150_000_000,
+	})
 
-	// A second: 1,000 uncached at 0.1 credit + 9,000 cached at 0.01 + 100 out at 0.4 = 100 + 90 + 40 = 230 credits.
-	if p.PerInstanceDay != 230*86400 {
-		t.Fatalf("per instance day = %d", p.PerInstanceDay)
+	// A B300 second: 1,000 uncached at 0.1 + 9,000 cached at 0.01 + 100 out at 0.4 = 230 credits; H200 half that.
+	if p.Shapes[0].PerInstanceDay != 230*86400 || p.Shapes[1].PerInstanceDay != 115*86400 || p.Shapes[2].Measured {
+		t.Fatalf("shapes: %+v", p.Shapes)
 	}
-	if p.CapacityDay != 230*86400*2/2 {
-		t.Fatalf("capacity day = %d", p.CapacityDay)
+	full := int64((2*230 + 115) * 86400)
+	if p.FullDay != full || p.CapacityDay != full/2 || p.Instances != 6 || p.MeasuredInstances != 3 {
+		t.Fatalf("plan: full %d capacity %d instances %v measured %v", p.FullDay, p.CapacityDay, p.Instances, p.MeasuredInstances)
 	}
-	if p.Overcommit == nil || *p.Overcommit < 2.51 || *p.Overcommit > 2.52 {
-		t.Fatalf("overcommit = %v", p.Overcommit)
+	// What the measured instances cost: 2 × 8 × $5 + 8 × $3 = $104 an hour.
+	if p.CostPerHour == nil || *p.CostPerHour != 10_400_000 {
+		t.Fatalf("cost = %v", p.CostPerHour)
 	}
-	if p.BusiestShare == nil || *p.BusiestShare < 0.25 || *p.BusiestShare > 0.26 {
-		t.Fatalf("busiest share = %v", p.BusiestShare)
-	}
-	if *p.ChargedPerInstanceHour != 230*3600 || *p.CostPerInstanceHour != 2_000_000 {
-		t.Fatalf("charged %d, cost %d", *p.ChargedPerInstanceHour, *p.CostPerInstanceHour)
-	}
-	// Weighted: 1,000 + 0.1 x 9,000 + 4 x 100 = 2,300 input tokens a second.
-	// $20 / (3,600 x 2,300 x 0.5) x 1M = $4.83 per 1M input.
-	if p.BreakEven == nil || p.BreakEven.Input != 483092 || p.BreakEven.Cached != 48310 || p.BreakEven.Output != 1932368 {
+	// One blended price: input-equivalent tokens a second are 2 × 2,300 + 1,150 = 5,750.
+	// $104 / (3,600 × 5,750 × 0.5) × 1M = $10.05 per 1M input.
+	if p.BreakEven == nil || p.BreakEven.Input != 1004831 || p.BreakEven.Cached != 100484 || p.BreakEven.Output != 4019324 {
 		t.Fatalf("break even = %+v", p.BreakEven)
 	}
-	if len(p.Notes) != 0 {
+	// Each shape's own cost of a million input-equivalent tokens busy all day:
+	// B300 $40 / (3,600 × 2,300) × 1M = $4.83; H200 $24 / (3,600 × 1,150) × 1M = $5.80.
+	if *p.Shapes[0].CostPerMillion != 483092 || *p.Shapes[1].CostPerMillion != 579711 || p.Shapes[2].CostPerMillion != nil {
+		t.Fatalf("cost per million: %v %v %v", *p.Shapes[0].CostPerMillion, *p.Shapes[1].CostPerMillion, p.Shapes[2].CostPerMillion)
+	}
+	if *p.ChargedPerHour != (2*230+115)*3600 {
+		t.Fatalf("charged = %d", *p.ChargedPerHour)
+	}
+	if o := *p.Overcommit; o < 2.01 || o > 2.02 {
+		t.Fatalf("overcommit = %v", o)
+	}
+	if b := *p.BusiestShare; b < 0.2 || b > 0.202 {
+		t.Fatalf("busiest share = %v", b)
+	}
+	if u := *p.ObservedUtilization; u < 0.1 || u > 0.101 {
+		t.Fatalf("observed = %v", u)
+	}
+	// The busiest day used a fifth of the budgets, so they could be 5× the capacity.
+	if *p.SafeAllocatedDay != p.CapacityDay*5 {
+		t.Fatalf("safe = %d, capacity %d", *p.SafeAllocatedDay, p.CapacityDay)
+	}
+	if len(p.Notes) != 2 { // 3 instances not measured; 2 rate limits
 		t.Fatalf("notes = %v", p.Notes)
 	}
 }
 
-func TestPlanInTokens(t *testing.T) {
+func TestPlanWithoutPrices(t *testing.T) {
 	thr := Throughput{Concurrency: 4, InputPerSecond: 1000, OutputPerSecond: 50}
-	p := MakePlan(PlanInput{Unit: "tokens", Throughput: thr, Settings: Defaults(0), Instances: 1, CostExpression: "input_tokens"})
-	if p.PerInstanceDay != 1050*86400 || p.CapacityDay != int64(1050*86400*0.6) {
-		t.Fatalf("tokens: %d %d", p.PerInstanceDay, p.CapacityDay)
+	p := MakePlan(PlanInput{Unit: "tokens", Utilization: 0.6, CostExpression: "input_tokens",
+		Shapes: []ShapeInput{{Shape: Shape{Topology: "single", GPU: "NVIDIA-B200", GPUsPerInstance: 8}, Instances: 1, Measured: &thr}}})
+	if p.FullDay != 1050*86400 || p.CapacityDay != int64(1050*86400*0.6) {
+		t.Fatalf("tokens: %d %d", p.FullDay, p.CapacityDay)
 	}
-	if p.BreakEven != nil || p.ChargedPerInstanceHour != nil || p.Overcommit == nil || *p.Overcommit != 0 {
+	// No GPU price: no cost, no break-even; no model prices: nothing charged.
+	if p.CostPerHour != nil || p.BreakEven != nil || p.ChargedPerHour != nil || p.Overcommit == nil || *p.Overcommit != 0 || p.SafeAllocatedDay != nil {
 		t.Fatalf("tokens: %+v", p)
 	}
-	if len(p.Notes) != 2 { // no cache figures, own cost expression
+	if len(p.Notes) != 3 { // no GPU price, no cache figures, own cost expression
 		t.Fatalf("notes = %v", p.Notes)
 	}
 
-	none := MakePlan(PlanInput{Unit: "tokens", Throughput: thr, Settings: Defaults(0)})
-	if none.CapacityDay != 0 || none.Overcommit != nil || none.BusiestShare != nil {
+	none := MakePlan(PlanInput{Unit: "tokens", Utilization: 0.6})
+	if none.CapacityDay != 0 || none.Overcommit != nil || none.BusiestShare != nil || len(none.Notes) != 1 {
 		t.Fatalf("no instance: %+v", none)
+	}
+}
+
+func TestShape(t *testing.T) {
+	a := Shape{Topology: "single", GPU: "NVIDIA-B300", GPUsPerInstance: 8, Revision: "r1"}
+	if a.Label() != "8× NVIDIA-B300, one node, revision r1" || a.Key() != "single|NVIDIA-B300|8|r1" {
+		t.Fatalf("%q %q", a.Label(), a.Key())
+	}
+	b := a
+	b.GPUsPerInstance = 8.0000001
+	if a.Key() != b.Key() {
+		t.Fatal("a rounding difference is another shape")
+	}
+	if l := (Shape{Topology: "prefill-decode"}).Label(); l != "GPU not known, prefill and decode" {
+		t.Fatal(l)
+	}
+}
+
+func TestStepViews(t *testing.T) {
+	set := Defaults(0)
+	set.MinRequests = 50
+	steps := []Step{step(1, 900, 20), step(2, 9000, 25), step(4, 900, 20)}
+	steps[0].Requests = 30 // reached its longest time first
+	r := Analyze(set, steps)
+	if len(r.Steps) != 3 || !r.Steps[0].Met || !r.Steps[0].FewSamples || r.Steps[1].Met || r.Steps[1].Reason == "" || !r.Steps[2].Met {
+		t.Fatalf("views = %+v", r.Steps)
+	}
+	if r.Steps[0].InputPerSecond != 10000 || *r.Steps[0].CachedShare != 0.9 || r.Best.Concurrency != 1 {
+		t.Fatalf("views = %+v best %+v", r.Steps[0], r.Best)
+	}
+	if set.Requests(1) != 50 || set.Requests(64) != 256 {
+		t.Fatal("requests per step")
 	}
 }
 
@@ -154,7 +211,7 @@ func TestPerDay(t *testing.T) {
 func TestAgenticScales(t *testing.T) {
 	full := Agentic(Defaults(0))
 	cache := full["cache"].(map[string]any)
-	if cache["layer1_tokens"] != 32000 || full["block_size"] != 512 || full["max_prompt_tokens"] != 167000 {
+	if cache["layer1_tokens"] != 32000 || full["block_size"] != 512 || full["max_prompt_tokens"] != 167000 || full["inter_turn_delay"].(map[string]any)["max"] != 0 {
 		t.Fatalf("full size: %v", full)
 	}
 	small := Agentic(Defaults(8192))

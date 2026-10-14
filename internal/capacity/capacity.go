@@ -37,13 +37,6 @@ type Settings struct {
 	// time to the first token, and time between two tokens after it.
 	TTFTMillis float64 `json:"ttft_p95_ms"`
 	ITLMillis  float64 `json:"itl_p95_ms"`
-	// CostPerHour is what one instance costs an hour, in dollars: its GPUs,
-	// power, rack and people. 0 when not known; the price that covers the
-	// cost is then not worked out.
-	CostPerHour float64 `json:"instance_cost_per_hour_usd"`
-	// Utilization is the share of the day the instances are expected to be
-	// busy, from 0 to 1.
-	Utilization float64 `json:"utilization"`
 }
 
 // AIPerf's coding-agent sessions grow to at most this many prompt tokens.
@@ -61,7 +54,6 @@ func Defaults(maxModelLen int) Settings {
 		MaxOutputTokens: 1500,
 		TTFTMillis:      5000,
 		ITLMillis:       50,
-		Utilization:     0.6,
 	}
 	if maxModelLen > 0 && maxModelLen-s.MaxOutputTokens < s.MaxPromptTokens {
 		s.MaxPromptTokens = max(maxModelLen-s.MaxOutputTokens, 0)
@@ -97,10 +89,6 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("ttft_p95_ms must be more than 0 and at most 600,000")
 	case !(s.ITLMillis > 0) || s.ITLMillis > 10_000:
 		return fmt.Errorf("itl_p95_ms must be more than 0 and at most 10,000")
-	case !(s.CostPerHour >= 0) || s.CostPerHour > 100_000:
-		return fmt.Errorf("instance_cost_per_hour_usd must be from 0 to 100,000")
-	case !(s.Utilization > 0) || s.Utilization > 1:
-		return fmt.Errorf("utilization must be more than 0 and at most 1")
 	}
 	return nil
 }
@@ -210,20 +198,47 @@ type Result struct {
 	// Limit says why the next step did not count, or that the last step
 	// still met the settings and the instance may serve more.
 	Limit string `json:"limit"`
+	// Steps are the steps as the page shows them.
+	Steps []StepView `json:"steps"`
+}
+
+// StepView is a step with what follows from it.
+type StepView struct {
+	Concurrency int `json:"concurrency"`
+	// Met says whether the step met the targets, Reason why not.
+	Met    bool   `json:"met"`
+	Reason string `json:"reason,omitempty"`
+	// FewSamples is set when the step reached its longest time before
+	// enough requests were answered: its percentiles rest on few of them.
+	FewSamples      bool     `json:"few_samples"`
+	InputPerSecond  float64  `json:"input_per_s"`
+	OutputPerSecond float64  `json:"output_per_s"`
+	CachedShare     *float64 `json:"cached_share"`
 }
 
 // Analyze finds the highest load the instance serves at the promised
 // latency. It stops at the first step that misses: a step above it that
 // passes again is noise, not capacity.
 func Analyze(set Settings, steps []Step) Result {
-	var r Result
+	r := Result{Steps: make([]StepView, 0, len(steps))}
+	missed := false
 	for i := range steps {
-		ok, why := steps[i].Check(set)
-		if !ok {
-			r.Limit = fmt.Sprintf("at %d in flight: %s", steps[i].Concurrency, why)
-			return r
+		s := &steps[i]
+		ok, why := s.Check(set)
+		r.Steps = append(r.Steps, StepView{Concurrency: s.Concurrency, Met: ok, Reason: why,
+			FewSamples:     s.Error == "" && s.Requests < set.MinRequests,
+			InputPerSecond: s.InputPerSecond(), OutputPerSecond: s.OutputPerSecond(), CachedShare: s.CachedShare()})
+		switch {
+		case missed:
+		case !ok:
+			r.Limit = fmt.Sprintf("at %d in flight: %s", s.Concurrency, why)
+			missed = true
+		default:
+			r.Best = s
 		}
-		r.Best = &steps[i]
+	}
+	if missed {
+		return r
 	}
 	if r.Best != nil {
 		r.Limit = fmt.Sprintf("every step met the targets; the instance may serve more than %d in flight", r.Best.Concurrency)
