@@ -90,6 +90,15 @@ func TestRealAPIServerCapacity(t *testing.T) {
 		if w := want[m.Model]; (row{m.Capacity, m.Known, m.Step}) != w {
 			t.Errorf("%s: got %+v (%s), want %+v", m.Model, row{m.Capacity, m.Known, m.Step}, m.Detail, w)
 		}
+		for _, d := range m.Deployments {
+			want := map[string]string{"single": TopologySingle, "single-b": TopologySingle, "pd": TopologyPrefillDecode}[d.Name]
+			if want != "" && d.Topology != want {
+				t.Errorf("%s: topology %q, want %q", d.Name, d.Topology, want)
+			}
+			if d.Name == "single" && (d.Instances != 7 || !d.Known) || d.Name == "new" && d.Known {
+				t.Errorf("%s: %v instances, known %v", d.Name, d.Instances, d.Known)
+			}
+		}
 		if m.Model == model("glm") && (m.Revision != "r1" || m.MaxModelLen != "262144") {
 			t.Errorf("%s: revision %q, max-model-len %q", m.Model, m.Revision, m.MaxModelLen)
 		}

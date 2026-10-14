@@ -99,9 +99,27 @@ jobs:
       - name: Lint and render the chart
         run: hack/check-chart.sh
 
+  # A capacity measurement runs AIPerf on the LLM clusters. This builds the
+  # image capacity.image is made from and runs the Job's script in it with
+  # the real AIPerf, against a stand-in for vLLM, with no network.
+  aiperf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build the AIPerf image
+        run: docker build -t aigw-aiperf:test -f deploy/aiperf/Containerfile deploy/aiperf
+
+      - name: The Job's script with the real AIPerf
+        run: AIPERF_TEST_IMAGE=aigw-aiperf:test go test ./internal/capacity/ -run TestRealAIPerf -count=1 -v
+
   image:
     if: github.event_name == 'push'
-    needs: test
+    needs: [test, aiperf]
     runs-on: ubuntu-latest
     permissions:
       contents: read

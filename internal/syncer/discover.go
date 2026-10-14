@@ -125,6 +125,14 @@ func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, found []k
 		for _, p := range f.Pools {
 			c.Pools = append(c.Pools, store.Pool{Namespace: p.Namespace, Name: p.Name, Group: p.Group})
 		}
+		for _, d := range f.Deployments {
+			sd := store.Deployment{Namespace: d.Namespace, Name: d.Name, Topology: d.Topology, GPU: d.GPU,
+				GPUsPerInstance: d.GPUsPerInstance, Revision: d.Revision}
+			if d.Known {
+				sd.Instances = &d.Instances
+			}
+			c.Deployments = append(c.Deployments, sd)
+		}
 		reported = append(reported, c)
 	}
 	if err := s.st.ApplyCapacity(ctx, c.ID, reported); err != nil {

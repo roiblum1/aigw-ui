@@ -1,0 +1,288 @@
+package capacity
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func ptr(f float64) *float64 { return &f }
+
+func step(c int, ttft, itl float64) Step {
+	return Step{Concurrency: c, Requests: 100, DurationSeconds: 100, InputTokens: 1_000_000 * int64(c), OutputTokens: 10_000 * int64(c),
+		TTFTP95: ttft, ITLP95: itl, ServerPromptTokens: ptr(1_000_000), ServerCachedTokens: ptr(900_000)}
+}
+
+func TestDefaults(t *testing.T) {
+	d := Defaults(0)
+	if d.MaxPromptTokens != 167000 || d.MaxOutputTokens != 1500 || d.Validate() != nil {
+		t.Fatalf("unknown length: %+v, %v", d, d.Validate())
+	}
+	d = Defaults(131072)
+	if d.MaxPromptTokens != 131072-1500 || d.Validate() != nil {
+		t.Fatalf("128k model: %+v, %v", d, d.Validate())
+	}
+	// The lab's tiny model: a prompt and an answer still fit.
+	d = Defaults(8192)
+	if d.MaxPromptTokens+d.MaxOutputTokens > 8192 || d.Validate() != nil {
+		t.Fatalf("8k model: %+v, %v", d, d.Validate())
+	}
+}
+
+func TestValidate(t *testing.T) {
+	for name, change := range map[string]func(*Settings){
+		"no steps":           func(s *Settings) { s.Concurrency = nil },
+		"steps go down":      func(s *Settings) { s.Concurrency = []int{4, 2} },
+		"a step repeats":     func(s *Settings) { s.Concurrency = []int{2, 2} },
+		"zero in flight":     func(s *Settings) { s.Concurrency = []int{0, 1} },
+		"short step":         func(s *Settings) { s.StepSeconds = 10 },
+		"no ttft target":     func(s *Settings) { s.TTFTMillis = 0 },
+		"few requests":       func(s *Settings) { s.MinRequests = 2 },
+		"tiny prompt":        func(s *Settings) { s.MaxPromptTokens = 10 },
+		"too many steps":     func(s *Settings) { s.Concurrency = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13} },
+		"too many in flight": func(s *Settings) { s.Concurrency = []int{1, 2000} },
+	} {
+		s := Defaults(0)
+		change(&s)
+		if s.Validate() == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestAnalyzeStopsAtTheFirstMiss(t *testing.T) {
+	set := Defaults(0)
+	steps := []Step{step(1, 900, 20), step(2, 1200, 25), step(4, 6000, 30), step(8, 1000, 20)}
+	r := Analyze(set, steps)
+	if r.Best == nil || r.Best.Concurrency != 2 {
+		t.Fatalf("best = %+v", r.Best)
+	}
+	if !strings.Contains(r.Limit, "at 4 in flight") || !strings.Contains(r.Limit, "time to first token") {
+		t.Fatalf("limit = %q", r.Limit)
+	}
+
+	r = Analyze(set, steps[:2])
+	if r.Best.Concurrency != 2 || !strings.Contains(r.Limit, "may serve more") {
+		t.Fatalf("all passed: %+v %q", r.Best, r.Limit)
+	}
+
+	r = Analyze(set, []Step{step(1, 900, 80)})
+	if r.Best != nil || !strings.Contains(r.Limit, "time between tokens") {
+		t.Fatalf("first step missed: %+v %q", r.Best, r.Limit)
+	}
+}
+
+func TestCheckErrors(t *testing.T) {
+	set := Defaults(0)
+	s := step(1, 100, 10)
+	s.Errors = 2 // 2 of 102
+	if ok, why := s.Check(set); ok || !strings.Contains(why, "2 of 102") {
+		t.Fatalf("errors: %v %q", ok, why)
+	}
+	s.Errors = 1 // under 1%
+	if ok, _ := s.Check(set); !ok {
+		t.Fatal("one error in 101 should pass")
+	}
+	if ok, why := (Step{Concurrency: 1, Error: "AIPerf failed: boom"}).Check(set); ok || why != "AIPerf failed: boom" {
+		t.Fatalf("step error: %v %q", ok, why)
+	}
+}
+
+func TestPlanAddsUpShapes(t *testing.T) {
+	// GLM on two measured shapes: 8× B300 in one node, two instances, and
+	// 8× H200, one instance. A third shape is not measured.
+	b300 := Throughput{Concurrency: 16, InputPerSecond: 10000, CachedPerSecond: 9000, OutputPerSecond: 100, CachedShare: ptr(0.9)}
+	h200 := Throughput{Concurrency: 8, InputPerSecond: 5000, CachedPerSecond: 4500, OutputPerSecond: 50, CachedShare: ptr(0.9)}
+	gpuB300, gpuH200 := int64(500_000), int64(300_000) // $5 and $3 an hour
+	// $1 per 1M input, $0.10 cached, $4 output.
+	prices := &Prices{Input: 100000, Cached: 10000, Output: 400000}
+	p := MakePlan(PlanInput{
+		Unit: "credits", Prices: prices, Utilization: 0.5, Days: 30,
+		Shapes: []ShapeInput{
+			{Shape: Shape{Topology: "single", GPU: "NVIDIA-B300", GPUsPerInstance: 8}, Instances: 2, Sites: []string{"tlv"}, Measured: &b300, GPUPrice: &gpuB300},
+			{Shape: Shape{Topology: "single", GPU: "NVIDIA-H200", GPUsPerInstance: 8}, Instances: 1, Sites: []string{"haifa"}, Measured: &h200, GPUPrice: &gpuH200},
+			{Shape: Shape{Topology: "prefill-decode", GPU: "NVIDIA-H200", GPUsPerInstance: 16}, Instances: 3, Sites: []string{"haifa"}, GPUPrice: &gpuH200},
+		},
+		AllocatedPerDay: 50_000_000, RateLimits: 2, BusiestDay: 10_000_000, TotalUsed: 150_000_000,
+	})
+
+	// A B300 second: 1,000 uncached at 0.1 + 9,000 cached at 0.01 + 100 out at 0.4 = 230 credits; H200 half that.
+	if p.Shapes[0].PerInstanceDay != 230*86400 || p.Shapes[1].PerInstanceDay != 115*86400 || p.Shapes[2].Measured {
+		t.Fatalf("shapes: %+v", p.Shapes)
+	}
+	full := int64((2*230 + 115) * 86400)
+	if p.FullDay != full || p.CapacityDay != full/2 || p.Instances != 6 || p.MeasuredInstances != 3 {
+		t.Fatalf("plan: full %d capacity %d instances %v measured %v", p.FullDay, p.CapacityDay, p.Instances, p.MeasuredInstances)
+	}
+	// What the measured instances cost: 2 × 8 × $5 + 8 × $3 = $104 an hour.
+	if p.CostPerHour == nil || *p.CostPerHour != 10_400_000 {
+		t.Fatalf("cost = %v", p.CostPerHour)
+	}
+	// One blended price: input-equivalent tokens a second are 2 × 2,300 + 1,150 = 5,750.
+	// $104 / (3,600 × 5,750 × 0.5) × 1M = $10.05 per 1M input.
+	if p.BreakEven == nil || p.BreakEven.Input != 1004831 || p.BreakEven.Cached != 100484 || p.BreakEven.Output != 4019324 {
+		t.Fatalf("break even = %+v", p.BreakEven)
+	}
+	// Each shape's own cost of a million input-equivalent tokens busy all day:
+	// B300 $40 / (3,600 × 2,300) × 1M = $4.83; H200 $24 / (3,600 × 1,150) × 1M = $5.80.
+	if *p.Shapes[0].CostPerMillion != 483092 || *p.Shapes[1].CostPerMillion != 579711 || p.Shapes[2].CostPerMillion != nil {
+		t.Fatalf("cost per million: %v %v %v", *p.Shapes[0].CostPerMillion, *p.Shapes[1].CostPerMillion, p.Shapes[2].CostPerMillion)
+	}
+	if *p.ChargedPerHour != (2*230+115)*3600 {
+		t.Fatalf("charged = %d", *p.ChargedPerHour)
+	}
+	if o := *p.Overcommit; o < 2.01 || o > 2.02 {
+		t.Fatalf("overcommit = %v", o)
+	}
+	if b := *p.BusiestShare; b < 0.2 || b > 0.202 {
+		t.Fatalf("busiest share = %v", b)
+	}
+	if u := *p.ObservedUtilization; u < 0.1 || u > 0.101 {
+		t.Fatalf("observed = %v", u)
+	}
+	// The busiest day used a fifth of the budgets, so they could be 5× the capacity.
+	if *p.SafeAllocatedDay != p.CapacityDay*5 {
+		t.Fatalf("safe = %d, capacity %d", *p.SafeAllocatedDay, p.CapacityDay)
+	}
+	if len(p.Notes) != 2 { // 3 instances not measured; 2 rate limits
+		t.Fatalf("notes = %v", p.Notes)
+	}
+}
+
+func TestPlanWithoutPrices(t *testing.T) {
+	thr := Throughput{Concurrency: 4, InputPerSecond: 1000, OutputPerSecond: 50}
+	p := MakePlan(PlanInput{Unit: "tokens", Utilization: 0.6, CostExpression: "input_tokens",
+		Shapes: []ShapeInput{{Shape: Shape{Topology: "single", GPU: "NVIDIA-B200", GPUsPerInstance: 8}, Instances: 1, Measured: &thr}}})
+	if p.FullDay != 1050*86400 || p.CapacityDay != int64(1050*86400*0.6) {
+		t.Fatalf("tokens: %d %d", p.FullDay, p.CapacityDay)
+	}
+	// No GPU price: no cost, no break-even; no model prices: nothing charged.
+	if p.CostPerHour != nil || p.BreakEven != nil || p.ChargedPerHour != nil || p.Overcommit == nil || *p.Overcommit != 0 || p.SafeAllocatedDay != nil {
+		t.Fatalf("tokens: %+v", p)
+	}
+	if len(p.Notes) != 3 { // no GPU price, no cache figures, own cost expression
+		t.Fatalf("notes = %v", p.Notes)
+	}
+
+	none := MakePlan(PlanInput{Unit: "tokens", Utilization: 0.6})
+	if none.CapacityDay != 0 || none.Overcommit != nil || none.BusiestShare != nil || len(none.Notes) != 1 {
+		t.Fatalf("no instance: %+v", none)
+	}
+}
+
+func TestShape(t *testing.T) {
+	a := Shape{Topology: "single", GPU: "NVIDIA-B300", GPUsPerInstance: 8, Revision: "r1"}
+	if a.Label() != "8× NVIDIA-B300, one node, revision r1" || a.Key() != "single|NVIDIA-B300|8|r1" {
+		t.Fatalf("%q %q", a.Label(), a.Key())
+	}
+	b := a
+	b.GPUsPerInstance = 8.0000001
+	if a.Key() != b.Key() {
+		t.Fatal("a rounding difference is another shape")
+	}
+	if l := (Shape{Topology: "prefill-decode"}).Label(); l != "GPU not known, prefill and decode" {
+		t.Fatal(l)
+	}
+}
+
+func TestStepViews(t *testing.T) {
+	set := Defaults(0)
+	set.MinRequests = 50
+	steps := []Step{step(1, 900, 20), step(2, 9000, 25), step(4, 900, 20)}
+	steps[0].Requests = 30 // reached its longest time first
+	r := Analyze(set, steps)
+	if len(r.Steps) != 3 || !r.Steps[0].Met || !r.Steps[0].FewSamples || r.Steps[1].Met || r.Steps[1].Reason == "" || !r.Steps[2].Met {
+		t.Fatalf("views = %+v", r.Steps)
+	}
+	if r.Steps[0].InputPerSecond != 10000 || *r.Steps[0].CachedShare != 0.9 || r.Best.Concurrency != 1 {
+		t.Fatalf("views = %+v best %+v", r.Steps[0], r.Best)
+	}
+	if set.Requests(1) != 50 || set.Requests(64) != 256 {
+		t.Fatal("requests per step")
+	}
+}
+
+func TestPerDay(t *testing.T) {
+	if PerDay("1m") != 1440 || PerDay("1h") != 24 || PerDay("1d") != 1 {
+		t.Fatal("per day")
+	}
+}
+
+func TestAgenticScales(t *testing.T) {
+	full := Agentic(Defaults(0))
+	cache := full["cache"].(map[string]any)
+	if cache["layer1_tokens"] != 32000 || full["block_size"] != 512 || full["max_prompt_tokens"] != 167000 || full["inter_turn_delay"].(map[string]any)["max"] != 0 {
+		t.Fatalf("full size: %v", full)
+	}
+	small := Agentic(Defaults(8192))
+	cache = small["cache"].(map[string]any)
+	l1 := cache["layer1_tokens"].(int)
+	if l1 < 1000 || l1 > 2000 || small["block_size"].(int) < 64 {
+		t.Fatalf("scaled down: l1 %d, %v", l1, small)
+	}
+	gen := small["generation_length"].(map[string]any)
+	if gen["max"].(float64) != float64(Defaults(8192).MaxOutputTokens) {
+		t.Fatalf("answer: %v", gen)
+	}
+	// AIPerf reads it as JSON.
+	if _, err := json.Marshal(small); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJob(t *testing.T) {
+	set := Defaults(0)
+	job, err := Job(JobSpec{RunID: "0123", Name: "aigw-capacity-0123", Namespace: "llm", Image: "registry/aiperf:1", URL: "http://10.0.0.5:8000", Model: "glm", Settings: set})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := job.Object["spec"].(map[string]any)
+	if spec["backoffLimit"] != int64(0) || spec["activeDeadlineSeconds"] != int64(set.Duration()) {
+		t.Fatalf("spec: %v", spec)
+	}
+	pod := spec["template"].(map[string]any)["spec"].(map[string]any)
+	c := pod["containers"].([]any)[0].(map[string]any)
+	if c["image"] != "registry/aiperf:1" || c["command"].([]any)[2] != runner {
+		t.Fatalf("container: %v", c["image"])
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(c["env"].([]any)[0].(map[string]any)["value"].(string)), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg["url"] != "http://10.0.0.5:8000" || cfg["model"] != "glm" || cfg["agentic"] == nil {
+		t.Fatalf("config: %v", cfg)
+	}
+	if job.GetLabels()[RunLabel] != "0123" || pod["automountServiceAccountToken"] != false {
+		t.Fatalf("labels %v", job.GetLabels())
+	}
+}
+
+func TestParseLog(t *testing.T) {
+	text := strings.Join([]string{
+		"INFO aiperf starting",
+		`AIGW-DATASET {"sessions":200,"requests":4100,"prompt_mean":98123.5,"prompt_max":166000}`,
+		`AIGW-STEP {"concurrency":1,"requests":20,"errors":0,"duration_s":300,"input_tokens":2000000,"output_tokens":20000,"ttft_p95_ms":800,"itl_p95_ms":20,"server_prompt_tokens":2000000,"server_cached_tokens":1800000}`,
+		`AIGW-STEP {not json`,
+		`AIGW-STEP {"concurrency":2,"error":"AIPerf failed: x"}`,
+		"AIGW-DONE {}",
+	}, "\n")
+	l := ParseLog(text)
+	if l.Dataset == nil || l.Dataset.Sessions != 200 || len(l.Steps) != 2 || !l.Done {
+		t.Fatalf("log = %+v", l)
+	}
+	if share := l.Steps[0].CachedShare(); share == nil || *share != 0.9 {
+		t.Fatalf("cached share = %v", share)
+	}
+	if l.Steps[1].Error == "" || l.Steps[0].ServerCachedTokens == nil {
+		t.Fatalf("steps = %+v", l.Steps)
+	}
+	if e := ParseLog(`AIGW-ERROR {"error":"making up the sessions failed: boom"}`); e.Error == "" || e.Done {
+		t.Fatalf("error = %+v", e)
+	}
+}
+
+func TestJobName(t *testing.T) {
+	if n := JobName("8a3f2c1d-0000-4000-8000-000000000000"); n != "aigw-capacity-8a3f2c1d0000" {
+		t.Fatal(n)
+	}
+}

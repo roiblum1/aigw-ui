@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Run on a machine WITH internet access. Builds the application image, pulls
-# the Postgres image, and packs both with the Helm chart into one tarball to
-# carry into the disconnected environment.
+# Run on a machine WITH internet access. Builds the application image and the
+# AIPerf image for capacity measurements, pulls the Postgres image, and packs
+# them with the Helm chart into one tarball to carry into the disconnected
+# environment.
 #
 #   deploy/offline/build-bundle.sh [version]
 #
 # Needs podman and helm. Set PLATFORM if your clusters are not x86_64, and
-# APP_REPO to tag the application image under another name.
+# APP_REPO or AIPERF_REPO to tag the images under other names.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -14,6 +15,8 @@ VERSION="${1:-$(sed -n 's/^appVersion: *"\(.*\)"/\1/p' deploy/chart/aigw-ui/Char
 PLATFORM="${PLATFORM:-linux/amd64}"
 PG_IMAGE="${PG_IMAGE:-quay.io/sclorg/postgresql-16-c9s:latest}"
 APP_IMAGE="${APP_REPO:-ghcr.io/roiblum1/aigw-ui}:${VERSION}"
+AIPERF_VERSION="$(sed -n 's/^ARG AIPERF_VERSION=//p' deploy/aiperf/Containerfile)"
+AIPERF_IMAGE="${AIPERF_REPO:-ghcr.io/roiblum1/aigw-aiperf}:${AIPERF_VERSION}"
 OUT="dist/aigw-ui-offline-${VERSION}"
 
 rm -rf "$OUT" && mkdir -p "$OUT"
@@ -21,11 +24,14 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 echo ">> building ${APP_IMAGE} for ${PLATFORM}"
 podman build --platform "$PLATFORM" -t "$APP_IMAGE" -f Containerfile .
 
+echo ">> building ${AIPERF_IMAGE} for ${PLATFORM}"
+podman build --platform "$PLATFORM" -t "$AIPERF_IMAGE" -f deploy/aiperf/Containerfile deploy/aiperf
+
 echo ">> pulling ${PG_IMAGE} for ${PLATFORM}"
 podman pull --platform "$PLATFORM" "$PG_IMAGE"
 
 echo ">> saving images"
-podman save --multi-image-archive -o "$OUT/images.tar" "$APP_IMAGE" "$PG_IMAGE"
+podman save --multi-image-archive -o "$OUT/images.tar" "$APP_IMAGE" "$AIPERF_IMAGE" "$PG_IMAGE"
 
 echo ">> packaging chart"
 helm package deploy/chart/aigw-ui --app-version "$VERSION" --destination "$OUT" >/dev/null
@@ -34,6 +40,7 @@ cp deploy/offline/load-images.sh deploy/offline/INSTALL.md "$OUT/"
 cat > "$OUT/bundle.env" <<ENV
 VERSION=${VERSION}
 APP_IMAGE=${APP_IMAGE}
+AIPERF_IMAGE=${AIPERF_IMAGE}
 PG_IMAGE=${PG_IMAGE}
 ENV
 

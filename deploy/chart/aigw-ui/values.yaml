@@ -38,6 +38,13 @@ config:
   # whose scheduler acts on priorities; see docs/optimization.md.
   bestEffortPriority: -1
 
+# Capacity measurements: AIPerf in a Job on an LLM cluster, aimed at one pod
+# of a model. The LLM clusters pull this image, so it must be in a registry
+# they reach. Empty turns measurements off. Build it from
+# deploy/aiperf/Containerfile; the offline bundle does.
+capacity:
+  image: ""
+
 # What every site's entry route has in common. Leave domain and peerSNI empty
 # if the hub should not render entry routes.
 fleet:
