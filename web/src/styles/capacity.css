@@ -1,0 +1,41 @@
+@layer components {
+  .banner.info {
+    background: var(--primary-soft);
+    border-color: color-mix(in srgb, var(--primary) 25%, transparent);
+  }
+  .card .dash-grid {
+    margin: 12px 0;
+  }
+  tr.best td {
+    background: var(--primary-soft);
+  }
+  .loadchart {
+    margin: 4px 0 12px;
+    max-width: 560px;
+  }
+  .loadchart svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .loadchart-label {
+    font-size: 8px;
+    fill: var(--muted-foreground);
+  }
+  .loadchart .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 6px 0 0;
+    padding: 0;
+    font-size: 12px;
+  }
+  .loadchart .legend i {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 5px;
+    border-radius: 2px;
+    vertical-align: -1px;
+  }
+}

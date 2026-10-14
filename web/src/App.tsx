@@ -3,6 +3,7 @@ import {
   Activity as ActivityIcon,
   BookOpen,
   Boxes,
+  Gauge,
   ListChecks,
   LayoutDashboard,
   Network,
@@ -17,6 +18,7 @@ import Clusters from "./pages/Clusters";
 import Models from "./pages/Models";
 import Tenants from "./pages/Tenants";
 import Usage from "./pages/Usage";
+import Capacity from "./pages/Capacity";
 import Activity from "./pages/Activity";
 import Architecture from "./pages/Architecture";
 import Docs from "./pages/Docs";
@@ -32,6 +34,7 @@ const pages = [
   { name: "Models", icon: Boxes },
   { name: "Tenants", icon: Users },
   { name: "Usage", icon: ActivityIcon },
+  { name: "Capacity", icon: Gauge },
   { name: "Activity", icon: ListChecks },
   { name: "Architecture", icon: Network },
   { name: "Docs", icon: BookOpen },
@@ -145,6 +148,7 @@ function Admin() {
         {page === "Models" && <Models />}
         {page === "Tenants" && <Tenants />}
         {page === "Usage" && <Usage />}
+        {page === "Capacity" && <Capacity />}
         {page === "Activity" && <Activity />}
         {page === "Architecture" && <Architecture />}
         {page === "Docs" && <Docs />}

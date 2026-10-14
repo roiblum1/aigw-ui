@@ -3,6 +3,7 @@
 @import "./styles/activity.css";
 @import "./styles/dashboard.css";
 @import "./styles/docs.css";
+@import "./styles/capacity.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 

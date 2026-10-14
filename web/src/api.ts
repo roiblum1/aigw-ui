@@ -348,6 +348,101 @@ export interface MyBudget {
 }
 
 /** What a tenant sees of itself after signing in with one of its keys. */
+/** What an operator chooses for one capacity measurement. */
+export interface CapacitySettings {
+  /** Requests in flight at each load step, ascending. */
+  concurrency: number[];
+  step_seconds: number;
+  sessions: number;
+  max_prompt_tokens: number;
+  max_output_tokens: number;
+  ttft_p95_ms: number;
+  itl_p95_ms: number;
+  /** What one instance costs an hour, in dollars. 0 when not known. */
+  instance_cost_per_hour_usd: number;
+  /** The share of the day the instances are expected to be busy, 0 to 1. */
+  utilization: number;
+}
+
+/** What one load step measured. */
+export interface CapacityStep {
+  concurrency: number;
+  requests: number;
+  errors: number;
+  duration_s: number;
+  input_tokens: number;
+  output_tokens: number;
+  isl_mean: number;
+  osl_mean: number;
+  ttft_p50_ms: number;
+  ttft_p95_ms: number;
+  itl_p50_ms: number;
+  itl_p95_ms: number;
+  server_prompt_tokens: number | null;
+  server_cached_tokens: number | null;
+  error?: string;
+}
+
+export interface CapacityRun {
+  id: string;
+  model_id: string;
+  model_name: string;
+  cluster_id: string;
+  cluster_name: string;
+  namespace: string;
+  job_name: string;
+  /** The pod that was measured. */
+  instance: string;
+  settings: CapacitySettings;
+  status: "running" | "succeeded" | "failed" | "cancelled";
+  detail: string;
+  dataset: { sessions: number; requests: number; prompt_mean: number; prompt_max: number } | null;
+  steps: CapacityStep[];
+  /** The highest step that met the targets, and why the next one did not. */
+  result: { best: CapacityStep | null; limit: string };
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface CapacityPrices {
+  price_input: number;
+  price_cached: number;
+  price_output: number;
+}
+
+/** What a model can be given, from what one instance serves. Amounts are in unit. */
+export interface CapacityPlan {
+  unit: Unit;
+  per_instance_day: number;
+  instances: number;
+  capacity_day: number;
+  allocated_day: number;
+  overcommit: number | null;
+  busiest_day: number;
+  busiest_share: number | null;
+  cost_per_instance_hour: number | null;
+  break_even: CapacityPrices | null;
+  charged_per_instance_hour: number | null;
+  notes: string[];
+}
+
+export interface CapacityModel {
+  model_id: string;
+  model_name: string;
+  unit: Unit;
+  sites: { cluster_id: string; cluster_name: string; instances: number | null; max_model_len: number }[];
+  defaults: CapacitySettings;
+  latest: CapacityRun | null;
+  plan: CapacityPlan | null;
+  running: CapacityRun | null;
+}
+
+export interface CapacityOverview {
+  /** The AIPerf image the server runs, or "" when none is set. */
+  image: string;
+  models: CapacityModel[];
+}
+
 export interface MyUsage {
   tenant: string;
   display_name: string;
@@ -488,6 +583,12 @@ export const api = {
   deletePendingPrices: (id: string) => request<void>("DELETE", `/models/${id}/prices/pending`),
   setPriceDryRun: (id: string, enabled: boolean) => request<void>("PUT", `/models/${id}/prices/dry-run`, { enabled }),
   overage: () => request<OverageEntry[]>("GET", "/overage"),
+  capacity: () => request<CapacityOverview>("GET", "/capacity"),
+  capacityRuns: (modelId: string) => request<CapacityRun[]>("GET", `/models/${modelId}/capacity-runs`),
+  startCapacityRun: (modelId: string, body: { cluster_id: string; pod?: string; settings: CapacitySettings }) =>
+    request<CapacityRun>("POST", `/models/${modelId}/capacity-runs`, body),
+  cancelCapacityRun: (id: string) => request<CapacityRun>("POST", `/capacity-runs/${id}/cancel`),
+  deleteCapacityRun: (id: string) => request<void>("DELETE", `/capacity-runs/${id}`),
   drainSite: (modelId: string, clusterId: string, drained: boolean) =>
     request<void>("PUT", `/models/${modelId}/sites/${clusterId}/drain`, { drained }),
 

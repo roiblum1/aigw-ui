@@ -179,3 +179,63 @@ export function TimeBars(props: {
     </div>
   );
 }
+
+/**
+ * A capacity measurement step by step: a bar per load step for the output
+ * tokens a second, and a line for the time to first token against its
+ * target, dashed.
+ */
+export function LoadChart(props: {
+  steps: { concurrency: number; output_tokens: number; duration_s: number; ttft_p95_ms: number }[];
+  ttftTarget: number;
+  title: string;
+}) {
+  const { steps } = props;
+  if (steps.length === 0) return null;
+  const w = 300;
+  const h = 110;
+  const top = 8;
+  const plot = h - top - 16;
+  const rates = steps.map((s) => (s.duration_s > 0 ? s.output_tokens / s.duration_s : 0));
+  const maxRate = Math.max(...rates, 1);
+  const maxTTFT = Math.max(...steps.map((s) => s.ttft_p95_ms), props.ttftTarget) * 1.1;
+  const col = w / steps.length;
+  const y = (ms: number) => top + plot - (ms / maxTTFT) * plot;
+  const line = steps.map((s, i) => `${(col * i + col / 2).toFixed(1)},${y(s.ttft_p95_ms).toFixed(1)}`).join(" ");
+  return (
+    <figure className="loadchart">
+      <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label={props.title}>
+        {steps.map((s, i) => {
+          const bh = (rates[i] / maxRate) * plot;
+          return (
+            <g key={s.concurrency}>
+              <rect x={col * i + col * 0.2} y={top + plot - bh} width={col * 0.6} height={bh} fill="var(--chart-1)" opacity="0.35">
+                <title>{`${s.concurrency} in flight: ${Math.round(rates[i]).toLocaleString("en-US")} output tokens a second, first token p95 ${Math.round(s.ttft_p95_ms).toLocaleString("en-US")} ms`}</title>
+              </rect>
+              <text x={col * i + col / 2} y={h - 3} textAnchor="middle" className="loadchart-label">
+                {s.concurrency}
+              </text>
+            </g>
+          );
+        })}
+        <line x1="0" x2={w} y1={y(props.ttftTarget)} y2={y(props.ttftTarget)} stroke="var(--danger)" strokeDasharray="4 3" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        <polyline points={line} fill="none" stroke="var(--chart-2)" strokeWidth="1.8" vectorEffect="non-scaling-stroke" />
+        {steps.map((s, i) => (
+          <circle key={s.concurrency} cx={col * i + col / 2} cy={y(s.ttft_p95_ms)} r="2.2" fill="var(--chart-2)" />
+        ))}
+      </svg>
+      <figcaption className="legend">
+        <span>
+          <i style={{ background: "var(--chart-1)", opacity: 0.35 }} aria-hidden /> output tokens a second
+        </span>
+        <span>
+          <i style={{ background: "var(--chart-2)" }} aria-hidden /> first token p95
+        </span>
+        <span>
+          <i style={{ background: "var(--danger)" }} aria-hidden /> its target
+        </span>
+        <span className="detail">by requests in flight</span>
+      </figcaption>
+    </figure>
+  );
+}
