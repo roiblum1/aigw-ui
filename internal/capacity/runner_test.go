@@ -31,7 +31,7 @@ if args[0] == "synthesize":
             f.write(json.dumps(row) + "\n")
     sys.exit(0)
 c = int(arg("--concurrency"))
-if "--no-fixed-schedule" not in args or arg("--tokenizer") != "builtin":
+if "--no-fixed-schedule" not in args or arg("--tokenizer") != "builtin" or not arg("--isl-block-size").isdigit() or int(arg("--request-count")) < 10:
     print("missing flags"); sys.exit(2)
 d = os.path.join(arg("--artifact-dir"), "inner")
 os.makedirs(d)

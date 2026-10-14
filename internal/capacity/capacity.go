@@ -18,7 +18,11 @@ import (
 type Settings struct {
 	// Concurrency lists the load steps: requests in flight, ascending.
 	Concurrency []int `json:"concurrency"`
-	// StepSeconds is how long each step sends requests.
+	// MinRequests is how many requests a step sends at least, so that its
+	// 95th percentile rests on enough of them; more at a higher load.
+	MinRequests int `json:"min_requests"`
+	// StepSeconds is the longest a step sends requests. A step that reaches
+	// it before MinRequests are answered is marked as having few samples.
 	StepSeconds int `json:"step_seconds"`
 	// Sessions is how many coding-agent sessions are made up. Every step
 	// replays them from the start.
@@ -50,7 +54,8 @@ const agenticMaxPrompt = 167000
 func Defaults(maxModelLen int) Settings {
 	s := Settings{
 		Concurrency:     []int{1, 2, 4, 8, 16, 32, 64},
-		StepSeconds:     300,
+		MinRequests:     60,
+		StepSeconds:     1200,
 		Sessions:        200,
 		MaxPromptTokens: agenticMaxPrompt,
 		MaxOutputTokens: 1500,
@@ -78,6 +83,8 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("concurrency must go up from one step to the next")
 	case s.Concurrency[0] < 1 || s.Concurrency[len(s.Concurrency)-1] > 1024:
 		return fmt.Errorf("concurrency must be from 1 to 1024")
+	case s.MinRequests < 10 || s.MinRequests > 2000:
+		return fmt.Errorf("min_requests must be from 10 to 2,000")
 	case s.StepSeconds < 60 || s.StepSeconds > 3600:
 		return fmt.Errorf("step_seconds must be from 60 to 3600")
 	case s.Sessions < 10 || s.Sessions > 5000:
@@ -105,6 +112,12 @@ func ascending(steps []int) bool {
 		}
 	}
 	return true
+}
+
+// Requests is how many requests a step at a load sends: at least
+// MinRequests, and four per request in flight.
+func (s Settings) Requests(concurrency int) int {
+	return max(s.MinRequests, 4*concurrency)
 }
 
 // Duration is the longest the measurement may take, in seconds: every step,

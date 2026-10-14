@@ -96,7 +96,11 @@ for concurrency in settings["concurrency"]:
                 "--model", cfg["model"], "--url", url,
                 "--endpoint-type", "chat", "--streaming",
                 "--input-file", dataset, "--custom-dataset-type", "mooncake_trace",
+                # The sessions' blocks: AIPerf otherwise reads them as 512 tokens.
+                "--isl-block-size", str(cfg["agentic"]["block_size"]),
                 "--no-fixed-schedule", "--concurrency", str(concurrency),
+                # Whichever comes first: enough requests, or the longest a step may take.
+                "--request-count", str(max(settings["min_requests"], 4 * concurrency)),
                 "--benchmark-duration", str(settings["step_seconds"]),
                 "--benchmark-grace-period", str(cfg["grace_seconds"]),
                 "--request-timeout-seconds", str(cfg["grace_seconds"] + 600),
