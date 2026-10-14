@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"aigw-ui/internal/benchmark"
 	"aigw-ui/internal/selftest"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/syncer"
@@ -24,14 +25,15 @@ type Server struct {
 	// usage is nil when no Redis is configured.
 	usage    *usage.Service
 	selftest *selftest.Runner
+	bench    *benchmark.Service
 	// tenantPage lets tenants sign in with an API key to see their own usage.
 	tenantPage  bool
 	keyFailures keyFailures
 }
 
 // New builds the API. usage may be nil, which turns usage monitoring off.
-func New(st *store.Store, sy *syncer.Syncer, usage *usage.Service, selftest *selftest.Runner, adminToken, uiDir string, tenantPage bool) *Server {
-	return &Server{st: st, sy: sy, usage: usage, selftest: selftest, adminToken: adminToken, uiDir: uiDir, tenantPage: tenantPage}
+func New(st *store.Store, sy *syncer.Syncer, usage *usage.Service, selftest *selftest.Runner, bench *benchmark.Service, adminToken, uiDir string, tenantPage bool) *Server {
+	return &Server{st: st, sy: sy, usage: usage, selftest: selftest, bench: bench, adminToken: adminToken, uiDir: uiDir, tenantPage: tenantPage}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -71,6 +73,12 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("DELETE /api/v1/models/{id}/prices/pending", s.deletePendingPrices)
 	api.HandleFunc("PUT /api/v1/models/{id}/prices/dry-run", s.setPriceDryRun)
 	api.HandleFunc("GET /api/v1/overage", s.listOverage)
+	api.HandleFunc("GET /api/v1/capacity", s.capacityPlans)
+	api.HandleFunc("GET /api/v1/models/{id}/capacity-runs", s.listCapacityRuns)
+	api.HandleFunc("POST /api/v1/models/{id}/capacity-runs", s.startCapacityRun)
+	api.HandleFunc("GET /api/v1/capacity-runs/{id}", s.getCapacityRun)
+	api.HandleFunc("POST /api/v1/capacity-runs/{id}/cancel", s.cancelCapacityRun)
+	api.HandleFunc("DELETE /api/v1/capacity-runs/{id}", s.deleteCapacityRun)
 
 	api.HandleFunc("GET /api/v1/tenants", s.listTenants)
 	api.HandleFunc("POST /api/v1/tenants", s.createTenant)

@@ -13,8 +13,10 @@ import (
 
 // Capacity is what one cluster reported for one model.
 type Capacity struct {
-	Model       string
-	Capacity    float64
+	Model    string
+	Capacity float64
+	// Instances is the number of ready instances.
+	Instances   float64
 	Step        float64
 	Detail      string
 	Revision    string
@@ -41,7 +43,9 @@ type EndpointCapacity struct {
 	// Drained is set by an operator; the weight goes to 0 and stays there.
 	Drained bool `json:"drained"`
 	// Observed is ready instances times the capacity of one, as last read.
-	Observed   *float64   `json:"observed"`
+	Observed *float64 `json:"observed"`
+	// Instances is the number of ready instances, as last read.
+	Instances  *float64   `json:"instances"`
 	ObservedAt *time.Time `json:"observed_at"`
 	// Weight is the value applied as the site's share of the model's
 	// traffic. It follows Observed slowly.
@@ -137,9 +141,9 @@ func (s *Store) ApplyCapacity(ctx context.Context, clusterID string, reported []
 			_, err := tx.Exec(ctx,
 				`UPDATE model_endpoints SET serving = $8, capacity_observed = $2, capacity_step = $3, capacity_detail = $4, capacity_observed_at = now(),
 				        capacity_applied = $5, capacity_low_streak = $6, revision = $9, max_model_len = $10, unlisted = $11, pools = $12,
-				        capacity_changed_at = CASE WHEN $7 THEN now() ELSE capacity_changed_at END
+				        capacity_changed_at = CASE WHEN $7 THEN now() ELSE capacity_changed_at END, instances = $13
 				 WHERE id = $1`,
-				e.id, c.Capacity, c.Step, c.Detail, next, streak, moved, found, c.Revision, c.MaxModelLen, unlisted, pools(c))
+				e.id, c.Capacity, c.Step, c.Detail, next, streak, moved, found, c.Revision, c.MaxModelLen, unlisted, pools(c), c.Instances)
 			if err != nil {
 				return err
 			}

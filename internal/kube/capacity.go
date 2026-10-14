@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -65,6 +64,9 @@ type ModelCapacity struct {
 	// waiting for it would keep the weight up while the others lose pods.
 	Capacity float64
 	Known    bool
+	// Instances is the number of ready instances, whatever one is declared
+	// to serve.
+	Instances float64
 	// Step is the capacity of the model's largest single instance.
 	Step float64
 	// Detail says how the number came about, for display.
@@ -120,20 +122,9 @@ func pool(svc *unstructured.Unstructured) (Pool, bool) {
 // LLMInferenceServices in every namespace that are not marked to be ignored. A cluster without KServe has none
 // and that is not an error: it serves no model this tool can count.
 func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
-	var items []unstructured.Unstructured
-	for i, gvr := range llmServiceGVRs {
-		list, err := c.dyn.Resource(gvr).List(ctx, metav1.ListOptions{})
-		if missingKind(err) {
-			if i == len(llmServiceGVRs)-1 {
-				return nil, nil
-			}
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("list LLMInferenceServices: %w", err)
-		}
-		items = list.Items
-		break
+	items, err := c.llmServices(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	byModel := map[string]*ModelCapacity{}
@@ -156,6 +147,7 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 		}
 		mc.Known = mc.Known || known
 		mc.Capacity += instances * w.PerInstance
+		mc.Instances += instances
 		mc.Step = max(mc.Step, w.PerInstance)
 		if mc.Detail != "" {
 			mc.Detail += "; "

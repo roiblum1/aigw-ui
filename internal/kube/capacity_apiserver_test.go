@@ -90,6 +90,9 @@ func TestRealAPIServerCapacity(t *testing.T) {
 		if w := want[m.Model]; (row{m.Capacity, m.Known, m.Step}) != w {
 			t.Errorf("%s: got %+v (%s), want %+v", m.Model, row{m.Capacity, m.Known, m.Step}, m.Detail, w)
 		}
+		if m.Model == model("glm") && m.Instances != 8 || m.Model == model("older") && m.Instances != 3 {
+			t.Errorf("%s: %v ready instances", m.Model, m.Instances)
+		}
 		if m.Model == model("glm") && (m.Revision != "r1" || m.MaxModelLen != "262144") {
 			t.Errorf("%s: revision %q, max-model-len %q", m.Model, m.Revision, m.MaxModelLen)
 		}

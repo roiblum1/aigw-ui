@@ -49,6 +49,12 @@ type Config struct {
 	// its API keys.
 	TenantPage bool
 
+	// CapacityImage is the AIPerf image a capacity measurement runs on the
+	// clusters. Empty turns measurements off.
+	CapacityImage string
+	// CapacityEvery is how often a running measurement's Job is read.
+	CapacityEvery time.Duration
+
 	// Fleet is what every site's entry route has in common. PeerSNI is
 	// empty when neither FLEET_PEER_SNI nor FLEET_DOMAIN is set, and no
 	// entry route can be turned on then.
@@ -116,6 +122,11 @@ func Load() (*Config, error) {
 		return nil, errors.New("USAGE_HISTORY_INTERVAL must be a duration of at least 10s such as 1m, or 0 to keep no usage history")
 	}
 	c.TenantPage = envOr("TENANT_PAGE", "true") == "true"
+	c.CapacityImage = os.Getenv("CAPACITY_IMAGE")
+	c.CapacityEvery, err = time.ParseDuration(envOr("CAPACITY_INTERVAL", "20s"))
+	if err != nil || c.CapacityEvery < 5*time.Second {
+		return nil, errors.New("CAPACITY_INTERVAL must be a duration of at least 5s such as 20s")
+	}
 	c.Fleet.BestEffortPriority, err = strconv.ParseInt(envOr("BEST_EFFORT_PRIORITY", strconv.Itoa(render.DefaultBestEffortPriority)), 10, 32)
 	if err != nil || c.Fleet.BestEffortPriority >= 0 {
 		return nil, errors.New("BEST_EFFORT_PRIORITY must be a whole number below 0 such as -1")

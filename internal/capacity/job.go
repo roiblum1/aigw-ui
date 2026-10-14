@@ -1,0 +1,188 @@
+package capacity
+
+import (
+	"bufio"
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"math"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
+
+//go:embed runner.py
+var runner string
+
+// Labels on the Job and its pod.
+const (
+	ManagedByLabel = "app.kubernetes.io/managed-by"
+	RunLabel       = "aigw-ui.io/capacity-run"
+)
+
+// JobSpec is one measurement as the cluster runs it.
+type JobSpec struct {
+	RunID     string
+	Name      string
+	Namespace string
+	Image     string
+	// URL is the instance, for example http://10.0.0.5:8000, and Model the
+	// name it serves the model under.
+	URL      string
+	Model    string
+	Settings Settings
+}
+
+// Job returns the Job that runs a measurement. It never restarts: a second
+// try would measure a warm cache and a half-done step as if they were one.
+func Job(spec JobSpec) (*unstructured.Unstructured, error) {
+	config, err := json.Marshal(map[string]any{
+		"url":           spec.URL,
+		"model":         spec.Model,
+		"settings":      spec.Settings,
+		"grace_seconds": stepGrace,
+		"agentic":       Agentic(spec.Settings),
+	})
+	if err != nil {
+		return nil, err
+	}
+	labels := map[string]any{ManagedByLabel: "aigw-ui", RunLabel: spec.RunID}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "batch/v1",
+		"kind":       "Job",
+		"metadata": map[string]any{
+			"name":      spec.Name,
+			"namespace": spec.Namespace,
+			"labels":    labels,
+		},
+		"spec": map[string]any{
+			"backoffLimit":            int64(0),
+			"activeDeadlineSeconds":   int64(spec.Settings.Duration()),
+			"ttlSecondsAfterFinished": int64(7 * 24 * 3600),
+			"template": map[string]any{
+				"metadata": map[string]any{"labels": labels},
+				"spec": map[string]any{
+					"restartPolicy":                "Never",
+					"automountServiceAccountToken": false,
+					"securityContext": map[string]any{
+						"runAsNonRoot":   true,
+						"seccompProfile": map[string]any{"type": "RuntimeDefault"},
+					},
+					"containers": []any{map[string]any{
+						"name":    "aiperf",
+						"image":   spec.Image,
+						"command": []any{"python3", "-c", runner},
+						"env": []any{
+							map[string]any{"name": "AIGW_CAPACITY", "value": string(config)},
+							// Nothing is downloaded: the built-in tokenizer
+							// ships with the image.
+							map[string]any{"name": "HF_HUB_OFFLINE", "value": "1"},
+							map[string]any{"name": "HOME", "value": "/tmp"},
+						},
+						"workingDir": "/tmp",
+						"resources": map[string]any{
+							"requests": map[string]any{"cpu": "2", "memory": "4Gi"},
+							"limits":   map[string]any{"memory": "8Gi"},
+						},
+						"securityContext": map[string]any{
+							"allowPrivilegeEscalation": false,
+							"capabilities":             map[string]any{"drop": []any{"ALL"}},
+						},
+						"volumeMounts": []any{map[string]any{"name": "work", "mountPath": "/tmp"}},
+					}},
+					"volumes": []any{map[string]any{"name": "work", "emptyDir": map[string]any{}}},
+				},
+			},
+		},
+	}}, nil
+}
+
+// Agentic returns AIPerf's coding-agent session settings for a measurement.
+// They are AIPerf's own defaults, in which a prompt grows to 167,000 tokens
+// and is about 100,000 on average. A smaller longest prompt scales every
+// part of a session by the same factor, so the share of a prompt that other
+// sessions share stays the same.
+func Agentic(s Settings) map[string]any {
+	f := math.Min(float64(s.MaxPromptTokens)/agenticMaxPrompt, 1)
+	tokens := func(n float64) float64 { return math.Max(math.Round(n*f), 1) }
+	answer := math.Min(1000, math.Round(float64(s.MaxOutputTokens)*2/3))
+	block := math.Min(512, math.Max(64, math.Round(512*f/16)*16))
+	return map[string]any{
+		"new_tokens_per_turn": map[string]any{"mean": tokens(6000), "median": tokens(6000), "max": tokens(10000), "bias": 1.1},
+		"generation_length":   map[string]any{"mean": answer, "median": answer, "max": float64(s.MaxOutputTokens)},
+		"inter_turn_delay": map[string]any{
+			"agentic_fraction": 0.7,
+			"agentic_delay":    map[string]any{"mean": 2500, "median": 1800, "max": 10000},
+			"human_delay":      map[string]any{"mean": 40000, "median": 25000, "max": 120000},
+			"max":              nil,
+		},
+		"reset":             map[string]any{"base_probability": 0.01, "context_scaling": 1.5},
+		"max_prompt_tokens": s.MaxPromptTokens,
+		"block_size":        int(block),
+		"cache": map[string]any{
+			"layer1_tokens":   int(tokens(32000)),
+			"layer1_5_tokens": 0,
+			"layer2":          map[string]any{"mean": tokens(15000), "median": tokens(5000), "max": tokens(30000)},
+			"layer1_5_groups": map[string]any{"num_groups": 1, "zipf_alpha": 0.6},
+		},
+	}
+}
+
+// Dataset is what the made-up sessions hold.
+type Dataset struct {
+	Sessions   int     `json:"sessions"`
+	Requests   int     `json:"requests"`
+	PromptMean float64 `json:"prompt_mean"`
+	PromptMax  int64   `json:"prompt_max"`
+}
+
+// Log is what the Job has printed so far.
+type Log struct {
+	Dataset *Dataset
+	Steps   []Step
+	// Done is set when the Job printed its last line. Error when it gave
+	// up before the first step.
+	Done  bool
+	Error string
+}
+
+// ParseLog reads the Job's lines. Lines that do not start with "AIGW-" are
+// AIPerf's and are left alone; a line that cannot be read is skipped.
+func ParseLog(text string) Log {
+	var l Log
+	sc := bufio.NewScanner(strings.NewReader(text))
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		kind, body, ok := strings.Cut(sc.Text(), " ")
+		if !ok || !strings.HasPrefix(kind, "AIGW-") {
+			continue
+		}
+		switch kind {
+		case "AIGW-DATASET":
+			var d Dataset
+			if json.Unmarshal([]byte(body), &d) == nil {
+				l.Dataset = &d
+			}
+		case "AIGW-STEP":
+			var s Step
+			if json.Unmarshal([]byte(body), &s) == nil {
+				l.Steps = append(l.Steps, s)
+			}
+		case "AIGW-ERROR":
+			var e struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal([]byte(body), &e) == nil {
+				l.Error = e.Error
+			}
+		case "AIGW-DONE":
+			l.Done = true
+		}
+	}
+	return l
+}
+
+// JobName returns the name of a run's Job.
+func JobName(runID string) string {
+	return fmt.Sprintf("aigw-capacity-%s", strings.ReplaceAll(runID, "-", "")[:12])
+}

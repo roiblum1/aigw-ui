@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"aigw-ui/internal/api"
+	"aigw-ui/internal/benchmark"
 	"aigw-ui/internal/config"
 	"aigw-ui/internal/history"
+	"aigw-ui/internal/kube"
 	"aigw-ui/internal/overage"
 	"aigw-ui/internal/secretbox"
 	"aigw-ui/internal/selftest"
@@ -81,9 +83,18 @@ func run() error {
 		}
 	}
 
+	bench := benchmark.New(st, func(ctx context.Context, clusterID string) (benchmark.Cluster, error) {
+		kubeconfig, err := st.Kubeconfig(ctx, clusterID)
+		if err != nil {
+			return nil, err
+		}
+		return kube.New(kubeconfig)
+	}, cfg.CapacityImage, cfg.CapacityEvery)
+	go bench.Run(ctx)
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService, overageService), cfg.AdminToken, cfg.UIDir, cfg.TenantPage).Handler(),
+		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService, overageService), bench, cfg.AdminToken, cfg.UIDir, cfg.TenantPage).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
