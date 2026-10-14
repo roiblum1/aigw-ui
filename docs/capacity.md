@@ -169,7 +169,8 @@ day really used. Raising it lowers the price; it should follow what the
 platform sustains, not be set high to make the price low, because a share
 the platform does not reach leaves the GPUs' cost unpaid. Dividing by
 actual use instead would raise the price in a quiet month, which makes
-tenants use less, which raises it again.
+tenants use less, which raises it again. Set it once, then review it every
+month or so against the average day shown beside it.
 
 **Cost and price.** With every measured shape's GPU priced:
 
@@ -198,7 +199,9 @@ and a table of every step. **Measurements** lists the earlier ones.
   prompt.
 - The cache share depends on the replay: every session's shared part is
   cached after the first step. Real traffic with many repositories caches
-  less.
+  less. A session's turns also follow each other with no pause, so its
+  prompt is never evicted between them, as it can be while a person reads
+  an answer.
 - The pod's counters include any other traffic it served during a step.
 - The scheduler's choice of replica by cache is not part of it. Multiplying
   by the ready instances assumes it spreads the load evenly.
