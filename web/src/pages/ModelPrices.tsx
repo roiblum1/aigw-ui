@@ -12,6 +12,12 @@ function perMillion(credits: number): string {
   });
 }
 
+/** Prices as they will be: those waiting for their day, or those in use. */
+const nextPrices = (m: Model) => m.pending_prices ?? m.prices;
+
+/** 6×, 1.5×. */
+const times = (n: number) => `${Number(n.toFixed(1))}×`;
+
 const dollars = (credits: number | undefined) => (credits === undefined ? "" : String(credits / CREDITS_PER_DOLLAR));
 
 /** Rounds away what a multiplication of decimals leaves behind. */
@@ -28,7 +34,8 @@ function PriceLine({ p }: { p: Price }) {
 /**
  * The prices of one model: what a million tokens cost. The server turns them
  * into the model's cost expression, and the model's quotas and usage are
- * then counted in dollars.
+ * then counted in dollars. One price for the model on every site and GPU; it
+ * is set by hand, next to the other models' prices.
  */
 export default function ModelPrices(props: {
   model: Model;
@@ -46,6 +53,7 @@ export default function ModelPrices(props: {
   const [now, setNow] = useState(false);
   const [note, setNote] = useState(props.suggestedNote ?? "");
   const history = useLoad(() => api.prices(model.id));
+  const models = useLoad(api.models);
   const action = useAction();
 
   // Until measured on the model: a cached prompt token at a tenth of an
@@ -78,12 +86,25 @@ export default function ModelPrices(props: {
     });
 
   const firstTime = !model.prices;
+
+  // This model as typed among the others with prices, dearest first.
+  const credits = (text: string) => Math.round(Number(text) * CREDITS_PER_DOLLAR);
+  const others = (models.data ?? [])
+    .filter((m) => m.id !== model.id && nextPrices(m))
+    .map((m) => ({ name: m.name, input: nextPrices(m)!.price_input, output: nextPrices(m)!.price_output, waiting: !!m.pending_prices, self: false }));
+  const compared = [
+    ...others,
+    ...(Number(input) > 0 ? [{ name: model.name, input: credits(input), output: credits(output), waiting: false, self: true }] : []),
+  ].sort((a, b) => b.input - a.input);
+  const cheapest = Math.min(...compared.map((r) => r.input));
   return (
     <FormModal title={`Prices of ${model.name}`} submitLabel="Save prices" onClose={props.onClose} onSubmit={save} wide>
-      <ErrorBanner message={action.error || history.error} />
+      <ErrorBanner message={action.error || history.error || models.error} />
       <p className="hint">
-        What a million tokens of this model cost you to serve. Each request is charged by these prices, rounded down,
-        and the model's quotas and usage are counted in dollars. Reasoning tokens are part of the output.
+        What tenants are charged for a million tokens of this model: one price, the same whichever site or GPU serves
+        the request. Set them by hand so that the models compare as you want, a bigger model dearer than a smaller one;
+        the Capacity page can check them against what the GPUs cost. Each request is charged by these prices, rounded
+        down, and the model's quotas and usage are counted in dollars. Reasoning tokens are part of the output.
       </p>
 
       {model.prices ? (
@@ -152,6 +173,41 @@ export default function ModelPrices(props: {
           <input required type="number" min={0} max={1000} step="any" value={output} onChange={(e) => setOutput(e.target.value)} />
         </Field>
       </div>
+      {others.length > 0 && (
+        <>
+          <h3>Next to the other models</h3>
+          <p className="hint">
+            Dearest first, with prices waiting for their day in place of those in use. The order and the ratios are what
+            matter: a tenant's budget buys more of a cheaper model, so easy work is worth sending to a smaller one.
+          </p>
+          <div className="table-wrap compare">
+            <table className="plain">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th className="text-right">Input, per 1M</th>
+                  <th className="text-right">Output, per 1M</th>
+                  <th className="text-right">Input, × the cheapest</th>
+                </tr>
+              </thead>
+              <tbody>
+                {compared.map((r) => (
+                  <tr key={r.name}>
+                    <td>
+                      {r.self ? <span className="strong">{r.name}</span> : r.name}
+                      {r.self && <span className="tag">as typed</span>}
+                      {r.waiting && <span className="tag warn">waiting</span>}
+                    </td>
+                    <td className="text-right tabular-nums">{perMillion(r.input)}</td>
+                    <td className="text-right tabular-nums">{perMillion(r.output)}</td>
+                    <td className="text-right tabular-nums">{cheapest > 0 ? times(r.input / cheapest) : "–"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
       <Field label="Note" hint="Optional. Where the figures come from, for the next person.">
         <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
       </Field>

@@ -210,7 +210,7 @@ func MakePlan(in PlanInput) Plan {
 	cachedRatio, outputRatio := Ratios(in.Prices)
 
 	var full, charged, weighted, cost float64
-	costKnown, noCache, gpuUnknown := true, false, false
+	costKnown, anyCost, noCache, gpuUnknown := true, false, false, false
 	for _, sh := range in.Shapes {
 		sp := ShapePlan{Shape: sh.Shape, Instances: sh.Instances, Sites: sh.Sites, Measured: sh.Measured != nil}
 		p.Instances += sh.Instances
@@ -244,6 +244,7 @@ func MakePlan(in PlanInput) Plan {
 					gpuUnknown = gpuUnknown || sh.Shape.GPU == "" || sh.Shape.GPUsPerInstance <= 0
 				} else {
 					cost += float64(*sp.CostPerInstanceHour) * sh.Instances
+					anyCost = true
 				}
 			}
 		}
@@ -293,13 +294,16 @@ func MakePlan(in PlanInput) Plan {
 	case p.MeasuredInstances < p.Instances:
 		p.Notes = append(p.Notes, fmtInstances(p.Instances-p.MeasuredInstances)+" in shapes not measured yet "+isAre(p.Instances-p.MeasuredInstances)+" not counted. Measure them to count them.")
 	}
+	// GPU costs are optional: a model's prices are set by hand and need none.
+	// A note is only for a model whose GPUs are costed in part, where the
+	// cost shown would leave some out.
 	switch {
 	case gpuUnknown:
-		// Nothing to price: its nodes carry no nvidia.com/gpu.product, or
+		// Nothing to cost: its nodes carry no nvidia.com/gpu.product, or
 		// its pods ask for no GPU.
-		p.Notes = append(p.Notes, "The GPU of a measured shape is not known, so the cost and the prices that pay for it are not worked out. The hub reads it from the label nvidia.com/gpu.product of the nodes its pods run on and from the pods' requests for nvidia.com/gpu, and must be allowed to list both; the cluster's discovery message says when it is not.")
-	case !costKnown:
-		p.Notes = append(p.Notes, "A measured shape runs on a GPU without a price, so the cost and the prices that pay for it are not worked out. Set it under GPU prices.")
+		p.Notes = append(p.Notes, "The GPU of a measured shape is not known, so no GPU cost applies to it. The hub reads it from the label nvidia.com/gpu.product of the nodes its pods run on and from the pods' requests for nvidia.com/gpu, and must be allowed to list both; the cluster's discovery message says when it is not.")
+	case !costKnown && anyCost:
+		p.Notes = append(p.Notes, "A measured shape runs on a GPU without a cost, so what the instances cost and a price that pays for them are not worked out. Give it one under GPU costs, or remove the others: the model's prices do not need them.")
 	}
 	if noCache {
 		p.Notes = append(p.Notes, "An instance did not report the prompt tokens it took from its cache, so its prompt tokens are valued as uncached.")

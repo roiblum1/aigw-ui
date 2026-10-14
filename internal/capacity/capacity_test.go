@@ -185,8 +185,18 @@ func TestPlanWithoutPrices(t *testing.T) {
 	if p.CostPerHour != nil || p.BreakEven != nil || p.ChargedPerHour != nil || p.Overcommit == nil || *p.Overcommit != 0 || p.SafeAllocatedDay != nil {
 		t.Fatalf("tokens: %+v", p)
 	}
-	if len(p.Notes) != 3 || !strings.Contains(p.Notes[0], "Set it under GPU prices") { // no GPU price, no cache figures, own cost expression
+	// GPU costs are optional: none set is not worth a note.
+	if len(p.Notes) != 2 || !strings.Contains(p.Notes[0], "did not report the prompt tokens") { // no cache figures, own cost expression
 		t.Fatalf("notes = %v", p.Notes)
+	}
+	// One shape costed and one not: the cost would leave one out, so no
+	// cost and a note.
+	gpuB200 := int64(300000)
+	part := MakePlan(PlanInput{Unit: "tokens", Utilization: 0.6, Shapes: []ShapeInput{
+		{Shape: Shape{Topology: "single", GPU: "NVIDIA-B200", GPUsPerInstance: 8}, Instances: 1, Measured: &thr, GPUPrice: &gpuB200},
+		{Shape: Shape{Topology: "single", GPU: "NVIDIA-H200", GPUsPerInstance: 8}, Instances: 1, Measured: &thr}}})
+	if part.CostPerHour != nil || part.BreakEven != nil || !strings.Contains(part.Notes[0], "GPU without a cost") {
+		t.Fatalf("part: %+v", part)
 	}
 
 	// A shape on nodes without the GPU label, as on a CPU lab: there is no

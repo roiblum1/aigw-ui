@@ -24,7 +24,7 @@ cluster.
 - **Models**: discovered automatically every minute from each gateway's `/v1/models` and its `AIGatewayRoute` objects. Models can also be added by hand.
 - **Tenants**: one tenant per team, with API keys that can be issued and revoked.
 - **Quotas**: a budget per tenant per model, per minute, hour or day, rendered as `QuotaPolicy` on every cluster, with an optional dry-run mode. In tokens, or in dollars for a model with prices.
-- **Prices**: per model, what a million input, cached input and output tokens cost. The gateway computes each request's cost, so a prompt answered from the prefix cache costs the tenant less.
+- **Prices**: per model, what a million input, cached input and output tokens cost: one price on every site and GPU, set by hand next to the other models' prices. The gateway computes each request's cost, so a prompt answered from the prefix cache costs the tenant less.
 - **Spent budgets**: per model, a tenant past its budget is refused, draws from a shared pool, or keeps being served, marked as best-effort and counted apart, with an optional limit on that.
 - **Entry route and site weights**: per model, renders on every fleet cluster the route that sends each conversation to one of the sites that serve the model, weighted by how many instances each site has ready.
 - **Usage**: what each tenant has used per model in the current window, in tokens or dollars, read from the quota counters in Redis, and what it used in each past hour and day, kept in Postgres.

@@ -81,3 +81,12 @@ func TestMeasureCapacity(t *testing.T) {
 		t.Fatalf("tiny: %+v", got[0])
 	}
 }
+
+// The detail keeps a small instance's figure: 0.0272, not 0.03.
+func TestThreeFigures(t *testing.T) {
+	for v, want := range map[float64]string{0.027158921: "0.0272", 12: "12", 12.345: "12.3", 1234.5: "1230", 0.01: "0.01"} {
+		if got := threeFigures(v); got != want {
+			t.Errorf("%v: %s, want %s", v, got, want)
+		}
+	}
+}

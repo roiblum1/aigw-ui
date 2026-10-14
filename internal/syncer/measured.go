@@ -97,7 +97,7 @@ func measureCapacity(clusterID string, reported []store.Capacity, models []store
 				total += *d.Instances * v
 			}
 			step = math.Max(step, v)
-			parts = append(parts, fmt.Sprintf("%s/%s: %s × %s", d.Namespace, d.Name, ready(d), strconv.FormatFloat(round2(v), 'f', -1, 64)))
+			parts = append(parts, fmt.Sprintf("%s/%s: %s × %s", d.Namespace, d.Name, ready(d), threeFigures(v)))
 		}
 		c.Capacity, c.Step, c.Basis = total, step, store.BasisMeasured
 		c.Detail += "; site weight from measurements, in thousands of input-equivalent tokens a second per instance: " + strings.Join(parts, ", ")
@@ -157,4 +157,9 @@ func ready(d store.Deployment) string {
 	return strconv.FormatFloat(*d.Instances, 'f', -1, 64)
 }
 
-func round2(v float64) float64 { return math.Round(v*100) / 100 }
+// threeFigures writes v to three significant figures without an exponent:
+// 0.0272, 12.3, 1230.
+func threeFigures(v float64) string {
+	r, _ := strconv.ParseFloat(strconv.FormatFloat(v, 'g', 3, 64), 64)
+	return strconv.FormatFloat(r, 'f', -1, 64)
+}

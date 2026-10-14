@@ -13,6 +13,7 @@ import {
   PageHeader,
   formatAmount,
   formatNumber,
+  formatPrice,
   formatTime,
   limitText,
   limitValue,
@@ -187,8 +188,11 @@ export default function Models() {
                   <td>
                     {formatAmount(m.default_limit, m.unit)} per {windowLabel[m.default_window]}
                     {m.unit === "credits" ? (
-                      <span className="tag" title="The model has prices. Its quotas and usage are counted in dollars.">
-                        priced
+                      <span
+                        className="tag"
+                        title="What a million input tokens cost, the same on every site. The model's quotas and usage are counted in dollars."
+                      >
+                        {m.prices ? `${formatPrice(m.prices.price_input)} / 1M in` : "priced"}
                       </span>
                     ) : (
                       m.cost_expression && (
@@ -243,7 +247,7 @@ export default function Models() {
                       </button>
                     )}
                     <button
-                      title="What a million tokens of the model cost. With prices, quotas and usage are counted in dollars."
+                      title="What tenants are charged for a million tokens of the model, one price on every site and GPU. With prices, quotas and usage are counted in dollars."
                       onClick={() => setPricing(m.id)}
                     >
                       Prices
