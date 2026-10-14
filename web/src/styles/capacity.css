@@ -61,7 +61,18 @@
   .shape-cell {
     min-width: 230px;
   }
+  /* A measurement's steps under its shape: they scroll in their own box
+     instead of widening the table of shapes. */
+  .run-cell {
+    width: 0;
+    min-width: 100%;
+  }
   .nowrap {
     white-space: nowrap;
+  }
+  /* A long column title takes two lines, so the shapes fit beside the menu. */
+  th.wrap {
+    white-space: normal;
+    min-width: 90px;
   }
 }

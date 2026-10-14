@@ -154,7 +154,7 @@ func MakePlan(in PlanInput) Plan {
 	}
 
 	var full, charged, weighted, cost float64
-	costKnown, noCache := true, false
+	costKnown, noCache, gpuUnknown := true, false, false
 	for _, sh := range in.Shapes {
 		sp := ShapePlan{Shape: sh.Shape, Instances: sh.Instances, Sites: sh.Sites, Measured: sh.Measured != nil}
 		p.Instances += sh.Instances
@@ -187,6 +187,7 @@ func MakePlan(in PlanInput) Plan {
 				weighted += w * sh.Instances
 				if sp.CostPerInstanceHour == nil {
 					costKnown = false
+					gpuUnknown = gpuUnknown || sh.Shape.GPU == "" || sh.Shape.GPUsPerInstance <= 0
 				} else {
 					cost += float64(*sp.CostPerInstanceHour) * sh.Instances
 				}
@@ -236,7 +237,12 @@ func MakePlan(in PlanInput) Plan {
 	case p.MeasuredInstances < p.Instances:
 		p.Notes = append(p.Notes, fmtInstances(p.Instances-p.MeasuredInstances)+" in shapes not measured yet "+isAre(p.Instances-p.MeasuredInstances)+" not counted. Measure them to count them.")
 	}
-	if !costKnown {
+	switch {
+	case gpuUnknown:
+		// Nothing to price: its nodes carry no nvidia.com/gpu.product, or
+		// its pods ask for no GPU.
+		p.Notes = append(p.Notes, "The GPU of a measured shape is not known, so the cost and the prices that pay for it are not worked out. Its nodes need the label nvidia.com/gpu.product and its pods a request for nvidia.com/gpu.")
+	case !costKnown:
 		p.Notes = append(p.Notes, "A measured shape runs on a GPU without a price, so the cost and the prices that pay for it are not worked out. Set it under GPU prices.")
 	}
 	if noCache {
