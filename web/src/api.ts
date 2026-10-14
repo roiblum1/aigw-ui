@@ -64,6 +64,8 @@ export interface Endpoint {
     revision: string;
     max_model_len: string;
     pools: { namespace: string; name: string; group: string }[];
+    /** "measured" when the capacity comes from the measured shapes, "declared" when from aigw-ui.io/capacity-per-instance. */
+    basis: "declared" | "measured";
     /** Ready instances times the capacity of one. Null while the cluster has not reported it. */
     observed: number | null;
     observed_at: string | null;

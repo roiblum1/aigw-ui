@@ -160,7 +160,17 @@ sum over the model's LLMInferenceServices on that cluster of
   declared on the `LLMInferenceService` in the annotation
   `aigw-ui.io/capacity-per-instance`, as any number in a unit that is the same
   for that model everywhere, for example tokens per second from a benchmark.
-  Without the annotation an instance counts as 1. The older name
+  Without the annotation an instance counts as 1.
+- *Measured instead of declared.* Once every deployment of a model that has
+  a ready instance, on every site, has a measured shape (see
+  [capacity](capacity.md)), the capacity of one instance is what its shape
+  was measured to serve, in thousands of input-equivalent tokens a second,
+  and the annotation is not used for that model. A model is all measured or
+  all declared, so its sites' numbers are in one unit. A new shape that is
+  not measured yet, such as a new revision, puts the model back on the
+  annotation until it is. A change from one to the other is applied at once
+  rather than one instance per poll, because it changes the unit. The
+  Models page marks a site's weight "measured". The older name
   `aigw-ui.io/capacity-per-replica` is read when the newer one is not set,
   and the Models page says so. The number must be from 0.01 to 10000;
   anything else counts as 1, with a note on the Models page.

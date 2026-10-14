@@ -27,7 +27,17 @@ type Capacity struct {
 	// Deployments are its LLMInferenceServices on the cluster, with their
 	// shapes.
 	Deployments []Deployment
+	// Basis is BasisMeasured when Capacity comes from the measured shapes of
+	// the deployments, and BasisDeclared ("" too) when it comes from the
+	// annotation aigw-ui.io/capacity-per-instance.
+	Basis string
 }
+
+// What a site's capacity is counted in.
+const (
+	BasisDeclared = "declared"
+	BasisMeasured = "measured"
+)
 
 // Pool names an InferencePool on a cluster.
 type Pool struct {
@@ -53,6 +63,9 @@ type EndpointCapacity struct {
 	Detail      string     `json:"detail"`
 	Revision    string     `json:"revision"`
 	MaxModelLen string     `json:"max_model_len"`
+	// Basis is "measured" when Observed comes from the measured shapes of
+	// the deployments, "declared" when it comes from the annotation.
+	Basis string `json:"basis"`
 	// Pools are the InferencePools the model is served through here. The
 	// class "best-effort" can only be created where there is one.
 	Pools []Pool `json:"pools"`
@@ -76,7 +89,8 @@ func (s *Store) ApplyCapacity(ctx context.Context, clusterID string, reported []
 	}
 	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT e.id, e.model_id, m.name, e.upstream_model, e.backends, e.capacity_applied, e.capacity_low_streak, e.capacity_step, e.drained
+			`SELECT e.id, e.model_id, m.name, e.upstream_model, e.backends, e.capacity_applied, e.capacity_low_streak, e.capacity_step, e.drained,
+			        e.capacity_basis
 			 FROM model_endpoints e JOIN models m ON m.id = e.model_id WHERE e.cluster_id = $1 FOR UPDATE OF e`, clusterID)
 		if err != nil {
 			return err
@@ -88,10 +102,11 @@ func (s *Store) ApplyCapacity(ctx context.Context, clusterID string, reported []
 			lowStreak                    int
 			step                         float64
 			drained                      bool
+			basis                        string
 		}
 		endpoints, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (endpoint, error) {
 			var e endpoint
-			err := r.Scan(&e.id, &e.modelID, &e.model, &e.upstream, &e.backends, &e.applied, &e.lowStreak, &e.step, &e.drained)
+			err := r.Scan(&e.id, &e.modelID, &e.model, &e.upstream, &e.backends, &e.applied, &e.lowStreak, &e.step, &e.drained, &e.basis)
 			return e, err
 		})
 		if err != nil {
@@ -138,20 +153,31 @@ func (s *Store) ApplyCapacity(ctx context.Context, clusterID string, reported []
 				}
 				continue
 			case !found:
-				c = Capacity{Step: e.step, Detail: "no deployment of the model on this cluster"}
+				c = Capacity{Step: e.step, Detail: "no deployment of the model on this cluster", Basis: e.basis}
+			}
+			if c.Basis == "" {
+				c.Basis = BasisDeclared
 			}
 			target := c.Capacity
 			if e.drained {
 				target = 0
 			}
-			next, streak := weights.Next(e.applied, target, c.Step, e.lowStreak, e.drained)
+			// A change of basis changes the unit: the new value is taken at
+			// once, as a first reading. Stepped one instance per poll, the
+			// sites of the model would compare a new unit with an old one
+			// for many polls.
+			applied, lowStreak := e.applied, e.lowStreak
+			if c.Basis != e.basis {
+				applied, lowStreak = nil, 0
+			}
+			next, streak := weights.Next(applied, target, c.Step, lowStreak, e.drained)
 			moved := e.applied == nil || next != *e.applied
 			_, err := tx.Exec(ctx,
 				`UPDATE model_endpoints SET serving = $8, capacity_observed = $2, capacity_step = $3, capacity_detail = $4, capacity_observed_at = now(),
 				        capacity_applied = $5, capacity_low_streak = $6, revision = $9, max_model_len = $10, unlisted = $11, pools = $12,
-				        capacity_changed_at = CASE WHEN $7 THEN now() ELSE capacity_changed_at END
+				        capacity_basis = $13, capacity_changed_at = CASE WHEN $7 THEN now() ELSE capacity_changed_at END
 				 WHERE id = $1`,
-				e.id, c.Capacity, c.Step, c.Detail, next, streak, moved, found, c.Revision, c.MaxModelLen, unlisted, pools(c))
+				e.id, c.Capacity, c.Step, c.Detail, next, streak, moved, found, c.Revision, c.MaxModelLen, unlisted, pools(c), c.Basis)
 			if err != nil {
 				return err
 			}
