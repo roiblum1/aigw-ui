@@ -99,7 +99,7 @@ func Job(spec JobSpec) (*unstructured.Unstructured, error) {
 
 // Agentic returns AIPerf's coding-agent session settings for a measurement.
 // They are AIPerf's own defaults, in which a prompt grows to 167,000 tokens
-// and is about 100,000 on average. A smaller longest prompt scales every
+// and is about 100,000 on average, without the pauses between turns. A smaller longest prompt scales every
 // part of a session by the same factor, so the share of a prompt that other
 // sessions share stays the same.
 func Agentic(s Settings) map[string]any {
@@ -110,11 +110,14 @@ func Agentic(s Settings) map[string]any {
 	return map[string]any{
 		"new_tokens_per_turn": map[string]any{"mean": tokens(6000), "median": tokens(6000), "max": tokens(10000), "bias": 1.1},
 		"generation_length":   map[string]any{"mean": answer, "median": answer, "max": float64(s.MaxOutputTokens)},
+		// No pause between turns: AIPerf waits it out with the request slot
+		// held, so "1 in flight" would be one session idle most of the time.
+		// What an instance serves at a load does not depend on the pauses.
 		"inter_turn_delay": map[string]any{
 			"agentic_fraction": 0.7,
 			"agentic_delay":    map[string]any{"mean": 2500, "median": 1800, "max": 10000},
 			"human_delay":      map[string]any{"mean": 40000, "median": 25000, "max": 120000},
-			"max":              nil,
+			"max":              0,
 		},
 		"reset":             map[string]any{"base_probability": 0.01, "context_scaling": 1.5},
 		"max_prompt_tokens": s.MaxPromptTokens,
