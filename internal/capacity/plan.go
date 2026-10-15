@@ -81,6 +81,24 @@ func InputEquivalent(t Throughput, cachedRatio, outputRatio float64) float64 {
 	return t.InputPerSecond - t.CachedPerSecond + cachedRatio*t.CachedPerSecond + outputRatio*t.OutputPerSecond
 }
 
+// Value is what one instance serves a second in the model's unit: credits
+// at its prices, uncached prompt, cached prompt and output tokens each at its
+// price per million; or, for a model without prices, tokens, prompt and
+// output together, as a budget in tokens counts them.
+func (t Throughput) Value(p *Prices) float64 {
+	if p == nil {
+		return t.InputPerSecond + t.OutputPerSecond
+	}
+	uncached := t.InputPerSecond - t.CachedPerSecond
+	return (uncached*float64(p.Input) + t.CachedPerSecond*float64(p.Cached) + t.OutputPerSecond*float64(p.Output)) / 1e6
+}
+
+// Saturated is the share of what a model's instances serve at the targets
+// beyond which they are taken as full: its busiest hour above it is marked
+// saturated, and the campaign does not drain a site whose load would bring
+// the others above it.
+const Saturated = 0.85
+
 // Ratios returns what a cached prompt token and an output token cost against
 // an input token: the model's own prices, or a tenth and four without them.
 func Ratios(p *Prices) (cached, output float64) {

@@ -6,12 +6,18 @@
 # The load doubles from the first step until a step misses the targets, then
 # the gap between the last step that met them and the first that did not is
 # halved a few times. A drained measurement first waits until the instance
-# has no request in flight, and a step in which it counted prompt tokens the
-# measurement did not send fails: something else still reaches it.
+# has no request in flight, and before each step watches its prompt counter
+# for a quiet spell while it sends nothing: whatever the instance counts then
+# is someone else's.
+#
+# The instance's counters are read every few seconds during a step and taken
+# over the time AIPerf had requests out, from the first request to the last
+# answer: the same time AIPerf divides its own tokens by.
 import glob
 import http.client
 import http.server
 import json
+import multiprocessing
 import os
 import re
 import socket
@@ -32,6 +38,15 @@ metrics_urls = cfg.get("metrics_urls") or [url]
 work = os.environ.get("AIGW_WORK", "/tmp")
 
 MAX_FOREIGN_SHARE = 0.05
+# How long a drained step first waits for the instance to have nothing in
+# flight, and then watches its counters while nothing is sent.
+SETTLE_SECONDS = cfg.get("settle_seconds", 60)
+QUIET_SECONDS = cfg.get("quiet_seconds", 20)
+# How often the counters are read during a step.
+SAMPLE_SECONDS = 2
+# How many processes pass a prefill/decode measurement on to the peer
+# listener.
+PROXY_PROCESSES = cfg.get("proxy_processes", 8)
 
 
 def emit(kind, obj):
@@ -51,7 +66,14 @@ def peer_proxy(peer):
     """Serves plain HTTP on 127.0.0.1 and sends each request on to the
     gateway's peer listener with the site's client certificate: AIPerf has no
     option for one. Answers are passed on as they arrive, so streaming and
-    the time to the first token are kept."""
+    the time to the first token are kept. Connections to the gateway are
+    kept and used again, from one request to the next and from one step to
+    the next, and opened before a step starts: opening hundreds at once,
+    with a TLS handshake each, would add to the time to the first token of
+    the step's first requests.
+
+    Returns the proxy's URL, and a function that opens enough connections
+    for a step at a load and returns once they are open."""
     host, port = peer["address"].rsplit(":", 1)
     context = ssl.create_default_context(cafile=peer["ca"])
     context.load_cert_chain(peer["cert"], peer["key"])
@@ -59,10 +81,38 @@ def peer_proxy(peer):
     class Upstream(http.client.HTTPSConnection):
         def connect(self):
             sock = socket.create_connection((host, int(port)), self.timeout)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.sock = context.wrap_socket(sock, server_hostname=peer["sni"])
+
+    # The connections to the gateway not in use, in this process.
+    idle, idle_lock = [], threading.Lock()
 
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        # The headers and each token go out as small writes: without this,
+        # each would wait for AIPerf's delayed acknowledgement of the last.
+        disable_nagle_algorithm = True
+        up = None
+
+        def send(self, body, headers):
+            """Sends the request on, on a connection kept from before if the
+            gateway has kept it open, else on a new one. Only a connection
+            the gateway closed is tried again: the request never reached
+            the model."""
+            if self.up is None:
+                with idle_lock:
+                    self.up = idle.pop() if idle else None
+            for fresh in (self.up is None, True):
+                if fresh:
+                    if self.up is not None:
+                        self.up.close()
+                    self.up = Upstream(host, int(port), timeout=cfg["grace_seconds"] + 600)
+                try:
+                    self.up.request(self.command, self.path, body=body, headers=headers)
+                    return self.up.getresponse()
+                except ConnectionError:
+                    if fresh:
+                        raise
 
         def forward(self):
             n = int(self.headers.get("Content-Length") or 0)
@@ -70,10 +120,8 @@ def peer_proxy(peer):
             headers = {k: v for k, v in self.headers.items()
                        if k.lower() not in ("host", "connection", "content-length", "transfer-encoding")}
             headers["Host"] = peer["sni"]
-            up = Upstream(host, int(port), timeout=cfg["grace_seconds"] + 600)
             try:
-                up.request(self.command, self.path, body=body, headers=headers)
-                resp = up.getresponse()
+                resp = self.send(body, headers)
                 self.send_response(resp.status)
                 for k, v in resp.getheaders():
                     if k.lower() not in ("transfer-encoding", "connection", "content-length"):
@@ -85,22 +133,79 @@ def peer_proxy(peer):
                     if not chunk:
                         break
                     self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-                    self.wfile.flush()
                 self.wfile.write(b"0\r\n\r\n")
+                if resp.will_close:
+                    self.up.close()
+                    self.up = None
             except (OSError, http.client.HTTPException) as e:
-                self.send_error(502, str(e)[:200])
-            finally:
-                up.close()
+                # A connection left half read is never used again.
+                if self.up is not None:
+                    self.up.close()
+                    self.up = None
+                try:
+                    self.send_error(502, str(e)[:200])
+                except OSError:
+                    self.close_connection = True  # AIPerf left
 
         do_GET = do_POST = forward
+
+        def finish(self):
+            if self.up is not None:
+                with idle_lock:
+                    idle.append(self.up)
+                self.up = None
+            super().finish()
 
         def log_message(self, *args):
             pass
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return "http://127.0.0.1:%d" % server.server_address[1]
+    class Server(http.server.ThreadingHTTPServer):
+        daemon_threads = True
+        # AIPerf opens a step's connections all at once. With the default
+        # backlog of 5 most of them would be dropped and retried a second
+        # or more later, which the time to the first token would count.
+        request_queue_size = 4096
+
+    # One process holds Python's lock for all its threads; at a few hundred
+    # streams that, not the model, would set the time between tokens. The
+    # processes share the socket, and the kernel hands each connection to
+    # one of them, about evenly: each keeps a quarter more than its share.
+    server = Server(("127.0.0.1", 0), Handler)
+    fork = multiprocessing.get_context("fork")
+    want = fork.Value("i", 0, lock=False)
+    have = fork.Array("i", PROXY_PROCESSES, lock=False)
+
+    def keep_warm(index):
+        while True:
+            share = -(-want.value * 5 // (4 * PROXY_PROCESSES))
+            with idle_lock:
+                have[index] = len(idle)
+            if have[index] >= share:
+                time.sleep(0.2)
+                continue
+            up = Upstream(host, int(port), timeout=cfg["grace_seconds"] + 600)
+            try:
+                up.connect()
+            except OSError:
+                time.sleep(1)
+                continue
+            with idle_lock:
+                idle.append(up)
+
+    def serve(index):
+        threading.Thread(target=keep_warm, args=(index,), daemon=True).start()
+        server.serve_forever()
+
+    for i in range(PROXY_PROCESSES):
+        fork.Process(target=serve, args=(i,), daemon=True).start()
+
+    def warm(concurrency, wait=60):
+        want.value = concurrency
+        deadline = time.monotonic() + wait
+        while sum(have) < concurrency and time.monotonic() < deadline:
+            time.sleep(0.2)
+
+    return "http://127.0.0.1:%d" % server.server_address[1], warm
 
 
 def metrics():
@@ -143,6 +248,74 @@ def cache_growth(before, after):
     return growth(before, after, "vllm:prompt_tokens_total"), None
 
 
+class Sampler:
+    """Reads the counters at the start of a step, every few seconds during
+    it, and at its end, and gives them at any time in between."""
+
+    def __init__(self):
+        self.samples, self.done = [], threading.Event()
+
+    def take(self):
+        m = metrics()
+        if m is not None:
+            self.samples.append((time.time(), m))
+
+    def loop(self):
+        while not self.done.wait(SAMPLE_SECONDS):
+            self.take()
+
+    def start(self):
+        self.take()
+        self.thread = threading.Thread(target=self.loop, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.done.set()
+        self.thread.join()
+        self.take()
+
+    def at(self, t):
+        """The counters at wall time t, straight between two readings."""
+        for (ta, a), (tb, b) in zip(self.samples, self.samples[1:]):
+            if ta <= t <= tb:
+                f = (t - ta) / (tb - ta) if tb > ta else 0.0
+                return {k: v + (b.get(k, v) - v) * f for k, v in a.items()}
+        return self.samples[-1][1]
+
+    def window(self, t0, t1):
+        """The counters at the start and the end of [t0, t1], and its length
+        in seconds; the whole step when AIPerf does not say."""
+        if len(self.samples) < 2:
+            return None, None, 0.0
+        first, last = self.samples[0][0], self.samples[-1][0]
+        if not t0 or not t1 or t1 <= t0:
+            t0, t1 = first, last
+        t0, t1 = max(t0, first), min(t1, last)
+        return self.at(t0), self.at(t1), max(t1 - t0, 0.0)
+
+
+def quiet_spell():
+    """Drained, before a step: waits until the instance has nothing in
+    flight, then watches its prompt counter while nothing is sent. Returns
+    the seconds watched and the prompt tokens counted meanwhile, or why the
+    instance never ran dry."""
+    waited = 0
+    while True:
+        m = metrics()
+        running = None if m is None else m.get("vllm:num_requests_running")
+        if running is not None and running <= 0:
+            break
+        if waited >= SETTLE_SECONDS:
+            return "after {} seconds with nothing sent the instance still had {} requests in flight: something else sends to it, " \
+                   "such as a client of the site's own route".format(waited, "an unknown number of" if running is None else int(running))
+        time.sleep(1)
+        waited += 1
+    before, started = metrics(), time.monotonic()
+    time.sleep(QUIET_SECONDS)
+    after = metrics()
+    return time.monotonic() - started, growth(before, after, "vllm:prompt_tokens_total")
+
+
 def stat(summary, name, key="avg"):
     value = (summary.get(name) or {}).get(key)
     return float(value) if value is not None else 0.0
@@ -153,8 +326,9 @@ def run(cmd, log):
         return subprocess.run(cmd, stdout=out, stderr=subprocess.STDOUT).returncode
 
 
+warm_proxy = None
 if cfg.get("peer"):
-    url = peer_proxy(cfg["peer"])
+    url, warm_proxy = peer_proxy(cfg["peer"])
 
 
 def model_length():
@@ -227,7 +401,17 @@ os.makedirs(work + "/out", exist_ok=True)
 def measure(concurrency):
     """Runs one step, prints it, and says whether it met the targets."""
     out = work + "/out/c%d" % concurrency
-    before, started = metrics(), time.monotonic()
+    quiet_s, quiet_tokens = None, None
+    if mode == "drained":
+        quiet = quiet_spell()
+        if isinstance(quiet, str):
+            emit("STEP", {"concurrency": concurrency, "error": quiet})
+            return False
+        quiet_s, quiet_tokens = quiet
+    if warm_proxy:
+        warm_proxy(concurrency)
+    sampler = Sampler()
+    sampler.start()
     code = run(["aiperf", "profile",
                 "--model", cfg["model"], "--url", url,
                 "--endpoint-type", "chat", "--streaming",
@@ -244,13 +428,14 @@ def measure(concurrency):
                 "--random-seed", "42", "--no-server-metrics",
                 "--ui", "none", "--export-level", "summary", "--artifact-dir", out],
                out + ".log")
-    after, seconds = metrics(), time.monotonic() - started
+    sampler.stop()
     found = glob.glob(out + "/**/profile_export_aiperf.json", recursive=True)
     if code != 0 or not found:
         emit("STEP", {"concurrency": concurrency, "error": "AIPerf failed: " + tail(out + ".log")})
         return False
     with open(found[0]) as f:
         s = json.load(f)
+    before, after, seconds = sampler.window(stat(s, "min_request_timestamp") / 1e9, stat(s, "max_response_timestamp") / 1e9)
     prompt_tokens, cached_tokens = cache_growth(before, after)
     step = {
         "concurrency": concurrency,
@@ -270,14 +455,27 @@ def measure(concurrency):
         "server_output_tokens": growth(before, after, "vllm:generation_tokens_total"),
         "server_seconds": seconds,
     }
+    if quiet_s is not None:
+        step["quiet_s"], step["quiet_prompt_tokens"] = quiet_s, quiet_tokens
     emit("STEP", step)
     total = step["requests"] + step["errors"]
-    foreign = 0.0
-    if prompt_tokens:
-        foreign = max(1 - step["input_tokens"] / prompt_tokens, 0.0)
     return not (step["requests"] == 0 or step["errors"] > settings.get("max_error_share", 0.01) * total
                 or step["ttft_p95_ms"] > settings["ttft_p95_ms"] or step["itl_p95_ms"] > settings["itl_p95_ms"]
-                or (mode == "drained" and foreign > MAX_FOREIGN_SHARE))
+                or (mode == "drained" and foreign_share(step) > MAX_FOREIGN_SHARE))
+
+
+def foreign_share(step):
+    """The part of the prompt tokens the instance counted that something else
+    sent: Step.ForeignShare in the server, which decides; this only steers
+    the sweep."""
+    counted = step["server_prompt_tokens"]
+    if not counted:
+        return 0.0
+    own = step["input_tokens"] + step["errors"] * settings["max_prompt_tokens"]
+    share = (counted - own) / counted
+    if step.get("quiet_prompt_tokens") is not None and step.get("quiet_s") and step["server_seconds"]:
+        share = max(share, step["quiet_prompt_tokens"] / step["quiet_s"] * step["server_seconds"] / counted)
+    return min(max(share, 0.0), 1.0)
 
 
 # Up until it breaks, then halve the gap.

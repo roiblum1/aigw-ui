@@ -203,30 +203,37 @@ func pools(c Capacity) []Pool {
 // site that has capacity for the model.
 func (s *Store) SetDrained(ctx context.Context, modelID, clusterID string, drained bool) (model, cluster string, err error) {
 	err = pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx,
-			`SELECT m.name, c.name FROM model_endpoints e JOIN models m ON m.id = e.model_id JOIN clusters c ON c.id = e.cluster_id
-			 WHERE e.model_id = $1 AND e.cluster_id = $2 FOR UPDATE OF e`, modelID, clusterID).Scan(&model, &cluster)
-		if err != nil {
-			return err
-		}
-		if drained {
-			var others int
-			err := tx.QueryRow(ctx,
-				`SELECT count(*) FROM model_endpoints e JOIN clusters c ON c.id = e.cluster_id
-				 WHERE e.model_id = $1 AND e.cluster_id <> $2 AND c.fleet_enabled AND NOT e.drained AND e.capacity_applied > 0`, modelID, clusterID).Scan(&others)
-			if err != nil {
-				return err
-			}
-			if others == 0 {
-				return ErrLastSite
-			}
-		}
-		// unlisted is cleared either way: a new drain steps down first, and
-		// the end of one lists the site again at the lowest weight.
-		_, err = tx.Exec(ctx, `UPDATE model_endpoints SET drained = $3, unlisted = false WHERE model_id = $1 AND cluster_id = $2`, modelID, clusterID, drained)
+		model, cluster, err = setDrained(ctx, tx, modelID, clusterID, drained)
 		return err
 	})
 	return model, cluster, mapErr(err)
+}
+
+// setDrained drains or restores a model's site inside tx, so that a
+// measurement can drain its site in the same transaction that records it.
+func setDrained(ctx context.Context, tx pgx.Tx, modelID, clusterID string, drained bool) (model, cluster string, err error) {
+	err = tx.QueryRow(ctx,
+		`SELECT m.name, c.name FROM model_endpoints e JOIN models m ON m.id = e.model_id JOIN clusters c ON c.id = e.cluster_id
+		 WHERE e.model_id = $1 AND e.cluster_id = $2 FOR UPDATE OF e`, modelID, clusterID).Scan(&model, &cluster)
+	if err != nil {
+		return "", "", err
+	}
+	if drained {
+		var others int
+		err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM model_endpoints e JOIN clusters c ON c.id = e.cluster_id
+			 WHERE e.model_id = $1 AND e.cluster_id <> $2 AND c.fleet_enabled AND NOT e.drained AND e.capacity_applied > 0`, modelID, clusterID).Scan(&others)
+		if err != nil {
+			return "", "", err
+		}
+		if others == 0 {
+			return "", "", ErrLastSite
+		}
+	}
+	// unlisted is cleared either way: a new drain steps down first, and
+	// the end of one lists the site again at the lowest weight.
+	_, err = tx.Exec(ctx, `UPDATE model_endpoints SET drained = $3, unlisted = false WHERE model_id = $1 AND cluster_id = $2`, modelID, clusterID, drained)
+	return model, cluster, err
 }
 
 // RefreshFleetZones works out every model's zone weights from the applied

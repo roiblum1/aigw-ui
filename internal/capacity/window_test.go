@@ -52,3 +52,15 @@ func TestWindow(t *testing.T) {
 		}
 	}
 }
+
+// An hour overlaps the window when the window is open at any time in it.
+func TestWindowOverlaps(t *testing.T) {
+	w, err := ParseWindow("01:30 - 02:00 UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := func(h int) time.Time { return time.Date(2026, 10, 15, h, 0, 0, 0, time.UTC) }
+	if !w.Overlaps(at(1), at(2)) || w.Overlaps(at(2), at(3)) || w.Overlaps(at(0), at(1)) {
+		t.Fatal("overlaps")
+	}
+}

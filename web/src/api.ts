@@ -519,6 +519,11 @@ export interface CampaignItem {
   reason: string;
   /** "next", "running", or what it waits for. */
   state: string;
+  /**
+   * What the model's other sites serve in an hour, up to 85% of it, over its busiest hour in the
+   * window: below 1 they cannot take its load while this site is drained. Null without traffic.
+   */
+  cover: number | null;
 }
 
 export interface Campaign {

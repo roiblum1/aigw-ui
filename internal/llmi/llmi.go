@@ -132,7 +132,19 @@ const (
 	// starts: no other site serves the model, so its site cannot be
 	// drained.
 	WaitsOperator = "waits for an operator: no other site serves the model, so it can only be measured live"
+	// WaitsCover is not drained by the campaign: the model's other sites,
+	// by their measurements, cannot take its busiest hour in the window.
+	// An operator measures it live, or drained at a quieter time.
+	WaitsCover = "waits for an operator: the other sites cannot take the model's busiest hour"
 )
+
+// Load is what the campaign knows of a model's traffic: its busiest hour
+// in the campaign window over the last days, in its unit, and its prices
+// (nil for a model in tokens).
+type Load struct {
+	BusiestHour float64
+	Prices      *capacity.Prices
+}
 
 // QueueItem is one deployment the campaign has to measure.
 type QueueItem struct {
@@ -146,13 +158,19 @@ type QueueItem struct {
 	// its result is stale (capacity.StaleProfile, capacity.StaleAge).
 	Reason string `json:"reason"`
 	State  string `json:"state"`
+	// Cover is, for a drained measurement, what the model's other sites
+	// serve in an hour at the targets, up to capacity.Saturated of it, over
+	// its busiest hour in the window: below 1 they cannot take its load.
+	// Nil when the model had no traffic in the window.
+	Cover *float64 `json:"cover"`
 }
 
 // Queue lists the deployments with a ready instance whose result is missing
 // or stale, those without a result first, and says what each waits for. A
 // model served on one site only can be measured live only, so it waits for
-// an operator.
-func Queue(deployments []store.Deployment, latest, running []store.CapacityRun, active int, now time.Time) []QueueItem {
+// an operator; so does one whose other sites cannot take its busiest hour in
+// the window, by load (by model ID).
+func Queue(deployments []store.Deployment, latest, running []store.CapacityRun, active int, now time.Time, load map[string]Load) []QueueItem {
 	busyModel, busySite := map[string]bool{}, map[string]bool{}
 	runningLLMI := map[string]bool{}
 	for _, r := range running {
@@ -172,8 +190,9 @@ func Queue(deployments []store.Deployment, latest, running []store.CapacityRun, 
 	// given in that order, so that a missing result is measured before a
 	// stale one of the same model or site.
 	type candidate struct {
-		item  QueueItem
-		model []store.Deployment
+		item    QueueItem
+		model   []store.Deployment
+		results []Result
 	}
 	var missing, stale []candidate
 	for _, modelID := range order {
@@ -185,7 +204,7 @@ func Queue(deployments []store.Deployment, latest, running []store.CapacityRun, 
 				continue
 			}
 			c := candidate{item: QueueItem{ModelID: d.ModelID, ClusterID: d.ClusterID, ClusterName: d.ClusterName, Namespace: d.Namespace,
-				Name: d.Name, Topology: d.Topology, Reason: r.Why}, model: ds}
+				Name: d.Name, Topology: d.Topology, Reason: r.Why}, model: ds, results: results}
 			if r.Measured() {
 				c.item.Reason = r.Stale
 				stale = append(stale, c)
@@ -202,6 +221,8 @@ func Queue(deployments []store.Deployment, latest, running []store.CapacityRun, 
 			item.State = Running
 		case !servedElsewhere(c.model, item.ClusterID):
 			item.State = WaitsOperator
+		case !covered(&item, c.results, load[item.ModelID]):
+			item.State = WaitsCover
 		case busyModel[item.ModelID]:
 			item.State = WaitsModel
 		case busySite[item.ClusterID]:
@@ -214,6 +235,26 @@ func Queue(deployments []store.Deployment, latest, running []store.CapacityRun, 
 		out = append(out, item)
 	}
 	return out
+}
+
+// covered says whether the model's other sites can take its busiest hour in
+// the window while item's site is drained: what their ready, undrained,
+// measured instances serve in an hour, up to capacity.Saturated of it. It
+// sets item.Cover. A model with no traffic in the window is covered.
+func covered(item *QueueItem, results []Result, l Load) bool {
+	if l.BusiestHour <= 0 {
+		return true
+	}
+	var perSecond float64
+	for _, r := range results {
+		d := r.Deployment
+		if d.ClusterID != item.ClusterID && !d.Drained && r.Measured() {
+			perSecond += r.Ready() * r.PerInstance.Value(l.Prices)
+		}
+	}
+	cover := capacity.Saturated * 3600 * perSecond / l.BusiestHour
+	item.Cover = &cover
+	return cover >= 1
 }
 
 // servedElsewhere is true when another site has a ready, undrained instance

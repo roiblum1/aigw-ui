@@ -55,8 +55,9 @@ func TestValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 1 to 1,024 is eleven doublings, then two bisections, of five minutes
-	// each with the time to finish and to start.
-	if d := Defaults(0); d.Steps() != 13 || d.Duration() != 13*(300+300+60)+600+900 {
+	// each with the time to finish, to settle and watch the instance, and
+	// to start.
+	if d := Defaults(0); d.Steps() != 13 || d.Duration() != 13*(300+300+60+20+60)+600+900 {
 		t.Fatalf("steps %d, duration %d", d.Steps(), d.Duration())
 	}
 }
@@ -124,10 +125,41 @@ func TestContamination(t *testing.T) {
 	if ok, _ := s.Check(set); !ok {
 		t.Fatal("2.4% failed")
 	}
+
+	// The measurement's own failed requests: their prompts are counted by
+	// the instance and not by AIPerf. Two of 202 (1%) failed, and the
+	// instance counted 300,000 more than was answered: within the longest
+	// prompt (167,000) for each, so not contaminated, whatever the latency.
+	e := step(4, 900, 20)
+	e.Errors, e.Requests = 2, 200
+	e.ServerPromptTokens = ptr(4_300_000)
+	if ok, why := e.Check(set); !ok || *e.ForeignShare(set) != 0 {
+		t.Fatalf("own failures: %v %q %v", ok, why, *e.ForeignShare(set))
+	}
+	// With more failures than the settings allow, they are the reason.
+	e.Errors = 10
+	if ok, why := e.Check(set); ok || why != "10 of 210 requests failed" {
+		t.Fatalf("failures first: %v %q", ok, why)
+	}
+
+	// The quiet spell before the step: 1,000 prompt tokens a second came
+	// while nothing was sent; over the step's 100 seconds that is 100,000
+	// of the 4,100,000 counted, 2.4%. At 5,000 a second, 12%.
+	q := step(4, 900, 20)
+	q.ServerPromptTokens, q.ServerSeconds, q.QuietSeconds = ptr(4_100_000), 100, 20
+	q.QuietPromptTokens = ptr(20_000)
+	if ok, _ := q.Check(set); !ok || math.Abs(*q.ForeignShare(set)-100_000.0/4_100_000) > 1e-9 {
+		t.Fatalf("quiet 1,000/s: %v %v", ok, *q.ForeignShare(set))
+	}
+	q.QuietPromptTokens = ptr(100_000)
+	if ok, why := q.Check(set); ok || !strings.Contains(why, "contaminated: 12%") {
+		t.Fatalf("quiet 5,000/s: %v %q", ok, why)
+	}
+
 	set.Mode = ModeLive
 	s.ServerPromptTokens = ptr(8_000_000)
-	if ok, _ := s.Check(set); !ok || math.Abs(*s.ForeignShare()-0.5) > 1e-9 {
-		t.Fatalf("live: %v %v", ok, *s.ForeignShare())
+	if ok, _ := s.Check(set); !ok || math.Abs(*s.ForeignShare(set)-0.5) > 1e-9 {
+		t.Fatalf("live: %v %v", ok, *s.ForeignShare(set))
 	}
 	// Live throughput is the instance's own counters, over their own time.
 	s.ServerOutputTokens, s.ServerSeconds = ptr(20_000), 200
@@ -413,6 +445,10 @@ func TestJobPeer(t *testing.T) {
 	if !strings.Contains(string(mounts), `"mountPath":"/peer","name":"peer","readOnly":true`) ||
 		!strings.Contains(string(volumes), `"secret":{"secretName":"llm-peer-client"}`) || !strings.Contains(string(volumes), `"configMap":{"name":"llm-peer-ca"}`) {
 		t.Fatalf("mounts %s, volumes %s", mounts, volumes)
+	}
+	// The proxy runs beside AIPerf: four CPUs, not two.
+	if cpu := c["resources"].(map[string]any)["requests"].(map[string]any)["cpu"]; cpu != "4" {
+		t.Fatalf("cpu %v", cpu)
 	}
 }
 

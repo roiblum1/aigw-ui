@@ -64,6 +64,8 @@ The shape key in 0.14 (GPU, GPUs per instance, topology, revision) cannot tell B
   - prefill/decode: there is no fixed instance. The whole LLMI is measured, and per-instance capacity = the LLMI's result ÷ its decode replicas during the run.
 - **Same spec on two sites:** each is measured anyway. Sites differ in network, tuning and versions.
 
+*As built (0.16.0, after review):* the LLMI's `spec` does not hold all of what it runs. KServe merges `LLMInferenceServiceConfig`s into it (the ones `baseRefs` names, and its own defaults, where the vLLM image usually is), and an image can be pushed again under the same tag. The hash therefore also covers the specs of the configs `baseRefs` names and the image digests the ready `main` containers run, by role. While a rollout runs (ready pods of one role on different images) the stored hash is kept, so results do not drop back and forth; a measurement waits until the pods agree. Changes to KServe's own default configs other than the image are still not seen.
+
 ### One benchmark profile, versioned
 
 A profile is a row in a new table `benchmark_profiles`: name, version, workload, SLO, sweep, created at, active. Exactly one version is active. Editing a profile creates a new version; old versions stay for history.
@@ -97,7 +99,7 @@ An LLMI is measured with no user traffic when the platform allows it, and with a
 3. It measures, then restores the weight with the existing gradual ramp.
 4. One drained site per model at a time.
 
-*As built (0.16.0):* the drain is the existing one (`SetDrained`), so a site an operator drained is used as it is and stays drained; a drained measurement of a model that no other site serves is refused before anything is recorded; the Job starts once the entry weight is 0, at most 30 minutes after the start.
+*As built (0.16.0):* the drain is the existing one (`SetDrained`), so a site an operator drained is used as it is and stays drained; a drained measurement of a model that no other site serves is refused before anything is recorded; the Job starts once the entry weight is 0, at most 30 minutes after the start. After review, the drain is made in the transaction that records the run and ended in the one that ends it, so a hub that stops between two writes cannot leave a site drained with no run to restore it.
 
 **Live (by hand only).** For a model served on one site only, or when the operator chooses it. Before starting, the page shows:
 
@@ -110,11 +112,15 @@ The operator confirms by typing the model's name. The result is marked `live`. I
 - Drained: above 5% fails the step as contaminated. It usually means clients call the site's own route directly.
 - Live: expected; the share is shown with the step.
 
+*As built (0.16.0, after review):* 1 − sent ÷ counted also counts the measurement's own failed requests, whose prompts the pod counts and AIPerf (with server token counts) does not report, so a step at its limit could fail as "contaminated". Other traffic is now the larger of two estimates: during the step, counted − sent − one longest prompt per failed request; and, drained, the prompt tokens the pods counted in a 20-second quiet spell before the step while nothing was sent, carried over the step. Failed requests are checked before contamination. Live throughput is taken over AIPerf's own time (first request to last answer, counters read every 2 seconds), not the Job's wall time with AIPerf's start and grace period.
+
 ### Prefill/decode
 
 Measured through the LLMI's own scheduler on the gateway's peer listener. The Job runs in the gateway namespace and mounts the existing peer client certificate read-only. Lab check B confirms that requests on the peer listener are not counted or limited by any QuotaPolicy; if they are, the Job uses a benchmark tenant with no limits.
 
 *As built (0.16.0):* lab check B passed (peer requests created no quota counter; the peer route goes to the InferencePool and a QuotaPolicy attaches to an AIServiceBackend only), so no benchmark tenant. AIPerf cannot present a client certificate, so the Job's script runs a small local proxy that passes AIPerf's requests to the peer listener with the mounted certificate and streams the answers back. The contamination check and the idle wait read every decode pod's counters.
+
+*After review:* measured on Linux against a stand-in, the first proxy set the result: a listen backlog of 5 dropped most of a step's connections (first-token p95 5.4 s at 64 streams, 27 s at 256), and one Python process could not pass a few hundred streams on in time. It now runs in 8 processes with a large backlog, sends each token at once (no Nagle), keeps its gateway connections between steps and opens a step's connections before it starts; the Job asks for 4 CPUs. At 512 streams it then adds nothing measurable to the time between tokens or to the first token.
 
 ### When an LLMI is measured again
 
@@ -134,6 +140,8 @@ Stale and unmeasured LLMIs go into a queue that the hub works through by itself:
 - the Capacity page shows the queue, what runs now and what waits for whom.
 
 Site weights from measurements (0.14.1) keep their rule: a model uses measured weights only when every ready LLMI of it is measured, otherwise the annotation.
+
+*As built (0.16.0, after review):* the campaign drains a site only when the model's other sites can take the load: their ready, undrained, measured instances, at no more than 85% of what they serve within the targets, must cover the model's busiest hour inside the window over the last 30 days. Otherwise the LLMI waits for an operator, with the share shown. The busiest hour in the window, not of the whole day: that is the load the others take during the run, and the overall peak would keep the campaign from ever draining a model's biggest site. A model with traffic whose other sites are not measured waits too, so its first measurement is started by hand.
 
 ## Prices
 

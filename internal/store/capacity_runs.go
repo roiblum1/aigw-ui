@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"aigw-ui/internal/capacity"
 )
 
@@ -117,7 +119,10 @@ type NewRun struct {
 }
 
 // CreateCapacityRun records a run that is about to start. A model with a run
-// that has not ended gives ErrConflict.
+// that has not ended gives ErrConflict. A run that drains its site drains it
+// in the same transaction: the site is drained if and only if the run is
+// recorded, and a drain that would leave the model with no site gives
+// ErrLastSite.
 func (s *Store) CreateCapacityRun(ctx context.Context, r NewRun) error {
 	if r.InstancesDuring <= 0 {
 		r.InstancesDuring = 1
@@ -130,13 +135,19 @@ func (s *Store) CreateCapacityRun(ctx context.Context, r NewRun) error {
 	if r.Profile.ID != "" {
 		profileID, version = &r.Profile.ID, &r.Profile.Version
 	}
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO capacity_runs (id, model_id, cluster_id, namespace, deployment, instance, topology, gpu, gpus_per_instance, revision,
-		     job_name, settings, status, spec_hash, profile_id, profile_version, instances_during, phase, drained_site, started_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'running', $13, $14, $15, $16, $17, $18, $19)`,
-		r.ID, r.ModelID, r.ClusterID, r.Namespace, r.Deployment, r.Instance, r.Shape.Topology, r.Shape.GPU, r.Shape.GPUsPerInstance,
-		r.Shape.Revision, r.JobName, r.Settings, r.SpecHash, profileID, version, r.InstancesDuring, r.Phase, r.DrainedSite, r.StartedBy)
-	return mapErr(err)
+	return mapErr(pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`INSERT INTO capacity_runs (id, model_id, cluster_id, namespace, deployment, instance, topology, gpu, gpus_per_instance, revision,
+			     job_name, settings, status, spec_hash, profile_id, profile_version, instances_during, phase, drained_site, started_by)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'running', $13, $14, $15, $16, $17, $18, $19)`,
+			r.ID, r.ModelID, r.ClusterID, r.Namespace, r.Deployment, r.Instance, r.Shape.Topology, r.Shape.GPU, r.Shape.GPUsPerInstance,
+			r.Shape.Revision, r.JobName, r.Settings, r.SpecHash, profileID, version, r.InstancesDuring, r.Phase, r.DrainedSite, r.StartedBy)
+		if err != nil || !r.DrainedSite {
+			return err
+		}
+		_, _, err = setDrained(ctx, tx, r.ModelID, r.ClusterID, true)
+		return err
+	}))
 }
 
 // SetRunPhase moves a running measurement to its next phase.
@@ -191,11 +202,24 @@ func (s *Store) UpdateCapacityRun(ctx context.Context, id string, dataset *capac
 	return affected(s.db.Exec(ctx, `UPDATE capacity_runs SET dataset = $2, steps = $3 WHERE id = $1 AND status = 'running'`, id, dataset, steps))
 }
 
-// FinishCapacityRun ends a run. A run that has already ended stays as it
-// is, and gives ErrNotFound.
+// FinishCapacityRun ends a run, and restores the site of a run that drained
+// it, in one transaction: a run never ends with its drain left behind. A run
+// that has already ended stays as it is, and gives ErrNotFound.
 func (s *Store) FinishCapacityRun(ctx context.Context, id, status, detail string) error {
-	return affected(s.db.Exec(ctx,
-		`UPDATE capacity_runs SET status = $2, detail = $3, finished_at = now() WHERE id = $1 AND status = 'running'`, id, status, detail))
+	return mapErr(pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		var modelID, clusterID string
+		var drainedSite bool
+		err := tx.QueryRow(ctx,
+			`UPDATE capacity_runs SET status = $2, detail = $3, finished_at = now() WHERE id = $1 AND status = 'running'
+			 RETURNING model_id, cluster_id, drained_site`, id, status, detail).Scan(&modelID, &clusterID, &drainedSite)
+		if err != nil || !drainedSite {
+			return err
+		}
+		// The endpoint may be gone with the model's last deployment there:
+		// nothing is left to restore then.
+		_, err = tx.Exec(ctx, `UPDATE model_endpoints SET drained = false, unlisted = false WHERE model_id = $1 AND cluster_id = $2`, modelID, clusterID)
+		return err
+	}))
 }
 
 // DeleteCapacityRun removes a run that has ended.
@@ -223,6 +247,25 @@ func (s *Store) UsageSince(ctx context.Context, from time.Time) ([]RecentUsage, 
 	        SELECT model_id, unit, date_trunc('day', hour, 'UTC') AS day, sum(used + best_effort) AS used
 	        FROM usage_hours WHERE hour >= $1 GROUP BY model_id, unit, day
 	    ) d GROUP BY model_id, unit`, from)
+}
+
+// HourUse is what one model was used for in one hour, in one unit, over
+// every tenant, best-effort included.
+type HourUse struct {
+	ModelID string
+	Unit    string
+	Hour    time.Time
+	Used    int64
+}
+
+// HourlyUse returns every model's use, hour by hour, since from.
+func (s *Store) HourlyUse(ctx context.Context, from time.Time) ([]HourUse, error) {
+	return list(ctx, s, func(r scanner) (HourUse, error) {
+		var u HourUse
+		err := r.Scan(&u.ModelID, &u.Unit, &u.Hour, &u.Used)
+		return u, err
+	}, `SELECT model_id, unit, hour, sum(used + best_effort)::bigint FROM usage_hours WHERE hour >= $1
+	    GROUP BY model_id, unit, hour ORDER BY model_id, hour`, from)
 }
 
 // AllQuotas returns every tenant's quota on every model.

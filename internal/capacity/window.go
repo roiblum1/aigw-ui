@@ -114,3 +114,8 @@ func (w *Window) Next(t time.Time) time.Time {
 	wait := (w.start - w.at(t) + w.period()) % w.period()
 	return t.In(w.loc).Truncate(time.Minute).Add(time.Duration(wait) * time.Minute)
 }
+
+// Overlaps says whether the window is open at any time in [from, to).
+func (w *Window) Overlaps(from, to time.Time) bool {
+	return w.Next(from).Before(to)
+}

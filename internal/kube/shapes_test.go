@@ -45,6 +45,9 @@ func TestMarketIDAnnotation(t *testing.T) {
 	for _, gvr := range llmServiceGVRs {
 		lists[gvr] = "LLMInferenceServiceList"
 	}
+	for _, gvr := range llmConfigGVRs {
+		lists[gvr] = "LLMInferenceServiceConfigList"
+	}
 	svc := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": llmServiceGVRs[0].Group + "/" + llmServiceGVRs[0].Version,
 		"kind":       "LLMInferenceService",

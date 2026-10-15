@@ -44,8 +44,8 @@ func upsertDeployment(ctx context.Context, tx pgx.Tx, clusterID, modelID string,
 		     spec_hash, quantization, lmcache, decode_replicas, market_id, observed_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
 		 ON CONFLICT (cluster_id, namespace, name) DO UPDATE SET model_id = $4, topology = $5, gpu = $6, gpus_per_instance = $7,
-		     revision = $8, instances = $9, spec_hash = $10, quantization = $11, lmcache = $12, decode_replicas = $13, market_id = $14,
-		     observed_at = now()`,
+		     revision = $8, instances = $9, spec_hash = COALESCE(NULLIF($10, ''), model_deployments.spec_hash), quantization = $11,
+		     lmcache = $12, decode_replicas = $13, market_id = $14, observed_at = now()`,
 		clusterID, d.Namespace, d.Name, modelID, d.Topology, d.GPU, d.GPUsPerInstance, d.Revision, d.Instances,
 		d.SpecHash, d.Quantization, d.LMCache, max(d.DecodeReplicas, 1), d.MarketID)
 	return err

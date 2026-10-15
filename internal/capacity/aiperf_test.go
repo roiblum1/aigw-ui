@@ -2,6 +2,7 @@ package capacity
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,7 +48,8 @@ func TestRealAIPerf(t *testing.T) {
 	set.MaxOutputTokens = 64
 	set.TTFTMillis = 600_000
 	set.ITLMillis = 10_000
-	config, _ := json.Marshal(map[string]any{"url": "http://127.0.0.1:8000", "model": "m", "settings": set, "grace_seconds": 30, "agentic": Agentic(set)})
+	config, _ := json.Marshal(map[string]any{"url": "http://127.0.0.1:8000", "model": "m", "settings": set, "grace_seconds": 30, "agentic": Agentic(set),
+		"quiet_seconds": 2})
 
 	cmd := exec.Command(tool, "run", "--rm", "--network", "none", "-v", dir+":/c:ro",
 		"-e", "AIGW_CAPACITY="+string(config), "-e", "AIGW_WORK=/tmp/w", image,
@@ -75,8 +77,13 @@ func TestRealAIPerf(t *testing.T) {
 		// AIPerf counts the tokens the stand-in reports, so nothing is
 		// foreign; a request still in flight when AIPerf stops may add a
 		// little.
-		if ok, why := s.Check(set); !ok || *s.ForeignShare() > 0.02 {
-			t.Errorf("step %d: %v %q, foreign %v", s.Concurrency, ok, why, *s.ForeignShare())
+		if ok, why := s.Check(set); !ok || *s.ForeignShare(set) > 0.02 {
+			t.Errorf("step %d: %v %q, foreign %v", s.Concurrency, ok, why, *s.ForeignShare(set))
+		}
+		// The counters are taken over AIPerf's own time, first request to
+		// last answer, and the quiet spell before the step saw nothing.
+		if math.Abs(s.ServerSeconds-s.DurationSeconds) > 0.5 || s.QuietSeconds < 2 || s.QuietPromptTokens == nil || *s.QuietPromptTokens != 0 {
+			t.Errorf("step %d: server %v s, AIPerf %v s, quiet %v s %v", s.Concurrency, s.ServerSeconds, s.DurationSeconds, s.QuietSeconds, s.QuietPromptTokens)
 		}
 	}
 }

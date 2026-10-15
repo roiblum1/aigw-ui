@@ -60,6 +60,8 @@ func Job(spec JobSpec) (*unstructured.Unstructured, error) {
 		"agentic":           Agentic(spec.Settings),
 		"metrics_urls":      spec.MetricsURLs,
 		"wait_idle_seconds": idleWait,
+		"settle_seconds":    settleWait,
+		"quiet_seconds":     quietSpell,
 	}
 	mounts := []any{map[string]any{"name": "work", "mountPath": "/tmp"}}
 	volumes := []any{map[string]any{"name": "work", "emptyDir": map[string]any{}}}
@@ -78,6 +80,13 @@ func Job(spec JobSpec) (*unstructured.Unstructured, error) {
 		return nil, err
 	}
 	labels := map[string]any{ManagedByLabel: "aigw-ui", RunLabel: spec.RunID}
+	// Through the peer listener the Job also runs the proxy, which passes
+	// every token on: with AIPerf on two CPUs it adds to the time between
+	// tokens at a few hundred streams, on four it does not.
+	cpus := "2"
+	if spec.Peer != nil {
+		cpus = "4"
+	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "batch/v1",
 		"kind":       "Job",
@@ -112,7 +121,7 @@ func Job(spec JobSpec) (*unstructured.Unstructured, error) {
 						},
 						"workingDir": "/tmp",
 						"resources": map[string]any{
-							"requests": map[string]any{"cpu": "2", "memory": "4Gi"},
+							"requests": map[string]any{"cpu": cpus, "memory": "4Gi"},
 							"limits":   map[string]any{"memory": "8Gi"},
 						},
 						"securityContext": map[string]any{

@@ -108,13 +108,13 @@ func TestPrefillDecode(t *testing.T) {
 // The queue lists what is missing first, then what is stale, and says what
 // each waits for; an empty queue is a list, not null.
 func TestQueue(t *testing.T) {
-	if q := Queue(nil, nil, nil, 1, now); q == nil || len(q) != 0 {
+	if q := Queue(nil, nil, nil, 1, now, nil); q == nil || len(q) != 0 {
 		t.Fatalf("empty queue = %#v", q)
 	}
 	ds := []store.Deployment{deployment("a", "glm-b200", "s1", 2), deployment("b", "glm-h200", "s2", 1),
 		{ClusterID: "a", ClusterName: "site-a", Namespace: "llm", Name: "qwen", ModelID: "qwen", SpecHash: "q1", Instances: ready(1)}}
 	runs := []store.CapacityRun{run("a", "glm-b200", "s1", 1, 40*24*time.Hour, 16)}
-	q := Queue(ds, runs, nil, 1, now)
+	q := Queue(ds, runs, nil, 1, now, nil)
 	got := []string{}
 	for _, i := range q {
 		got = append(got, i.ClusterID+"/"+i.Name+" "+i.Reason+" "+i.State)
@@ -125,9 +125,54 @@ func TestQueue(t *testing.T) {
 	}
 	// While glm is measured, its other LLMI waits, and so does the site.
 	running := []store.CapacityRun{{ModelID: "glm", ClusterID: "b", Namespace: "llm", Deployment: "glm-h200"}}
-	q = Queue(ds, runs, running, 1, now)
+	q = Queue(ds, runs, running, 1, now, nil)
 	if q[0].State != Running || q[2].State != WaitsModel {
 		t.Fatalf("running: %+v", q)
+	}
+}
+
+// The campaign drains a site only when the model's other sites can take its
+// busiest hour in the window, by their measurements, at up to 85% of what
+// they serve.
+func TestQueueCover(t *testing.T) {
+	ds := []store.Deployment{deployment("a", "glm-b200", "s1", 2), deployment("b", "glm-h200", "s2", 1)}
+	runs := []store.CapacityRun{run("a", "glm-b200", "s1", 1, time.Hour, 16)}
+	// Site a serves 2 × (16,000 prompt + 10 output) tokens a second; at 85%
+	// for an hour, 97,990,200 tokens.
+	state := func(busiest float64) QueueItem {
+		t.Helper()
+		q := Queue(ds, runs, nil, 1, now, map[string]Load{"glm": {BusiestHour: busiest}})
+		if len(q) != 1 || q[0].Name != "glm-h200" {
+			t.Fatalf("queue = %+v", q)
+		}
+		return q[0]
+	}
+	if i := state(0); i.State != Next || i.Cover != nil {
+		t.Fatalf("no traffic: %+v", i)
+	}
+	if i := state(50_000_000); i.State != Next || *i.Cover < 1.95 || *i.Cover > 1.96 {
+		t.Fatalf("covered: %+v %v", i, *i.Cover)
+	}
+	if i := state(200_000_000); i.State != WaitsCover || *i.Cover < 0.48 || *i.Cover > 0.49 {
+		t.Fatalf("not covered: %+v %v", i, *i.Cover)
+	}
+	// Priced, the same in credits: at $3 in, $0.30 cached, $15 out a
+	// million, all prompt tokens uncached, 2 × (16,000 × 300,000 + 10 ×
+	// 1,500,000) / 1e6 = 9,630 credits a second; 85% of an hour,
+	// 29,467,800.
+	prices := &capacity.Prices{Input: 300000, Cached: 30000, Output: 1500000}
+	q := Queue(ds, runs, nil, 1, now, map[string]Load{"glm": {BusiestHour: 30_000_000, Prices: prices}})
+	if q[0].State != WaitsCover || *q[0].Cover < 0.982 || *q[0].Cover > 0.983 {
+		t.Fatalf("priced: %+v %v", q[0], *q[0].Cover)
+	}
+	// A site that is drained takes nothing; neither does one not measured.
+	ds[0].Drained = true
+	if q := Queue(ds, runs, nil, 1, now, map[string]Load{"glm": {BusiestHour: 1}}); q[0].State != WaitsOperator {
+		t.Fatalf("other site drained: %+v", q[0])
+	}
+	ds[0].Drained = false
+	if q := Queue(ds, nil, nil, 1, now, map[string]Load{"glm": {BusiestHour: 1}}); q[0].State != WaitsCover || *q[0].Cover != 0 {
+		t.Fatalf("other site not measured: %+v", q)
 	}
 }
 

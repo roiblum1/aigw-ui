@@ -762,6 +762,11 @@ function CampaignPanel({ campaign: c, models }: { campaign: Campaign; models: Ca
                   <td className="detail">{staleText[q.reason] ?? q.reason}</td>
                   <td>
                     <span className={q.state === "next" || q.state === "running" ? "tag" : "tag warn"}>{q.state}</span>
+                    {q.cover != null && q.cover < 1 && (
+                      <div className="detail">
+                        The other sites take {percent(q.cover)} of its busiest hour in the window.
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

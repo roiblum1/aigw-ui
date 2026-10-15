@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"aigw-ui/internal/capacity"
+	"aigw-ui/internal/store"
 )
 
 // A limit outside 1 to 10 is refused before anything is stored.
@@ -71,5 +72,28 @@ func TestCapacityRunBody(t *testing.T) {
 	}
 	if (capacityRunBody{ClusterID: "c", Namespace: "llm", Deployment: "glm"}).check("glm-5.3") == nil {
 		t.Fatal("no mode accepted")
+	}
+}
+
+// A site an operator drained counts for nothing in what its model can be
+// given; one a measurement drained counts in full: the drain lasts the run.
+func TestReadyInstances(t *testing.T) {
+	two := 2.0
+	d := store.Deployment{ModelID: "glm", ClusterID: "a", Instances: &two}
+	run := []store.CapacityRun{{ModelID: "glm", ClusterID: "a", DrainedSite: true}}
+	if readyInstances(d, nil) != 2 {
+		t.Fatal("not drained")
+	}
+	d.Drained = true
+	if readyInstances(d, nil) != 0 || readyInstances(d, run) != 2 {
+		t.Fatalf("drained: by an operator %v, by a measurement %v", readyInstances(d, nil), readyInstances(d, run))
+	}
+	// A run on the site that found it drained already did not drain it.
+	run[0].DrainedSite = false
+	if readyInstances(d, run) != 0 {
+		t.Fatal("an operator's drain counted")
+	}
+	if readyInstances(store.Deployment{}, nil) != 0 {
+		t.Fatal("unknown ready count")
 	}
 }

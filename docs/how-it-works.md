@@ -297,18 +297,21 @@ target, then the gap halved. **Drained**, the hub first takes the site's
 entry weight to 0 and gives it back afterwards; **live**, it measures while
 the LLMI serves its users, after you type the model's name. Inside
 `capacity.window` the hub measures by itself, drained, whatever is not
-measured or stale.
+measured or stale, when the model's other sites can take its busiest hour
+there.
 
 **Why.**
 
 - *Each LLMI, not each GPU.* The same GPU at FP4 with LMCache and at FP8
-  without serves different amounts; the spec says which, so a result counts
-  for the spec it was measured on, whatever the scale.
+  without serves different amounts; the spec says which, with the configs
+  it is built on and the image it runs, so a result counts for what it was
+  measured on, whatever the scale.
 - *One profile, versioned.* Results compare only when measured the same
   way. A model never adds figures of two versions.
 - *Drained when it can be.* Users' traffic makes the result lower, and the
   measurement makes their answers slower. A step that still served other
-  traffic fails.
+  traffic fails. A drain lives exactly as long as its measurement, and the
+  hub drains on its own only what the other sites can cover.
 - *The Job makes its prompts up*, and the hub reads only numbers: no prompt
   passes through the hub.
 

@@ -14,10 +14,11 @@ import (
 )
 
 // fakeAIPerf stands in for the aiperf command. It writes a two-session
-// dataset, and for a profile a summary whose time to first token grows with
-// the load: 1,000 ms per request in flight.
+// dataset, and for a profile tells the stand-in instance what it served and
+// writes a summary whose time to first token grows with the load: 1,000 ms
+// per request in flight.
 const fakeAIPerf = `#!/usr/bin/env python3
-import json, os, sys
+import json, os, sys, urllib.request
 args = sys.argv[1:]
 def arg(name):
     return args[args.index(name) + 1]
@@ -45,17 +46,22 @@ summary = {
 }
 with open(os.path.join(d, "profile_export_aiperf.json"), "w") as f:
     json.dump(summary, f)
+served = {"prompt": 100000 * c, "cached": 80000 * c, "output": 1000 * c}
+urllib.request.urlopen(arg("--url") + "/served", data=json.dumps(served).encode())
 `
 
-// instance is what the stand-in for vLLM reports.
+// instance is what the stand-in for vLLM reports. Its counters grow by what
+// the fake aiperf says it served, 80% of the prompt tokens cached.
 type instance struct {
 	maxModelLen int
-	// promptPerRead is what its prompt counter grows by between two
-	// readings of /metrics: 10,000 for an instance that only serves the
-	// measurement in this test, far more for one that other clients reach.
-	promptPerRead int64
-	// running is its gauge of requests in flight.
-	running int
+	// foreignPerRead is what other clients add to its prompt counter between
+	// two readings of /metrics: 0 for an instance that only serves the
+	// measurement.
+	foreignPerRead int64
+	// running is its gauge of requests in flight, and busyAfterFirst what
+	// it turns to once the first step has been served: other clients that
+	// start to reach the instance during the measurement.
+	running, busyAfterFirst int
 }
 
 // runRunner runs the Job's script with the fake aiperf against a stand-in
@@ -66,9 +72,6 @@ func runRunner(t *testing.T, set Settings, in instance) string {
 	if err != nil {
 		t.Skip("python3 is not installed")
 	}
-	if in.promptPerRead == 0 {
-		in.promptPerRead = 10000
-	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "bin")
 	if err := os.Mkdir(bin, 0o755); err != nil {
@@ -77,24 +80,35 @@ func runRunner(t *testing.T, set Settings, in instance) string {
 	if err := os.WriteFile(filepath.Join(bin, "aiperf"), []byte(fakeAIPerf), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The counters grow at every reading: prompt tokens, 80% of them
-	// cached, and 500 generated tokens.
-	var reads atomic.Int64
+	var reads, prompt, cached, output atomic.Int64
+	var busy atomic.Bool
 	mux := http.NewServeMux()
+	mux.HandleFunc("/served", func(w http.ResponseWriter, r *http.Request) {
+		var n struct{ Prompt, Cached, Output int64 }
+		json.NewDecoder(r.Body).Decode(&n)
+		prompt.Add(n.Prompt)
+		cached.Add(n.Cached)
+		output.Add(n.Output)
+		busy.Store(true)
+	})
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"object":"list","data":[{"id":"m","object":"model","max_model_len":%d}]}`, in.maxModelLen)
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		n := reads.Add(1)
+		running := in.running
+		if busy.Load() && in.busyAfterFirst > 0 {
+			running = in.busyAfterFirst
+		}
 		fmt.Fprintf(w, "# HELP vllm:prompt_tokens_total x\nvllm:prompt_tokens_total{engine=\"0\",model_name=\"m\"} %d\n"+
 			"vllm:prompt_tokens_cached_total{engine=\"0\",model_name=\"m\"} %d\nvllm:generation_tokens_total{engine=\"0\"} %d\n"+
-			"vllm:num_requests_running{engine=\"0\",model_name=\"m\"} %d\n", n*in.promptPerRead, n*in.promptPerRead*8/10, n*500, in.running)
+			"vllm:num_requests_running{engine=\"0\",model_name=\"m\"} %d\n", prompt.Load()+n*in.foreignPerRead, cached.Load(), output.Load(), running)
 	})
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
 	config, _ := json.Marshal(map[string]any{"url": server.URL, "model": "m", "settings": set, "grace_seconds": 1,
-		"agentic": Agentic(set), "wait_idle_seconds": 0})
+		"agentic": Agentic(set), "wait_idle_seconds": 0, "settle_seconds": 0, "quiet_seconds": 0.2})
 	cmd := exec.Command(python, "-c", runner)
 	cmd.Env = append(os.Environ(), "AIGW_CAPACITY="+string(config), "AIGW_WORK="+filepath.Join(dir, "work"), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	if err := os.Mkdir(filepath.Join(dir, "work"), 0o755); err != nil {
@@ -127,11 +141,16 @@ func TestRunner(t *testing.T) {
 		t.Fatalf("steps = %v\n%s", ran, out)
 	}
 	s := l.Steps[1]
-	if s.Requests != 20 || s.InputTokens != 200000 || s.TTFTP95 != 2000 || s.ITLP95 != 20 || s.ServerOutputTokens == nil || *s.ServerOutputTokens != 500 || s.ServerSeconds <= 0 {
+	if s.Requests != 20 || s.InputTokens != 200000 || s.TTFTP95 != 2000 || s.ITLP95 != 20 || s.ServerOutputTokens == nil || *s.ServerOutputTokens != 2000 || s.ServerSeconds <= 0 {
 		t.Fatalf("step = %+v", s)
 	}
 	if share := s.CachedShare(); share == nil || *share != 0.8 {
 		t.Fatalf("cached share = %v", share)
+	}
+	// Drained, each step first watched the instance while nothing was sent,
+	// and nothing came.
+	if s.QuietSeconds < 0.2 || s.QuietPromptTokens == nil || *s.QuietPromptTokens != 0 || *s.ForeignShare(set) != 0 {
+		t.Fatalf("quiet spell = %v %v, foreign %v", s.QuietSeconds, s.QuietPromptTokens, *s.ForeignShare(set))
 	}
 	r := Analyze(set, l.Steps)
 	if r.Best == nil || r.Best.Concurrency != 3 || !strings.Contains(r.Limit, "at 4 in flight") {
@@ -154,33 +173,50 @@ func TestRunnerModelTooShort(t *testing.T) {
 }
 
 // A stand-in that other clients still reach: its prompt counter grows by far
-// more than the measurement sends. Drained, the step fails as contaminated
-// and the sweep stops; live, the same traffic is expected and shown.
+// more than the measurement sends. Drained, the quiet spell before the first
+// step sees it, the step fails as contaminated and the sweep stops; live, the
+// same traffic is expected and shown.
 func TestRunnerForeignTraffic(t *testing.T) {
-	side := instance{maxModelLen: 200000, promptPerRead: 10_000_000}
+	side := instance{maxModelLen: 200000, foreignPerRead: 10_000_000}
 	set := Defaults(0)
 	set.MaxConcurrency = 2
 	l := ParseLog(runRunner(t, set, side))
 	if len(l.Steps) != 1 || !l.Done {
 		t.Fatalf("drained: %+v", l.Steps)
 	}
-	if ok, why := l.Steps[0].Check(set); ok || !strings.Contains(why, "contaminated: 99%") {
+	if s := l.Steps[0]; s.QuietPromptTokens == nil || *s.QuietPromptTokens != 10_000_000 {
+		t.Fatalf("quiet spell: %+v", s)
+	}
+	if ok, why := l.Steps[0].Check(set); ok || !strings.Contains(why, "contaminated: ") {
 		t.Fatalf("drained step: %v %q", ok, why)
 	}
 
 	set.Mode = ModeLive
 	l = ParseLog(runRunner(t, set, side))
-	if len(l.Steps) != 2 {
+	if len(l.Steps) != 2 || l.Steps[0].QuietPromptTokens != nil {
 		t.Fatalf("live: %+v", l.Steps)
 	}
 	r := Analyze(set, l.Steps)
 	if r.Best == nil || r.Best.Concurrency != 2 || r.Steps[0].ForeignShare == nil || *r.Steps[0].ForeignShare < 0.98 {
 		t.Fatalf("live result: %+v", r)
 	}
-	// Live, the throughput is the instance's own counters: 10,000,000
-	// prompt tokens over the time between two readings.
+	// Live, the throughput is the instance's own counters: other clients'
+	// 10,000,000 prompt tokens a reading and the measurement's own, over
+	// the time between the readings.
 	if tp := set.Throughput(*r.Best); tp.InputPerSecond < 10_000_000/r.Best.ServerSeconds*0.99 {
 		t.Fatalf("live throughput = %+v", tp)
+	}
+}
+
+// Drained, an instance that other clients start to reach during the
+// measurement fails the next step at its quiet spell: it never runs dry.
+func TestRunnerTrafficArrives(t *testing.T) {
+	l := ParseLog(runRunner(t, Defaults(0), instance{maxModelLen: 200000, busyAfterFirst: 3}))
+	if !l.Done || len(l.Steps) != 2 || l.Steps[0].Error != "" || !strings.Contains(l.Steps[1].Error, "still had 3 requests in flight") {
+		t.Fatalf("steps: %+v", l.Steps)
+	}
+	if r := Analyze(Defaults(0), l.Steps); r.Best == nil || r.Best.Concurrency != 1 || !strings.Contains(r.Limit, "something else sends to it") {
+		t.Fatalf("result: %+v %q", r.Best, r.Limit)
 	}
 }
 

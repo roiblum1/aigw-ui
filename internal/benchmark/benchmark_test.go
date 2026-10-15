@@ -12,6 +12,7 @@ import (
 
 	"aigw-ui/internal/capacity"
 	"aigw-ui/internal/kube"
+	"aigw-ui/internal/llmi"
 	"aigw-ui/internal/store"
 )
 
@@ -21,10 +22,13 @@ type fakeStore struct {
 	runs        map[string]*store.CapacityRun
 	profile     capacity.Profile
 	// weight is the entry route's weight of each model's site, by
-	// model|cluster; drains records every SetDrained.
+	// model|cluster; drains records every drain and restore.
 	weight   map[string]float64
 	drains   []string
 	lastSite bool
+	latest   []store.CapacityRun
+	models   []store.Model
+	hours    []store.HourUse
 }
 
 func (f *fakeStore) GetDeployment(_ context.Context, modelID, clusterID, namespace, name string) (store.Deployment, error) {
@@ -50,6 +54,12 @@ func (f *fakeStore) CreateCapacityRun(_ context.Context, n store.NewRun) error {
 		if r.ModelID == n.ModelID && r.Status == store.RunRunning {
 			return store.ErrConflict
 		}
+	}
+	if n.DrainedSite {
+		if f.lastSite {
+			return store.ErrLastSite
+		}
+		f.drains = append(f.drains, "drain "+n.ModelID+"|"+n.ClusterID)
 	}
 	v := n.Profile.Version
 	f.runs[n.ID] = &store.CapacityRun{ID: n.ID, ModelID: n.ModelID, ClusterID: n.ClusterID, Namespace: n.Namespace, Deployment: n.Deployment,
@@ -87,24 +97,15 @@ func (f *fakeStore) FinishCapacityRun(_ context.Context, id, status, detail stri
 		return store.ErrNotFound
 	}
 	r.Status, r.Detail = status, detail
+	if r.DrainedSite {
+		f.drains = append(f.drains, "undrain "+r.ModelID+"|"+r.ClusterID)
+	}
 	return nil
 }
 
 func (f *fakeStore) SetRunPhase(_ context.Context, id, phase string) error {
 	f.runs[id].Phase = phase
 	return nil
-}
-
-func (f *fakeStore) SetDrained(_ context.Context, modelID, clusterID string, drained bool) (string, string, error) {
-	if drained && f.lastSite {
-		return "", "", store.ErrLastSite
-	}
-	what := "undrain "
-	if drained {
-		what = "drain "
-	}
-	f.drains = append(f.drains, what+modelID+"|"+clusterID)
-	return modelID, clusterID, nil
 }
 
 func (f *fakeStore) SiteWeight(_ context.Context, modelID, clusterID string) (*float64, error) {
@@ -116,7 +117,21 @@ func (f *fakeStore) ListDeployments(context.Context) ([]store.Deployment, error)
 	return f.deployments, nil
 }
 
-func (f *fakeStore) LatestCapacityRuns(context.Context) ([]store.CapacityRun, error) { return nil, nil }
+func (f *fakeStore) LatestCapacityRuns(context.Context) ([]store.CapacityRun, error) {
+	return f.latest, nil
+}
+
+func (f *fakeStore) ListModels(context.Context) ([]store.Model, error) { return f.models, nil }
+
+func (f *fakeStore) HourlyUse(_ context.Context, from time.Time) ([]store.HourUse, error) {
+	var out []store.HourUse
+	for _, h := range f.hours {
+		if !h.Hour.Before(from) {
+			out = append(out, h)
+		}
+	}
+	return out, nil
+}
 
 type fakeCluster struct {
 	instance kube.Instance
@@ -280,10 +295,10 @@ func TestDrainedLastSite(t *testing.T) {
 	if len(st.runs) != 0 {
 		t.Fatalf("a refused drain was recorded: %+v", st.runs)
 	}
-	// A model already being measured: the drain is undone.
+	// A model already being measured: nothing is drained.
 	st.lastSite = false
 	st.runs["x"] = &store.CapacityRun{ID: "x", ModelID: "m1", Status: store.RunRunning}
-	if _, err := s.Start(context.Background(), drained()); !errors.Is(err, ErrBusy) || strings.Join(st.drains, ",") != "drain m1|c1,undrain m1|c1" {
+	if _, err := s.Start(context.Background(), drained()); !errors.Is(err, ErrBusy) || len(st.drains) != 0 {
 		t.Fatalf("busy: %v %v", err, st.drains)
 	}
 }
@@ -427,7 +442,35 @@ func TestCampaign(t *testing.T) {
 		t.Fatalf("started %v", started)
 	}
 
+	// With traffic in the window that site-b, not measured, cannot be shown
+	// to take, site-a is not drained.
+	st, _, s = setup("img")
+	st.deployments = append(st.deployments,
+		store.Deployment{ModelID: "m1", ClusterID: "c2", ClusterName: "site-b", Namespace: "llm", Name: "glm", Topology: "single", SpecHash: "s2", Instances: ready(1)})
+	st.models = []store.Model{{ID: "m1", Name: "glm"}}
+	st.hours = []store.HourUse{{ModelID: "m1", Unit: store.UnitTokens, Hour: now.Add(-24 * time.Hour), Used: 1000}}
+	s.opt.Window = win
+	s.Tick(ctx, now)
+	if len(st.runs) != 0 {
+		t.Fatalf("drained a site the others cannot cover: %+v", st.runs)
+	}
+	queue, _ := s.Queue(ctx, now)
+	if len(queue) != 2 || queue[0].State != llmi.WaitsCover || *queue[0].Cover != 0 {
+		t.Fatalf("queue = %+v", queue)
+	}
+	// Traffic outside the window, or long ago, does not count.
 	closed, _ := capacity.ParseWindow("Fri 22:00 - Sat 06:00 UTC")
+	s.opt.Window = closed
+	if q, _ := s.Queue(ctx, now); q[0].State != llmi.Next {
+		t.Fatalf("outside the window: %+v", q[0])
+	}
+	s.opt.Window = win
+	st.hours[0].Hour = now.AddDate(0, 0, -31)
+	if q, _ := s.Queue(ctx, now); q[0].State != llmi.Next {
+		t.Fatalf("31 days ago: %+v", q[0])
+	}
+
+	st, _, s = setup("img")
 	st, _, s = setup("img")
 	s.opt.Window = closed
 	s.Tick(ctx, now) // a Thursday
@@ -440,5 +483,15 @@ func TestNewID(t *testing.T) {
 	id, err := newID()
 	if err != nil || len(id) != 36 || id[14] != '4' {
 		t.Fatalf("id %q %v", id, err)
+	}
+}
+
+// An LLMI whose spec hash is not known, as during a rollout, is not
+// measured: the result would count for nothing.
+func TestUnknownSpec(t *testing.T) {
+	st, cl, s := setup("img")
+	st.deployments[0].SpecHash = ""
+	if _, err := s.Start(context.Background(), live("glm-0")); !errors.Is(err, ErrUnknownSpec) || len(st.runs) != 0 || len(cl.jobs) != 0 {
+		t.Fatalf("unknown spec: %v %+v", err, st.runs)
 	}
 }

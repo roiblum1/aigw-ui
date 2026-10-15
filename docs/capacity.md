@@ -26,10 +26,28 @@ with the same spec are measured apart, since their network, tuning and
 versions differ.
 
 **Its spec hash** says what it runs: SHA-256 of its `spec` with every
-`replicas` field removed. Scaling it keeps its result; changing anything
-else, such as one argument, makes it not measured until it is measured
-again. A prefill/decode LLMI adds the ratio of prefill to decode replicas,
-since that changes what one decode replica serves.
+`replicas` field removed, and of what is set outside it:
+
+- the specs of the `LLMInferenceServiceConfig`s its `baseRefs` name, in
+  their order, from its own namespace or else from KServe's: a shared
+  config can change vLLM's arguments for every LLMI built on it;
+- the image digest its ready model servers (the `main` container) run, by
+  role (prefill, decode, the workers of a multi-node group): a vLLM upgrade
+  in KServe's own config, or an image pushed again under the same tag,
+  changes only that.
+
+Scaling it keeps its result; changing anything else, such as one argument
+or the image, makes it not measured until it is measured again. A
+prefill/decode LLMI adds the ratio of prefill to decode replicas, since
+that changes what one decode replica serves.
+
+While its ready pods of one role run different images, as during a
+rollout, or none is ready, or the configs could not be read this time, the
+hub keeps the hash it has, so a rollout does not drop the result back and
+forth. It is not measured until its pods agree. A hub not allowed to list
+pods hashes without the images; one not allowed to read the configs hashes
+their names only. Changes to KServe's own default configs other than the
+image are not seen: measure again after changing vLLM's arguments there.
 
 **What one instance is:** one pod on one node; one LeaderWorkerSet group
 over several nodes, as KServe counts ready instances; for prefill and
@@ -131,8 +149,9 @@ reads every 20 seconds:
 | Requests answered and failed | AIPerf |
 | Prompt and output tokens | The model server's `usage`, as AIPerf records it |
 | Time to first token, time between tokens: p50 and p95 | AIPerf |
-| Share of prompt tokens from the cache | The pod's own counters before and after the step: `vllm:prompt_tokens_cached_total` over `vllm:prompt_tokens_total`, or `vllm:prefix_cache_hits_total` over `vllm:prefix_cache_queries_total` |
-| Prompt and generated tokens the pod counted, and the time between the two readings | `vllm:prompt_tokens_total`, `vllm:generation_tokens_total` |
+| Share of prompt tokens from the cache | The pod's own counters over the step: `vllm:prompt_tokens_cached_total` over `vllm:prompt_tokens_total`, or `vllm:prefix_cache_hits_total` over `vllm:prefix_cache_queries_total` |
+| Prompt and generated tokens the pod counted, and over what time | `vllm:prompt_tokens_total`, `vllm:generation_tokens_total`, read every 2 seconds and taken from AIPerf's first request to its last answer: the time AIPerf divides its own tokens by |
+| Drained: prompt tokens the pod counted in the quiet spell before the step, and its length | `vllm:prompt_tokens_total` |
 
 **Nothing of a prompt reaches the hub**: the Job makes its prompts up and
 the hub reads only these lines. **No tenant is charged**: the requests do
@@ -153,6 +172,11 @@ It needs another site that serves the model:
 3. It measures, and the hub ends the drain: the weight comes back with the
    usual steps. A drain an operator made is left as it was.
 
+The drain is made in the transaction that records the measurement, and
+ended in the one that ends it: a hub that stops at any point never leaves a
+site drained without a running measurement, and the next hub to start
+follows the measurement to its end.
+
 **Live** measures an LLMI while it serves its users, for a model served on
 one site only, or when you choose it. The form says so first:
 
@@ -163,13 +187,27 @@ one site only, or when you choose it. The form says so first:
 
 It starts only once the model's name is typed. The result is marked
 **live**, and its throughput is the pod's own counters, users' traffic
-included; the latency is AIPerf's own requests'.
+included, over the time AIPerf had requests out, as a drained result; the
+latency is AIPerf's own requests'.
 
-**Other traffic.** Each step compares the prompt tokens AIPerf sent with
-what the pod's prompt counter grew by: other traffic is 1 − sent ÷
-counted. Drained, a step with more than 5% fails as contaminated; it
-usually means clients call the site's own route directly. Live, it is
-expected, and shown with the step.
+**Other traffic.** It is estimated two ways, and the larger counts:
+
+- **During the step:** the prompt tokens the pod counted beyond what AIPerf
+  sent and had answered. The pod also counts the prompts of the
+  measurement's own requests that failed, and AIPerf does not report them,
+  so the longest prompt is allowed for each failed request: a step near its
+  limit, where requests start to fail, is not taken for one that something
+  else reached.
+- **Before a drained step:** the Job waits for the pods to have nothing in
+  flight, for at most a minute, then watches their prompt counter for 20
+  seconds while it sends nothing; what they count then is someone else's,
+  carried over the step at the same rate. Pods that never run dry fail the
+  step.
+
+Drained, a step with more than 5% fails as contaminated; it usually means
+clients call the site's own route directly. A step with too many failed
+requests says so first. Live, other traffic is expected, and shown with
+the step.
 
 ## Prefill and decode
 
@@ -183,6 +221,13 @@ answers streamed as they come. It needs the cluster's peer host and the
 hub's `fleet.domain` or `fleet.peerSNI`. The result is divided by the
 decode replicas during the run, whose pods' counters it reads.
 
+The proxy must not be what limits the result. It runs in 8 processes, sends
+each token on at once, keeps its connections to the gateway from one step
+to the next, and opens the ones a step needs before the step starts; the
+Job asks for 4 CPUs instead of 2. Measured against a stand-in on Linux at
+512 streams of 50 tokens a second, it adds nothing to the time between
+tokens (p95 21.4 ms, 21.5 ms direct) or to the time to the first token.
+
 The peer listener counts nothing against a quota (lab check B): a model's
 peer route goes to its InferencePool, and a QuotaPolicy attaches only to an
 AIServiceBackend.
@@ -191,7 +236,7 @@ AIServiceBackend.
 
 | What happened | Its result |
 |---|---|
-| Its spec hash changed | Dropped: not measured until measured again |
+| Its spec hash changed: its spec, a config it names, or the image it runs | Dropped: not measured until measured again |
 | The profile has a new version | Kept, marked stale, until measured again |
 | It is older than 30 days | Kept, marked stale |
 
@@ -203,6 +248,18 @@ works through a queue inside that window: every LLMI with a ready instance
 that is not measured, then every one whose result is stale. It measures
 drained only, one per site and one per model at a time. An LLMI whose model
 no other site serves can only be measured live and waits for an operator.
+
+It drains a site only when the model's other sites can take the load.
+Their ready, undrained, measured instances must serve, at no more than 85%
+of what they serve within the targets, the model's busiest hour that fell
+inside the window in the last 30 days, in the model's unit. Otherwise the
+LLMI waits for an operator, and the page says what part of that hour the
+others take. A site holding most of a model's capacity is then measured
+live, or drained by hand at a quieter time. A model with no traffic in the
+window is drained freely; one with traffic whose other sites are not
+measured yet waits, since nothing shows they can take it, so a model's
+first measurement is usually started by an operator.
+
 **Measuring by itself** on the page shows the window, the queue and what
 each item waits for. Empty, the default, never.
 
@@ -223,8 +280,8 @@ each item waits for. Empty, the default, never.
   NetworkPolicy that only lets the gateway in also keeps the Job out.
 - **HTTPS.** A pod that answers only over HTTPS is not measured yet.
 
-The Job is called `aigw-capacity-<id>`, asks for 2 CPUs and 4 GiB, never
-restarts, and is stopped by Kubernetes after the longest the steps can take.
+The Job is called `aigw-capacity-<id>`, asks for 2 CPUs (4 for
+prefill/decode) and 4 GiB, never restarts, and is stopped by Kubernetes after the longest the steps can take.
 It is deleted 7 days after it ends. **Stop** deletes it at once and ends
 the drain; the steps it finished are kept. See [security](security.md) for
 what this needs on the cluster.
@@ -257,7 +314,9 @@ can be given   = busy all day x expected busy share
 ```
 
 Instances on a drained site are not counted, so the figure follows the
-fleet: a site that loses pods or is drained lowers it at the next poll.
+fleet: a site that loses pods or is drained lowers it at the next poll. A
+site drained by a measurement still counts: that drain lasts the run only,
+and the figure does not dip in the campaign window.
 
 **What is left to give.**
 
@@ -377,7 +436,7 @@ and a table of every step. **Measurements** lists the earlier ones.
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| GET | `/capacity` | | `{"image", "gpus", "models", "profile", "campaign"}`. Each model has `llmis`, its LLMInferenceServices with their shape, `spec_hash`, `quantization`, `lmcache`, the `run` that counts (or null and `why`) and `stale`; `profile_version`, the version it is counted with; `sites`; `plan`, whose `shapes` are the LLMIs in the same order; and `running`. `campaign` has `window`, `open`, `next` and `queue` |
+| GET | `/capacity` | | `{"image", "gpus", "models", "profile", "campaign"}`. Each model has `llmis`, its LLMInferenceServices with their shape, `spec_hash`, `quantization`, `lmcache`, the `run` that counts (or null and `why`) and `stale`; `profile_version`, the version it is counted with; `sites`; `plan`, whose `shapes` are the LLMIs in the same order; and `running`. `campaign` has `window`, `open`, `next` and `queue`; each item of the queue has its `state` and, for a model with traffic in the window, `cover`: what its other sites take of its busiest hour there (below 1, it waits) |
 | GET | `/benchmark-profiles` | | Every version of the profile, newest first; one is `active` |
 | PUT | `/benchmark-profile` | `{"name", "workload", "slo", "sweep", "note"}` | The new version, now active |
 | PUT | `/models/{id}/target-utilization` | `{"utilization"}` | 204. 0.05 to 1 |
@@ -387,8 +446,8 @@ and a table of every step. **Measurements** lists the earlier ones.
 | DELETE | `/gpu-prices/{gpu}` | | 204 |
 | GET | `/clusters/{id}/deployments/{namespace}/{name}/pods` | | The deployment's ready pods, read from the cluster; a prefill/decode deployment lists its decode pods |
 | GET | `/models/{id}/capacity-runs` | | The model's measurements, newest first |
-| POST | `/models/{id}/capacity-runs` | `{"cluster_id", "namespace", "deployment", "pod", "mode", "confirm"}` | 201 and the measurement. `mode` is `drained` or `live`; live needs `confirm` equal to the model's name. `pod` is empty for a prefill/decode deployment. 409 with the reason when it cannot start, such as a drained measurement of a model no other site serves |
-| GET | `/capacity-runs/{id}` | | One measurement, with `result.steps` saying of each step whether it met the targets and its `foreign_share` |
+| POST | `/models/{id}/capacity-runs` | `{"cluster_id", "namespace", "deployment", "pod", "mode", "confirm"}` | 201 and the measurement. `mode` is `drained` or `live`; live needs `confirm` equal to the model's name. `pod` is empty for a prefill/decode deployment. 409 with the reason when it cannot start, such as a drained measurement of a model no other site serves, or an LLMI whose spec hash is not known yet |
+| GET | `/capacity-runs/{id}` | | One measurement, with `result.steps` saying of each step whether it met the targets and its `foreign_share`; a drained step's raw figures have `quiet_s` and `quiet_prompt_tokens`, its quiet spell |
 | POST | `/capacity-runs/{id}/cancel` | | The measurement, stopped; a drain it made ends |
 | DELETE | `/capacity-runs/{id}` | | 204. 409 while it runs |
 

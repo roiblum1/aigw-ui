@@ -27,7 +27,7 @@ func TestCapacityRuns(t *testing.T) {
 	newRun := func(id, deployment, spec string, shape capacity.Shape) NewRun {
 		return NewRun{ID: id, ModelID: glm, ClusterID: site.ID, Namespace: "llm", Deployment: deployment, Instance: deployment + "-0",
 			JobName: "aigw-capacity-" + id[len(id)-1:], Shape: shape, Settings: set, SpecHash: spec, Profile: profile,
-			Phase: PhaseDraining, DrainedSite: true, StartedBy: ByCampaign, InstancesDuring: 1}
+			Phase: PhaseDraining, StartedBy: ByCampaign, InstancesDuring: 1}
 	}
 	if err := s.CreateCapacityRun(ctx, newRun(first, "glm-b300", "s1", b300)); err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestCapacityRuns(t *testing.T) {
 	running, err := s.RunningCapacityRuns(ctx)
 	if err != nil || len(running) != 1 || running[0].ModelName != "glm" || running[0].ClusterName != "site-a" || len(running[0].Steps) != 2 ||
 		running[0].Dataset.PromptMean != 99000 || running[0].Shape != b300 || running[0].Deployment != "glm-b300" ||
-		running[0].Phase != PhaseMeasuring || !running[0].DrainedSite || running[0].StartedBy != ByCampaign || running[0].Mode != capacity.ModeDrained ||
+		running[0].Phase != PhaseMeasuring || running[0].StartedBy != ByCampaign || running[0].Mode != capacity.ModeDrained ||
 		running[0].SpecHash != "s1" || *running[0].ProfileVersion != 1 || *running[0].ProfileID != profile.ID {
 		t.Fatalf("running = %+v, %v", running, err)
 	}
@@ -122,6 +122,73 @@ func TestCapacityRuns(t *testing.T) {
 	}
 }
 
+// A drained run drains its site in the transaction that records it, and
+// restores it in the one that ends it: no drain outlives its run, and none
+// is made for a run that is not recorded.
+func TestDrainedRun(t *testing.T) {
+	s, ctx := open(t)
+	glm := model(t, s, ctx, "glm", false)
+	var sites []string
+	for _, name := range []string{"site-a", "site-b"} {
+		c, err := s.CreateCluster(ctx, Cluster{Name: name, Namespace: "ai-gateway", GatewayName: "gw"}, []byte("kubeconfig"), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(ctx, `UPDATE clusters SET fleet_enabled = true WHERE id = $1;`, c.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(ctx, `INSERT INTO model_endpoints (model_id, cluster_id, upstream_model, source, backends, capacity_applied)
+			VALUES ($1, $2, '', 'discovered', '[]', 2)`, glm, c.ID); err != nil {
+			t.Fatal(err)
+		}
+		sites = append(sites, c.ID)
+	}
+	drained := func(site string) bool {
+		t.Helper()
+		var d bool
+		if err := s.db.QueryRow(ctx, `SELECT drained FROM model_endpoints WHERE model_id = $1 AND cluster_id = $2`, glm, site).Scan(&d); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	profile, _ := s.ActiveProfile(ctx)
+	run := func(id, site string) NewRun {
+		return NewRun{ID: id, ModelID: glm, ClusterID: site, Namespace: "llm", Deployment: "glm", JobName: "aigw-capacity-" + id[len(id)-1:],
+			Settings: profile.Settings(0, capacity.ModeDrained), SpecHash: "s", Profile: profile, Phase: PhaseDraining, DrainedSite: true}
+	}
+	const first, second, third = "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-000000000003"
+	if err := s.CreateCapacityRun(ctx, run(first, sites[0])); err != nil || !drained(sites[0]) {
+		t.Fatalf("recorded: %v, drained %v", err, drained(sites[0]))
+	}
+	// A second run of the model is refused, and its site is not drained.
+	if err := s.CreateCapacityRun(ctx, run(second, sites[1])); !errors.Is(err, ErrConflict) || drained(sites[1]) {
+		t.Fatalf("second: %v, drained %v", err, drained(sites[1]))
+	}
+	if err := s.FinishCapacityRun(ctx, first, RunFailed, "gave up"); err != nil || drained(sites[0]) {
+		t.Fatalf("ended: %v, drained %v", err, drained(sites[0]))
+	}
+	// With the other site drained by an operator, this one is the last: the
+	// run is refused and not recorded.
+	if _, _, err := s.SetDrained(ctx, glm, sites[1], true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateCapacityRun(ctx, run(third, sites[0])); !errors.Is(err, ErrLastSite) || drained(sites[0]) {
+		t.Fatalf("last site: %v, drained %v", err, drained(sites[0]))
+	}
+	if _, err := s.GetCapacityRun(ctx, third); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("refused run recorded: %v", err)
+	}
+	// A run that did not drain its site leaves an operator's drain alone.
+	n := run(third, sites[1])
+	n.DrainedSite = false
+	if err := s.CreateCapacityRun(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishCapacityRun(ctx, third, RunSucceeded, ""); err != nil || !drained(sites[1]) {
+		t.Fatalf("operator's drain: %v, drained %v", err, drained(sites[1]))
+	}
+}
+
 // Discovery records each deployment and its shape, and forgets the ones
 // that are gone.
 func TestDeploymentsFromDiscovery(t *testing.T) {
@@ -155,8 +222,9 @@ func TestDeploymentsFromDiscovery(t *testing.T) {
 	if d, err := s.GetDeployment(ctx, glm, site.ID, "llm", "glm-pd"); err != nil || d.Topology != "prefill-decode" {
 		t.Fatalf("one deployment = %+v, %v", d, err)
 	}
+	// No hash this time, as during a rollout: the one it had stays.
 	report(Deployment{Namespace: "llm", Name: "glm-b300", Topology: "single", GPU: "NVIDIA-B300", GPUsPerInstance: 8, Instances: &two})
-	if all, _ := s.ListDeployments(ctx); len(all) != 1 {
+	if all, _ := s.ListDeployments(ctx); len(all) != 1 || all[0].SpecHash != "abc" {
 		t.Fatalf("after one is gone: %+v", all)
 	}
 	// A cluster that reports nothing has none left.
@@ -264,6 +332,11 @@ func TestUsageSinceAndAllQuotas(t *testing.T) {
 	used, err := s.UsageSince(ctx, day)
 	if err != nil || len(used) != 1 || used[0].Busiest != 170 || used[0].Total != 260 || used[0].ModelID != glm {
 		t.Fatalf("used = %+v, %v", used, err)
+	}
+	// By the hour, over the tenants, best-effort included.
+	hours, err := s.HourlyUse(ctx, day.Add(10*time.Hour))
+	if err != nil || len(hours) != 2 || hours[0].Used != 50 || !hours[0].Hour.Equal(day.Add(10*time.Hour)) || hours[1].Used != 90 || hours[1].Unit != UnitTokens {
+		t.Fatalf("hours = %+v, %v", hours, err)
 	}
 
 	if err := s.UpsertQuota(ctx, a.ID, glm, 1000, "1h", nil); err != nil {

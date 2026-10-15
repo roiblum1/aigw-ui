@@ -32,11 +32,14 @@ controls every LLM cluster. Keep access to the hub namespace small.
 LLM cluster: create, get, list, patch and delete on the Envoy Gateway and AI
 gateway resources it manages; create on Secrets plus get, patch and delete on
 the one Secret named `aigw-ui-api-keys`; and get on the `Gateway`. It never
-lists Secrets. Across the cluster it reads LLMInferenceServices, the pods of
-their deployments (`kserve.io/component=workload`) and the nodes' labels, to
-count ready instances and find each deployment's GPU. Without list on pods
-and nodes the instances are still counted, the GPUs are not known, and the
-cluster's discovery message says what was not allowed. A ServiceAccount
+lists Secrets. Across the cluster it reads LLMInferenceServices, the
+LLMInferenceServiceConfigs they are built on, the pods of their deployments
+(`kserve.io/component=workload`) and the nodes' labels, to count ready
+instances, find each deployment's GPU and tell what it runs. Without list on
+pods and nodes the instances are still counted, the GPUs are not known, and
+the cluster's discovery message says what was not allowed; without list on
+pods or on the configs, a change of image or of a shared config does not
+mark a measurement stale ([capacity](capacity.md#what-is-measured-each-llminferenceservice)). A ServiceAccount
 kubeconfig limited to that would reduce the damage if the hub were
 compromised.
 

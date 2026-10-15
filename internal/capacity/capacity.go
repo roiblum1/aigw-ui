@@ -103,7 +103,7 @@ func (s Settings) Requests(concurrency int) int {
 // the time to let its last requests finish, the wait for an instance with
 // no requests in flight, and the time to make up the sessions and start.
 func (s Settings) Duration() int {
-	return s.Steps()*(s.StepSeconds+stepGrace+60) + idleWait + 900
+	return s.Steps()*(s.StepSeconds+stepGrace+settleWait+quietSpell+60) + idleWait + 900
 }
 
 // Steps is the most steps the measurement runs: the doublings from
@@ -122,6 +122,14 @@ func (s Settings) Steps() int {
 // idleWait is how long a drained measurement waits for its instance to have
 // no request in flight before it gives up: other traffic still reaches it.
 const idleWait = 600
+
+// settleWait is how long a drained step waits for the previous step's
+// requests to leave the instance, and quietSpell how long it then watches
+// the instance's prompt counter while nothing is sent.
+const (
+	settleWait = 60
+	quietSpell = 20
+)
 
 // errorShare is the part of a step's requests that may fail.
 func (s Settings) errorShare() float64 {
@@ -159,9 +167,15 @@ type Step struct {
 	ServerPromptTokens *float64 `json:"server_prompt_tokens"`
 	ServerCachedTokens *float64 `json:"server_cached_tokens"`
 	// ServerOutputTokens is what its counter of generated tokens grew by,
-	// and ServerSeconds the time between the two readings of the counters.
+	// and ServerSeconds the time the counters are taken over: from the
+	// step's first request to its last answer, as DurationSeconds.
 	ServerOutputTokens *float64 `json:"server_output_tokens,omitempty"`
 	ServerSeconds      float64  `json:"server_seconds,omitempty"`
+	// QuietSeconds and QuietPromptTokens are, for a drained step, the quiet
+	// spell before it: how long the instance's prompt counter was watched
+	// while the measurement sent nothing, and what it grew by.
+	QuietSeconds      float64  `json:"quiet_s,omitempty"`
+	QuietPromptTokens *float64 `json:"quiet_prompt_tokens,omitempty"`
 	// Error is set when the step could not run at all.
 	Error string `json:"error,omitempty"`
 }
@@ -188,14 +202,30 @@ func (s Step) CachedShare() *float64 {
 	return &share
 }
 
-// ForeignShare is the part of the prompt tokens the instance counted that the
-// measurement did not send: other traffic, or nil when the instance does not
-// publish its counter.
-func (s Step) ForeignShare() *float64 {
+// ForeignShare is the part of the prompt tokens the instance counted in a
+// step that something other than the measurement sent, or nil when the
+// instance does not publish its counter. It is the larger of two estimates:
+//
+//   - During the step, what the instance counted beyond what the measurement
+//     sent. The prompts of the measurement's own failed requests are counted
+//     there too, and AIPerf does not report them, so the longest prompt is
+//     taken off for each failed request: a step near its limit, where
+//     requests start to fail, is not taken for one that other traffic
+//     reached.
+//   - Before a drained step, what the instance counted in the quiet spell
+//     while the measurement sent nothing, at the same rate over the step.
+//     This sees steady traffic however many requests failed.
+func (s Step) ForeignShare(set Settings) *float64 {
 	if s.ServerPromptTokens == nil || *s.ServerPromptTokens <= 0 {
 		return nil
 	}
-	share := math.Min(math.Max(1 - float64(s.InputTokens) / *s.ServerPromptTokens, 0), 1)
+	counted := *s.ServerPromptTokens
+	own := float64(s.InputTokens) + float64(s.Errors)*float64(set.MaxPromptTokens)
+	share := (counted - own) / counted
+	if s.QuietPromptTokens != nil && s.QuietSeconds > 0 && s.ServerSeconds > 0 {
+		share = math.Max(share, *s.QuietPromptTokens/s.QuietSeconds*s.ServerSeconds/counted)
+	}
+	share = math.Min(math.Max(share, 0), 1)
 	return &share
 }
 
@@ -205,19 +235,21 @@ const maxErrorShare = 0.01
 
 // Check says whether a step meets the settings, and if not, why. A drained
 // step with more than MaxForeignShare of other traffic does not count: what
-// it measured was not the instance alone.
+// it measured was not the instance alone. Failed requests come first: they
+// are the measurement's own, whatever else the counters show.
 func (s Step) Check(set Settings) (bool, string) {
 	total := s.Requests + s.Errors
+	foreign := s.ForeignShare(set)
 	switch {
 	case s.Error != "":
 		return false, s.Error
 	case s.Requests == 0:
 		return false, "no request was answered"
-	case set.Mode == ModeDrained && s.ForeignShare() != nil && *s.ForeignShare() > MaxForeignShare:
-		return false, fmt.Sprintf("contaminated: %.0f%% of the prompt tokens the instance counted were not sent by the measurement; something still sends to it, such as a client of the site's own route",
-			*s.ForeignShare()*100)
 	case float64(s.Errors) > set.errorShare()*float64(total):
 		return false, fmt.Sprintf("%d of %d requests failed", s.Errors, total)
+	case set.Mode == ModeDrained && foreign != nil && *foreign > MaxForeignShare:
+		return false, fmt.Sprintf("contaminated: %.0f%% of the prompt tokens the instance counted were not the measurement's; something still sends to it, such as a client of the site's own route",
+			*foreign*100)
 	case s.TTFTP95 > set.TTFTMillis:
 		return false, fmt.Sprintf("time to first token p95 %.0f ms is over %.0f ms", s.TTFTP95, set.TTFTMillis)
 	case s.ITLP95 > set.ITLMillis:
@@ -271,7 +303,7 @@ func Analyze(set Settings, steps []Step) Result {
 		r.Steps = append(r.Steps, StepView{Concurrency: s.Concurrency, Met: ok, Reason: reason,
 			FewSamples:     s.Error == "" && s.Requests < set.MinRequests,
 			InputPerSecond: s.InputPerSecond(), OutputPerSecond: s.OutputPerSecond(), CachedShare: s.CachedShare(),
-			ForeignShare: s.ForeignShare()})
+			ForeignShare: s.ForeignShare(set)})
 		if !ok && (lowestMiss == 0 || s.Concurrency < lowestMiss) {
 			lowestMiss, why = s.Concurrency, reason
 		}

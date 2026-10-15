@@ -99,25 +99,35 @@ func (s *Server) capacityPlans(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) campaign(ctx context.Context, active int) (capacityCampaign, error) {
 	c := capacityCampaign{Queue: []llmi.QueueItem{}}
-	deployments, err := s.st.ListDeployments(ctx)
-	if err != nil {
-		return c, err
-	}
-	latest, err := s.st.LatestCapacityRuns(ctx)
-	if err != nil {
-		return c, err
-	}
-	running, err := s.st.RunningCapacityRuns(ctx)
-	if err != nil {
-		return c, err
-	}
 	now := time.Now()
-	c.Queue = llmi.Queue(deployments, latest, running, active, now)
+	queue, err := s.bench.Queue(ctx, now)
+	if err != nil {
+		return c, err
+	}
+	c.Queue = queue
 	if win := s.bench.Window(); win != nil {
 		next := win.Next(now)
 		c.Window, c.Open, c.Next = win.String(), win.Open(now), &next
 	}
 	return c, nil
+}
+
+// readyInstances is what a deployment's ready instances count for in what
+// its model can be given: nothing while an operator drains its site, all of
+// them while a measurement does, since that drain lasts the run only.
+func readyInstances(d store.Deployment, running []store.CapacityRun) float64 {
+	if d.Instances == nil {
+		return 0
+	}
+	if !d.Drained {
+		return *d.Instances
+	}
+	for _, r := range running {
+		if r.DrainedSite && r.ModelID == d.ModelID && r.ClusterID == d.ClusterID {
+			return *d.Instances
+		}
+	}
+	return 0
 }
 
 // plans works out every model's plan from its LLMInferenceServices, the
@@ -202,10 +212,8 @@ func (s *Server) plans(ctx context.Context) ([]capacityModel, []capacityGPU, err
 			d := res.Deployment
 			shape := capacity.Shape{Topology: d.Topology, GPU: d.GPU, GPUsPerInstance: d.GPUsPerInstance, Revision: d.Revision}
 			cm.LLMIs = append(cm.LLMIs, capacityLLMI{Deployment: d, Shape: shape, MaxModelLen: maxLen[d.ClusterID], Run: res.Run, Stale: res.Stale, Why: res.Why})
-			row := capacity.ShapeInput{Shape: shape, Sites: []string{d.ClusterName}, Measured: res.PerInstance}
-			if d.Instances != nil && !d.Drained {
-				row.Instances = *d.Instances
-			}
+			row := capacity.ShapeInput{Shape: shape, Sites: []string{d.ClusterName}, Measured: res.PerInstance,
+				Instances: readyInstances(d, running)}
 			if p := gpus[d.GPU]; p != nil && p.USDPerHour != nil {
 				c := capacity.CreditsPerHour(*p.USDPerHour)
 				row.GPUPrice = &c
@@ -524,6 +532,9 @@ func (s *Server) startCapacityRun(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, benchmark.ErrNoOtherSite):
 		writeError(w, http.StatusConflict, "No other site serves "+model.Name+", so its site cannot be drained. Measure it live.")
+		return
+	case errors.Is(err, benchmark.ErrUnknownSpec):
+		writeError(w, http.StatusConflict, "What "+b.Namespace+"/"+b.Deployment+" runs is not known yet: none of its pods is ready, or they run different images, as during a rollout. Measure it once its pods agree.")
 		return
 	case errors.Is(err, store.ErrNotFound):
 		fail(w, err)

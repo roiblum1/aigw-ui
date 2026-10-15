@@ -38,6 +38,9 @@ var (
 	// ErrNoOtherSite is returned for a drained measurement of a model that
 	// no other site serves: draining it would leave the model unserved.
 	ErrNoOtherSite = errors.New("no other site serves the model, so its site cannot be drained; measure it live")
+	// ErrUnknownSpec is returned for an LLMI whose spec hash is not known
+	// yet: a result would count for nothing.
+	ErrUnknownSpec = errors.New("what the LLMInferenceService runs is not known yet: none of its pods is ready, or they run different images, as during a rollout")
 )
 
 // Store is what the service reads and writes in Postgres.
@@ -49,12 +52,15 @@ type Store interface {
 	GetCapacityRun(ctx context.Context, id string) (store.CapacityRun, error)
 	RunningCapacityRuns(ctx context.Context) ([]store.CapacityRun, error)
 	UpdateCapacityRun(ctx context.Context, id string, dataset *capacity.Dataset, steps []capacity.Step) error
+	// CreateCapacityRun drains the run's site and FinishCapacityRun
+	// restores it, each in the transaction that records the run.
 	FinishCapacityRun(ctx context.Context, id, status, detail string) error
 	SetRunPhase(ctx context.Context, id, phase string) error
-	SetDrained(ctx context.Context, modelID, clusterID string, drained bool) (string, string, error)
 	SiteWeight(ctx context.Context, modelID, clusterID string) (*float64, error)
 	ListDeployments(ctx context.Context) ([]store.Deployment, error)
 	LatestCapacityRuns(ctx context.Context) ([]store.CapacityRun, error)
+	ListModels(ctx context.Context) ([]store.Model, error)
+	HourlyUse(ctx context.Context, from time.Time) ([]store.HourUse, error)
 }
 
 // Cluster is what the service does on one cluster.
@@ -137,6 +143,9 @@ func (s *Service) Start(ctx context.Context, req Request) (store.CapacityRun, er
 	if err != nil {
 		return store.CapacityRun{}, err
 	}
+	if d.SpecHash == "" {
+		return store.CapacityRun{}, ErrUnknownSpec
+	}
 	cl, err := s.client(ctx, req.ClusterID)
 	if err != nil {
 		return store.CapacityRun{}, err
@@ -161,22 +170,13 @@ func (s *Service) Start(ctx context.Context, req Request) (store.CapacityRun, er
 	if req.Mode == capacity.ModeDrained {
 		run.Phase, run.DrainedSite = store.PhaseDraining, !d.Drained
 	}
-	// The drain comes first: a model that no other site serves is refused
-	// before anything is recorded.
-	if run.DrainedSite {
-		if _, _, err := s.st.SetDrained(ctx, req.ModelID, req.ClusterID, true); errors.Is(err, store.ErrLastSite) {
-			return store.CapacityRun{}, ErrNoOtherSite
-		} else if err != nil {
-			return store.CapacityRun{}, err
-		}
-	}
-	if err := s.st.CreateCapacityRun(ctx, run); err != nil {
-		if run.DrainedSite {
-			s.st.SetDrained(ctx, req.ModelID, req.ClusterID, false)
-		}
-		if errors.Is(err, store.ErrConflict) {
-			return store.CapacityRun{}, ErrBusy
-		}
+	// The run and its drain are recorded together: a model that no other
+	// site serves is refused, and nothing is drained or recorded.
+	if err := s.st.CreateCapacityRun(ctx, run); errors.Is(err, store.ErrLastSite) {
+		return store.CapacityRun{}, ErrNoOtherSite
+	} else if errors.Is(err, store.ErrConflict) {
+		return store.CapacityRun{}, ErrBusy
+	} else if err != nil {
 		return store.CapacityRun{}, err
 	}
 	if run.Phase == store.PhaseDraining {
@@ -437,44 +437,93 @@ func (s *Service) drained(ctx context.Context, run store.CapacityRun, now time.T
 	return s.st.SetRunPhase(ctx, run.ID, store.PhaseMeasuring)
 }
 
-// finish ends a run and restores a drain it made: the entry route's weight
-// then comes back with the usual steps.
+// finish ends a run. The store restores a drain the run made in the same
+// transaction, so a hub that stops here never leaves the site drained; the
+// entry route's weight then comes back with the usual steps.
 func (s *Service) finish(ctx context.Context, run store.CapacityRun, status, detail string) error {
-	err := s.st.FinishCapacityRun(ctx, run.ID, status, detail)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil // ended meanwhile, by an operator
-	}
-	if err != nil {
+	if err := s.st.FinishCapacityRun(ctx, run.ID, status, detail); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return err
 	}
-	if run.DrainedSite {
-		if _, _, err := s.st.SetDrained(ctx, run.ModelID, run.ClusterID, false); err != nil {
-			return fmt.Errorf("restore the site after the measurement: %w", err)
-		}
+	return nil // ErrNotFound: ended meanwhile, by an operator
+}
+
+// loadDays is how far back the campaign looks for a model's busiest hour
+// in the window.
+const loadDays = 30
+
+// Queue is what the campaign has to measure and what each item waits for.
+func (s *Service) Queue(ctx context.Context, now time.Time) ([]llmi.QueueItem, error) {
+	profile, err := s.st.ActiveProfile(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	deployments, err := s.st.ListDeployments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	latest, err := s.st.LatestCapacityRuns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	running, err := s.st.RunningCapacityRuns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	load, err := s.load(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	return llmi.Queue(deployments, latest, running, profile.Version, now, load), nil
+}
+
+// load is each model's busiest hour in the window over the last loadDays,
+// in its unit, with its prices. Without a window it is the busiest hour of
+// all.
+func (s *Service) load(ctx context.Context, now time.Time) (map[string]llmi.Load, error) {
+	models, err := s.st.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	hours, err := s.st.HourlyUse(ctx, now.AddDate(0, 0, -loadDays))
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]llmi.Load, len(models))
+	for _, m := range models {
+		l := llmi.Load{}
+		if m.Prices != nil {
+			l.Prices = &capacity.Prices{Input: m.Prices.Input, Cached: m.Prices.Cached, Output: m.Prices.Output}
+		}
+		out[m.ID] = l
+	}
+	for _, h := range hours {
+		l, ok := out[h.ModelID]
+		if !ok || h.Unit != unitOf(l) || (s.opt.Window != nil && !s.opt.Window.Overlaps(h.Hour, h.Hour.Add(time.Hour))) {
+			continue
+		}
+		l.BusiestHour = max(l.BusiestHour, float64(h.Used))
+		out[h.ModelID] = l
+	}
+	return out, nil
+}
+
+// unitOf is the unit a model's use is recorded in now.
+func unitOf(l llmi.Load) string {
+	if l.Prices != nil {
+		return store.UnitCredits
+	}
+	return store.UnitTokens
 }
 
 // campaign starts a drained measurement of whatever is next in the queue,
 // one per site and one per model at a time.
 func (s *Service) campaign(ctx context.Context, now time.Time) {
-	profile, err := s.st.ActiveProfile(ctx)
+	queue, err := s.Queue(ctx, now)
 	if err != nil {
+		slog.Warn("capacity campaign: could not read the queue", "err", err)
 		return
 	}
-	deployments, err := s.st.ListDeployments(ctx)
-	if err != nil {
-		return
-	}
-	latest, err := s.st.LatestCapacityRuns(ctx)
-	if err != nil {
-		return
-	}
-	running, err := s.st.RunningCapacityRuns(ctx)
-	if err != nil {
-		return
-	}
-	for _, item := range llmi.Queue(deployments, latest, running, profile.Version, now) {
+	for _, item := range queue {
 		if item.State != llmi.Next {
 			continue
 		}
