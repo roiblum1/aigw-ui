@@ -82,6 +82,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("PUT /api/v1/gpu-prices/{gpu}", s.setGPUPrice)
 	api.HandleFunc("DELETE /api/v1/gpu-prices/{gpu}", s.deleteGPUPrice)
 	api.HandleFunc("GET /api/v1/clusters/{id}/deployments/{namespace}/{name}/pods", s.deploymentPods)
+	api.HandleFunc("GET /api/v1/benchmark-profiles", s.profiles)
+	api.HandleFunc("PUT /api/v1/benchmark-profile", s.setProfile)
 	api.HandleFunc("GET /api/v1/models/{id}/capacity-runs", s.listCapacityRuns)
 	api.HandleFunc("POST /api/v1/models/{id}/capacity-runs", s.startCapacityRun)
 	api.HandleFunc("GET /api/v1/capacity-runs/{id}", s.getCapacityRun)

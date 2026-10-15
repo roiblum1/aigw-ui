@@ -50,3 +50,26 @@ func TestCents(t *testing.T) {
 		t.Fatalf("tokens: %d", got)
 	}
 }
+
+// A live measurement starts only once the model's name is typed.
+func TestCapacityRunBody(t *testing.T) {
+	b := capacityRunBody{ClusterID: "c", Namespace: "llm", Deployment: "glm", Pod: "glm-0", Mode: capacity.ModeLive}
+	if err := b.check("glm-5.3"); err == nil || !strings.Contains(err.Error(), "confirm it with the model's name") {
+		t.Fatalf("unconfirmed: %v", err)
+	}
+	b.Confirm = "GLM-5.3"
+	if b.check("glm-5.3") == nil {
+		t.Fatal("a name in another case confirmed it")
+	}
+	b.Confirm = "glm-5.3"
+	if err := b.check("glm-5.3"); err != nil {
+		t.Fatal(err)
+	}
+	// Drained needs no confirmation; a mode is needed.
+	if err := (capacityRunBody{ClusterID: "c", Namespace: "llm", Deployment: "glm", Mode: capacity.ModeDrained}).check("glm-5.3"); err != nil {
+		t.Fatal(err)
+	}
+	if (capacityRunBody{ClusterID: "c", Namespace: "llm", Deployment: "glm"}).check("glm-5.3") == nil {
+		t.Fatal("no mode accepted")
+	}
+}

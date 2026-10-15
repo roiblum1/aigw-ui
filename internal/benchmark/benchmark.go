@@ -2,6 +2,12 @@
 // them. A measurement is a Job on the cluster, so it goes on while the
 // server restarts; the server reads the Job's log every little while and
 // stores the steps it has printed.
+//
+// Every LLMInferenceService is measured with the active benchmark profile,
+// drained (its site's entry weight taken to 0 first and restored after) or
+// live (serving its users, after an operator confirmed it). Inside the
+// campaign window the service measures what is not measured or stale by
+// itself, drained only.
 package benchmark
 
 import (
@@ -10,12 +16,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"strconv"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"aigw-ui/internal/capacity"
 	"aigw-ui/internal/kube"
+	"aigw-ui/internal/llmi"
 	"aigw-ui/internal/store"
 )
 
@@ -26,16 +35,26 @@ var (
 	ErrNotServed = errors.New("the deployment does not serve the model")
 	// ErrBusy is returned while a measurement of the model runs.
 	ErrBusy = errors.New("a measurement of the model is running")
+	// ErrNoOtherSite is returned for a drained measurement of a model that
+	// no other site serves: draining it would leave the model unserved.
+	ErrNoOtherSite = errors.New("no other site serves the model, so its site cannot be drained; measure it live")
 )
 
 // Store is what the service reads and writes in Postgres.
 type Store interface {
 	GetDeployment(ctx context.Context, modelID, clusterID, namespace, name string) (store.Deployment, error)
+	GetCluster(ctx context.Context, id string) (store.Cluster, error)
+	ActiveProfile(ctx context.Context) (capacity.Profile, error)
 	CreateCapacityRun(ctx context.Context, r store.NewRun) error
 	GetCapacityRun(ctx context.Context, id string) (store.CapacityRun, error)
 	RunningCapacityRuns(ctx context.Context) ([]store.CapacityRun, error)
 	UpdateCapacityRun(ctx context.Context, id string, dataset *capacity.Dataset, steps []capacity.Step) error
 	FinishCapacityRun(ctx context.Context, id, status, detail string) error
+	SetRunPhase(ctx context.Context, id, phase string) error
+	SetDrained(ctx context.Context, modelID, clusterID string, drained bool) (string, string, error)
+	SiteWeight(ctx context.Context, modelID, clusterID string) (*float64, error)
+	ListDeployments(ctx context.Context) ([]store.Deployment, error)
+	LatestCapacityRuns(ctx context.Context) ([]store.CapacityRun, error)
 }
 
 // Cluster is what the service does on one cluster.
@@ -49,74 +68,204 @@ type Cluster interface {
 	DeleteJob(ctx context.Context, namespace, name string) error
 }
 
+// Peer is what a prefill/decode measurement needs to reach the gateway's
+// peer listener: the fleet's server name, and the secret and ConfigMap with
+// each site's client certificate and CA (the hub's FLEET_* settings).
+type Peer struct {
+	SNI          string
+	ClientSecret string
+	CAConfigMap  string
+}
+
+// Options are the service's settings.
+type Options struct {
+	// Image is the AIPerf image the Jobs run; empty turns measurements off.
+	Image string
+	// Every is how often a running measurement is read.
+	Every time.Duration
+	Peer  Peer
+	// Window is when the service measures by itself; nil never.
+	Window *capacity.Window
+}
+
 type Service struct {
 	st     Store
 	client func(ctx context.Context, clusterID string) (Cluster, error)
-	image  string
-	every  time.Duration
+	opt    Options
+	now    func() time.Time
 }
 
-// New returns the service. image is the AIPerf image the Jobs run; empty
-// turns measurements off.
-func New(st Store, client func(ctx context.Context, clusterID string) (Cluster, error), image string, every time.Duration) *Service {
-	return &Service{st: st, client: client, image: image, every: every}
+// New returns the service.
+func New(st Store, client func(ctx context.Context, clusterID string) (Cluster, error), opt Options) *Service {
+	return &Service{st: st, client: client, opt: opt, now: time.Now}
 }
 
 // Image is the AIPerf image the Jobs run, or "" when there is none.
-func (s *Service) Image() string { return s.image }
+func (s *Service) Image() string { return s.opt.Image }
 
-// Start aims a measurement at one ready pod of one deployment of a model.
-// The pod is named on purpose: it keeps its own traffic, whose users see
-// slower answers while it runs.
-func (s *Service) Start(ctx context.Context, modelID, clusterID, namespace, deployment, pod string, set capacity.Settings) (store.CapacityRun, error) {
-	if s.image == "" {
+// Window is when the service measures by itself, nil when never.
+func (s *Service) Window() *capacity.Window { return s.opt.Window }
+
+// Request is a measurement to start.
+type Request struct {
+	ModelID, ClusterID, Namespace, Deployment string
+	// Pod is the instance measured: one ready pod, the leader of a
+	// multi-node group. A prefill/decode deployment is measured whole,
+	// through its scheduler, and takes no pod.
+	Pod string
+	// Mode is capacity.ModeDrained or capacity.ModeLive. A live measurement
+	// slows its users down; the API asks an operator to confirm it.
+	Mode      string
+	StartedBy string
+}
+
+// Start begins a measurement of one LLMInferenceService with the active
+// profile. A drained one drains the site first and starts its Job once the
+// entry route sends nothing there; a live one starts at once.
+func (s *Service) Start(ctx context.Context, req Request) (store.CapacityRun, error) {
+	if s.opt.Image == "" {
 		return store.CapacityRun{}, ErrNoImage
 	}
-	if err := set.Validate(); err != nil {
+	profile, err := s.st.ActiveProfile(ctx)
+	if err != nil {
 		return store.CapacityRun{}, err
 	}
-	d, err := s.st.GetDeployment(ctx, modelID, clusterID, namespace, deployment)
+	d, err := s.st.GetDeployment(ctx, req.ModelID, req.ClusterID, req.Namespace, req.Deployment)
 	if errors.Is(err, store.ErrNotFound) {
 		return store.CapacityRun{}, ErrNotServed
 	}
 	if err != nil {
 		return store.CapacityRun{}, err
 	}
-	cl, err := s.client(ctx, clusterID)
+	cl, err := s.client(ctx, req.ClusterID)
 	if err != nil {
 		return store.CapacityRun{}, err
 	}
-	inst, err := cl.Instance(ctx, namespace, deployment, pod)
+	target, err := s.target(ctx, cl, d, req.Pod)
 	if err != nil {
 		return store.CapacityRun{}, err
 	}
-	if inst.MaxModelLen > 0 && set.MaxPromptTokens+set.MaxOutputTokens > inst.MaxModelLen {
-		return store.CapacityRun{}, fmt.Errorf("the longest prompt and the longest answer together (%d tokens) exceed the %d the deployment accepts", set.MaxPromptTokens+set.MaxOutputTokens, inst.MaxModelLen)
+	set := profile.Settings(target.maxModelLen, req.Mode)
+	if err := set.Validate(); err != nil {
+		return store.CapacityRun{}, err
 	}
 
 	id, err := newID()
 	if err != nil {
 		return store.CapacityRun{}, err
 	}
-	name := capacity.JobName(id)
-	shape := capacity.Shape{Topology: d.Topology, GPU: d.GPU, GPUsPerInstance: d.GPUsPerInstance, Revision: d.Revision}
-	err = s.st.CreateCapacityRun(ctx, store.NewRun{ID: id, ModelID: modelID, ClusterID: clusterID, Namespace: namespace, Deployment: deployment,
-		Instance: pod, JobName: name, Shape: shape, Settings: set})
-	if errors.Is(err, store.ErrConflict) {
-		return store.CapacityRun{}, ErrBusy
+	run := store.NewRun{ID: id, ModelID: req.ModelID, ClusterID: req.ClusterID, Namespace: req.Namespace, Deployment: req.Deployment,
+		Instance: target.instance, JobName: capacity.JobName(id), Settings: set, SpecHash: d.SpecHash, Profile: profile,
+		Shape:           capacity.Shape{Topology: d.Topology, GPU: d.GPU, GPUsPerInstance: d.GPUsPerInstance, Revision: d.Revision},
+		InstancesDuring: target.instancesDuring, Phase: store.PhaseMeasuring, StartedBy: req.StartedBy}
+	if req.Mode == capacity.ModeDrained {
+		run.Phase, run.DrainedSite = store.PhaseDraining, !d.Drained
 	}
-	if err != nil {
+	// The drain comes first: a model that no other site serves is refused
+	// before anything is recorded.
+	if run.DrainedSite {
+		if _, _, err := s.st.SetDrained(ctx, req.ModelID, req.ClusterID, true); errors.Is(err, store.ErrLastSite) {
+			return store.CapacityRun{}, ErrNoOtherSite
+		} else if err != nil {
+			return store.CapacityRun{}, err
+		}
+	}
+	if err := s.st.CreateCapacityRun(ctx, run); err != nil {
+		if run.DrainedSite {
+			s.st.SetDrained(ctx, req.ModelID, req.ClusterID, false)
+		}
+		if errors.Is(err, store.ErrConflict) {
+			return store.CapacityRun{}, ErrBusy
+		}
 		return store.CapacityRun{}, err
 	}
-	job, err := capacity.Job(capacity.JobSpec{RunID: id, Name: name, Namespace: namespace, Image: s.image, URL: inst.URL, Model: inst.Model, Settings: set})
+	if run.Phase == store.PhaseDraining {
+		return s.st.GetCapacityRun(ctx, id)
+	}
+	if err := s.createJob(ctx, cl, id, run.Namespace, target, set); err != nil {
+		s.st.FinishCapacityRun(ctx, id, store.RunFailed, "the Job could not be created: "+err.Error())
+		return store.CapacityRun{}, err
+	}
+	return s.st.GetCapacityRun(ctx, id)
+}
+
+// target is what a measurement is aimed at.
+type target struct {
+	// instance is the pod measured, or "" for a prefill/decode deployment.
+	instance    string
+	url, model  string
+	metrics     []string
+	maxModelLen int
+	// instancesDuring is what the result is divided by for one instance.
+	instancesDuring float64
+	// peer and namespace are set for a prefill/decode deployment: the Job
+	// runs in the gateway's namespace and goes through its peer listener.
+	peer      *capacity.Peer
+	namespace string
+}
+
+func (s *Service) target(ctx context.Context, cl Cluster, d store.Deployment, pod string) (target, error) {
+	if d.Topology != kube.TopologyPrefillDecode {
+		inst, err := cl.Instance(ctx, d.Namespace, d.Name, pod)
+		if err != nil {
+			return target{}, err
+		}
+		return target{instance: pod, url: inst.URL, model: inst.Model, metrics: []string{inst.URL}, maxModelLen: inst.MaxModelLen,
+			instancesDuring: 1, namespace: d.Namespace}, nil
+	}
+	cluster, err := s.st.GetCluster(ctx, d.ClusterID)
+	if err != nil {
+		return target{}, err
+	}
+	if cluster.PeerHost == "" || s.opt.Peer.SNI == "" {
+		return target{}, errors.New("a prefill/decode deployment is measured through the gateway's peer listener: the cluster needs a peer host, and the hub FLEET_DOMAIN or FLEET_PEER_SNI")
+	}
+	// Every decode pod: the scheduler spreads the load over them.
+	pods, err := cl.ReadyPods(ctx, d.Namespace, d.Name)
+	if err != nil {
+		return target{}, err
+	}
+	if len(pods) == 0 {
+		return target{}, fmt.Errorf("%s/%s has no ready decode pod", d.Namespace, d.Name)
+	}
+	t := target{instancesDuring: float64(len(pods)), namespace: cluster.Namespace,
+		peer: &capacity.Peer{Address: net.JoinHostPort(cluster.PeerHost, strconv.Itoa(cluster.PeerPort)), SNI: s.opt.Peer.SNI,
+			ClientSecret: s.opt.Peer.ClientSecret, CAConfigMap: s.opt.Peer.CAConfigMap}}
+	for _, p := range pods {
+		inst, err := cl.Instance(ctx, d.Namespace, d.Name, p)
+		if err != nil {
+			return target{}, err
+		}
+		t.metrics = append(t.metrics, inst.URL)
+		t.model, t.maxModelLen = inst.Model, inst.MaxModelLen
+	}
+	return t, nil
+}
+
+func (s *Service) createJob(ctx context.Context, cl Cluster, runID, namespace string, t target, set capacity.Settings) error {
+	if t.namespace != "" {
+		namespace = t.namespace
+	}
+	job, err := capacity.Job(capacity.JobSpec{RunID: runID, Name: capacity.JobName(runID), Namespace: namespace, Image: s.opt.Image,
+		URL: t.url, Model: t.model, Peer: t.peer, MetricsURLs: t.metrics, Settings: set})
 	if err == nil {
 		err = cl.CreateJob(ctx, job)
 	}
 	if err != nil {
-		s.st.FinishCapacityRun(ctx, id, store.RunFailed, "the Job could not be created: "+err.Error())
-		return store.CapacityRun{}, fmt.Errorf("create the Job: %w", err)
+		return fmt.Errorf("create the Job: %w", err)
 	}
-	return s.st.GetCapacityRun(ctx, id)
+	return nil
+}
+
+// jobNamespace is where a run's Job is: the gateway's namespace for a
+// prefill/decode deployment, the deployment's otherwise.
+func (s *Service) jobNamespace(ctx context.Context, run store.CapacityRun) string {
+	if run.Shape.Topology == kube.TopologyPrefillDecode {
+		if c, err := s.st.GetCluster(ctx, run.ClusterID); err == nil {
+			return c.Namespace
+		}
+	}
+	return run.Namespace
 }
 
 // Pods returns the ready pods of a deployment that a measurement can be
@@ -129,32 +278,35 @@ func (s *Service) Pods(ctx context.Context, clusterID, namespace, deployment str
 	return cl.ReadyPods(ctx, namespace, deployment)
 }
 
-// Cancel stops a running measurement and deletes its Job. The steps it has
-// finished stay.
+// Cancel stops a running measurement, deletes its Job and restores a drain
+// it made. The steps it has finished stay.
 func (s *Service) Cancel(ctx context.Context, id string) (store.CapacityRun, error) {
 	run, err := s.st.GetCapacityRun(ctx, id)
 	if err != nil || run.Status != store.RunRunning {
 		return run, err
 	}
-	cl, err := s.client(ctx, run.ClusterID)
-	if err != nil {
-		return run, err
+	if run.Phase != store.PhaseDraining {
+		cl, err := s.client(ctx, run.ClusterID)
+		if err != nil {
+			return run, err
+		}
+		if err := cl.DeleteJob(ctx, s.jobNamespace(ctx, run), run.JobName); err != nil {
+			return run, fmt.Errorf("delete the Job: %w", err)
+		}
 	}
-	if err := cl.DeleteJob(ctx, run.Namespace, run.JobName); err != nil {
-		return run, fmt.Errorf("delete the Job: %w", err)
-	}
-	if err := s.st.FinishCapacityRun(ctx, id, store.RunCancelled, "stopped by an operator"); err != nil && !errors.Is(err, store.ErrNotFound) {
+	if err := s.finish(ctx, run, store.RunCancelled, "stopped by an operator"); err != nil {
 		return run, err
 	}
 	return s.st.GetCapacityRun(ctx, id)
 }
 
-// Run follows the running measurements until ctx is cancelled.
+// Run follows the running measurements, and inside the window starts the
+// ones the campaign needs, until ctx is cancelled.
 func (s *Service) Run(ctx context.Context) {
-	ticker := time.NewTicker(s.every)
+	ticker := time.NewTicker(s.opt.Every)
 	defer ticker.Stop()
 	for {
-		s.Tick(ctx, time.Now())
+		s.Tick(ctx, s.now())
 		select {
 		case <-ctx.Done():
 			return
@@ -163,7 +315,8 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 
-// Tick reads every running measurement once.
+// Tick reads every running measurement once, then starts what the campaign
+// may start.
 func (s *Service) Tick(ctx context.Context, now time.Time) {
 	runs, err := s.st.RunningCapacityRuns(ctx)
 	if err != nil {
@@ -177,6 +330,9 @@ func (s *Service) Tick(ctx context.Context, now time.Time) {
 			slog.Warn("capacity: could not read a measurement; it is read again at the next look", "run", run.ID, "model", run.ModelName, "cluster", run.ClusterName, "err", err)
 		}
 	}
+	if s.opt.Window != nil && s.opt.Window.Open(now) && s.opt.Image != "" {
+		s.campaign(ctx, now)
+	}
 }
 
 // imageGrace is how long a pod may wait for its image before the run is
@@ -187,17 +343,26 @@ const imageGrace = 3 * time.Minute
 // is given up.
 const lost = time.Hour
 
+// drainTimeout is how long a drained measurement waits for the entry route
+// to send nothing to the site: the weight steps down one instance a
+// discovery round.
+const drainTimeout = 30 * time.Minute
+
 func (s *Service) follow(ctx context.Context, run store.CapacityRun, now time.Time) error {
-	deadline := run.CreatedAt.Add(time.Duration(run.Settings.Duration()) * time.Second)
+	if run.Phase == store.PhaseDraining {
+		return s.drained(ctx, run, now)
+	}
+	deadline := run.CreatedAt.Add(time.Duration(run.Settings.Duration())*time.Second + drainTimeout)
 	cl, err := s.client(ctx, run.ClusterID)
 	if err != nil {
 		if now.After(deadline.Add(lost)) {
-			return s.st.FinishCapacityRun(ctx, run.ID, store.RunFailed, "the cluster could not be reached to read the measurement: "+err.Error())
+			return s.finish(ctx, run, store.RunFailed, "the cluster could not be reached to read the measurement: "+err.Error())
 		}
 		return err
 	}
+	namespace := s.jobNamespace(ctx, run)
 	selector := capacity.RunLabel + "=" + run.ID
-	text, started, err := cl.PodLog(ctx, run.Namespace, selector, "aiperf")
+	text, started, err := cl.PodLog(ctx, namespace, selector, "aiperf")
 	if err != nil {
 		return err
 	}
@@ -211,7 +376,7 @@ func (s *Service) follow(ctx context.Context, run store.CapacityRun, now time.Ti
 		}
 	}
 
-	state, err := cl.GetJobState(ctx, run.Namespace, run.JobName)
+	state, err := cl.GetJobState(ctx, namespace, run.JobName)
 	if err != nil {
 		return err
 	}
@@ -222,31 +387,116 @@ func (s *Service) follow(ctx context.Context, run store.CapacityRun, now time.Ti
 		if result.Best == nil {
 			detail = "no step met the targets: " + result.Limit
 		}
-		return s.finish(ctx, run.ID, store.RunSucceeded, detail)
+		return s.finish(ctx, run, store.RunSucceeded, detail)
 	case state.Failed:
 		detail := log.Error
 		if detail == "" {
 			detail = state.Reason
 		}
-		return s.finish(ctx, run.ID, store.RunFailed, detail)
+		return s.finish(ctx, run, store.RunFailed, detail)
 	case state.Gone:
-		return s.finish(ctx, run.ID, store.RunFailed, "the Job was deleted on the cluster before it finished")
+		return s.finish(ctx, run, store.RunFailed, "the Job was deleted on the cluster before it finished")
 	}
-	if problem := cl.PodProblem(ctx, run.Namespace, selector); problem != "" && now.Sub(run.CreatedAt) > imageGrace {
-		if err := cl.DeleteJob(ctx, run.Namespace, run.JobName); err != nil {
+	if problem := cl.PodProblem(ctx, namespace, selector); problem != "" && now.Sub(run.CreatedAt) > imageGrace {
+		if err := cl.DeleteJob(ctx, namespace, run.JobName); err != nil {
 			return err
 		}
-		return s.finish(ctx, run.ID, store.RunFailed, "the measurement could not start: "+problem)
+		return s.finish(ctx, run, store.RunFailed, "the measurement could not start: "+problem)
 	}
 	return nil
 }
 
-func (s *Service) finish(ctx context.Context, id, status, detail string) error {
-	err := s.st.FinishCapacityRun(ctx, id, status, detail)
+// drained starts a drained measurement's Job once the entry route sends
+// nothing to its site, and gives up after drainTimeout.
+func (s *Service) drained(ctx context.Context, run store.CapacityRun, now time.Time) error {
+	weight, err := s.st.SiteWeight(ctx, run.ModelID, run.ClusterID)
+	if err != nil {
+		return err
+	}
+	if weight == nil || *weight > 0 {
+		if now.Sub(run.CreatedAt) > drainTimeout {
+			return s.finish(ctx, run, store.RunFailed, fmt.Sprintf("the entry route still sent to the site after %d minutes of draining", int(drainTimeout.Minutes())))
+		}
+		return nil
+	}
+	cl, err := s.client(ctx, run.ClusterID)
+	if err != nil {
+		return err
+	}
+	d, err := s.st.GetDeployment(ctx, run.ModelID, run.ClusterID, run.Namespace, run.Deployment)
+	if err != nil {
+		return s.finish(ctx, run, store.RunFailed, "the deployment is gone: "+err.Error())
+	}
+	t, err := s.target(ctx, cl, d, run.Instance)
+	if err == nil {
+		err = s.createJob(ctx, cl, run.ID, run.Namespace, t, run.Settings)
+	}
+	if err != nil {
+		return s.finish(ctx, run, store.RunFailed, "the measurement could not start once the site was drained: "+err.Error())
+	}
+	return s.st.SetRunPhase(ctx, run.ID, store.PhaseMeasuring)
+}
+
+// finish ends a run and restores a drain it made: the entry route's weight
+// then comes back with the usual steps.
+func (s *Service) finish(ctx context.Context, run store.CapacityRun, status, detail string) error {
+	err := s.st.FinishCapacityRun(ctx, run.ID, status, detail)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil // ended meanwhile, by an operator
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if run.DrainedSite {
+		if _, _, err := s.st.SetDrained(ctx, run.ModelID, run.ClusterID, false); err != nil {
+			return fmt.Errorf("restore the site after the measurement: %w", err)
+		}
+	}
+	return nil
+}
+
+// campaign starts a drained measurement of whatever is next in the queue,
+// one per site and one per model at a time.
+func (s *Service) campaign(ctx context.Context, now time.Time) {
+	profile, err := s.st.ActiveProfile(ctx)
+	if err != nil {
+		return
+	}
+	deployments, err := s.st.ListDeployments(ctx)
+	if err != nil {
+		return
+	}
+	latest, err := s.st.LatestCapacityRuns(ctx)
+	if err != nil {
+		return
+	}
+	running, err := s.st.RunningCapacityRuns(ctx)
+	if err != nil {
+		return
+	}
+	for _, item := range llmi.Queue(deployments, latest, running, profile.Version, now) {
+		if item.State != llmi.Next {
+			continue
+		}
+		pods, err := s.Pods(ctx, item.ClusterID, item.Namespace, item.Name)
+		if err != nil || len(pods) == 0 {
+			continue
+		}
+		pod := pods[0]
+		if item.Topology == kube.TopologyPrefillDecode {
+			pod = ""
+		}
+		run, err := s.Start(ctx, Request{ModelID: item.ModelID, ClusterID: item.ClusterID, Namespace: item.Namespace, Deployment: item.Name,
+			Pod: pod, Mode: capacity.ModeDrained, StartedBy: store.ByCampaign})
+		if err != nil {
+			slog.Info("capacity campaign: could not start", "llmi", item.ClusterName+"/"+item.Namespace+"/"+item.Name, "err", err)
+			continue
+		}
+		slog.Info("capacity campaign: measuring", "run", run.ID, "llmi", item.ClusterName+"/"+item.Namespace+"/"+item.Name, "reason", item.Reason)
+		// One at a time per site and per model: read the queue again at the
+		// next tick, with this run in it.
+		return
+	}
 }
 
 // newID returns a random UUID.

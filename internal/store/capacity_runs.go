@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"aigw-ui/internal/capacity"
@@ -13,6 +14,20 @@ const (
 	RunSucceeded = "succeeded"
 	RunFailed    = "failed"
 	RunCancelled = "cancelled"
+)
+
+// Phases of a running measurement.
+const (
+	// PhaseDraining waits for the entry route to send nothing to the site.
+	PhaseDraining = "draining"
+	// PhaseMeasuring has the Job running.
+	PhaseMeasuring = "measuring"
+)
+
+// Who started a measurement.
+const (
+	ByOperator = "operator"
+	ByCampaign = "campaign"
 )
 
 // CapacityRun is one measurement of what an instance of a model serves.
@@ -39,20 +54,49 @@ type CapacityRun struct {
 	Result     capacity.Result `json:"result"`
 	CreatedAt  time.Time       `json:"created_at"`
 	FinishedAt *time.Time      `json:"finished_at"`
+	// SpecHash is the deployment's spec when it was measured, "" for a
+	// measurement of a shape from before 0.16, which counts for nothing.
+	SpecHash string `json:"spec_hash"`
+	// ProfileID and ProfileVersion are the benchmark profile it ran.
+	ProfileID      *string `json:"profile_id"`
+	ProfileVersion *int    `json:"profile_version"`
+	// Mode is capacity.ModeDrained or ModeLive, "" before 0.16.
+	Mode string `json:"mode"`
+	// InstancesDuring is what the result is divided by for one instance.
+	InstancesDuring float64 `json:"instances_during"`
+	// Phase is where a running measurement is; DrainedSite is set when it
+	// drained the site itself and restores it at the end.
+	Phase       string `json:"phase"`
+	DrainedSite bool   `json:"drained_site"`
+	StartedBy   string `json:"started_by"`
+}
+
+// PerInstance is what one instance of the deployment serves by this run:
+// its best step, divided over the decode replicas of a prefill/decode
+// deployment. Nil when no step met the targets.
+func (r CapacityRun) PerInstance() *capacity.Throughput {
+	if r.Result.Best == nil {
+		return nil
+	}
+	t := r.Settings.Throughput(*r.Result.Best).PerInstance(r.InstancesDuring)
+	return &t
 }
 
 const runSelect = `SELECT r.id, r.model_id, m.name, r.cluster_id, c.name, r.namespace, r.deployment, r.topology, r.gpu, r.gpus_per_instance,
 	r.revision, r.job_name, r.instance, r.settings,
-	r.status, r.detail, r.dataset, r.steps, r.created_at, r.finished_at
+	r.status, r.detail, r.dataset, r.steps, r.created_at, r.finished_at,
+	r.spec_hash, r.profile_id, r.profile_version, r.instances_during, r.phase, r.drained_site, r.started_by
 	FROM capacity_runs r JOIN models m ON m.id = r.model_id JOIN clusters c ON c.id = r.cluster_id`
 
 func scanRun(r scanner) (CapacityRun, error) {
 	var run CapacityRun
 	err := r.Scan(&run.ID, &run.ModelID, &run.ModelName, &run.ClusterID, &run.ClusterName, &run.Namespace, &run.Deployment,
-		&run.Shape.Topology, &run.Shape.GPU, &run.Shape.GPUsPerInstance, &run.Shape.Revision, &run.JobName, &run.Instance, &run.Settings, &run.Status, &run.Detail, &run.Dataset, &run.Steps, &run.CreatedAt, &run.FinishedAt)
+		&run.Shape.Topology, &run.Shape.GPU, &run.Shape.GPUsPerInstance, &run.Shape.Revision, &run.JobName, &run.Instance, &run.Settings, &run.Status, &run.Detail, &run.Dataset, &run.Steps, &run.CreatedAt, &run.FinishedAt,
+		&run.SpecHash, &run.ProfileID, &run.ProfileVersion, &run.InstancesDuring, &run.Phase, &run.DrainedSite, &run.StartedBy)
 	if run.Steps == nil {
 		run.Steps = []capacity.Step{}
 	}
+	run.Mode = run.Settings.Mode
 	run.Result = capacity.Analyze(run.Settings, run.Steps)
 	return run, err
 }
@@ -62,18 +106,42 @@ type NewRun struct {
 	ID, ModelID, ClusterID, Namespace, Deployment, Instance, JobName string
 	Shape                                                            capacity.Shape
 	Settings                                                         capacity.Settings
+	SpecHash                                                         string
+	Profile                                                          capacity.Profile
+	InstancesDuring                                                  float64
+	// Phase is PhaseDraining for a drained run, PhaseMeasuring for a live
+	// one; DrainedSite says the run drains the site itself.
+	Phase       string
+	DrainedSite bool
+	StartedBy   string
 }
 
 // CreateCapacityRun records a run that is about to start. A model with a run
 // that has not ended gives ErrConflict.
 func (s *Store) CreateCapacityRun(ctx context.Context, r NewRun) error {
+	if r.InstancesDuring <= 0 {
+		r.InstancesDuring = 1
+	}
+	if r.StartedBy == "" {
+		r.StartedBy = ByOperator
+	}
+	var profileID *string
+	var version *int
+	if r.Profile.ID != "" {
+		profileID, version = &r.Profile.ID, &r.Profile.Version
+	}
 	_, err := s.db.Exec(ctx,
 		`INSERT INTO capacity_runs (id, model_id, cluster_id, namespace, deployment, instance, topology, gpu, gpus_per_instance, revision,
-		     job_name, settings, status)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'running')`,
+		     job_name, settings, status, spec_hash, profile_id, profile_version, instances_during, phase, drained_site, started_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'running', $13, $14, $15, $16, $17, $18, $19)`,
 		r.ID, r.ModelID, r.ClusterID, r.Namespace, r.Deployment, r.Instance, r.Shape.Topology, r.Shape.GPU, r.Shape.GPUsPerInstance,
-		r.Shape.Revision, r.JobName, r.Settings)
+		r.Shape.Revision, r.JobName, r.Settings, r.SpecHash, profileID, version, r.InstancesDuring, r.Phase, r.DrainedSite, r.StartedBy)
 	return mapErr(err)
+}
+
+// SetRunPhase moves a running measurement to its next phase.
+func (s *Store) SetRunPhase(ctx context.Context, id, phase string) error {
+	return affected(s.db.Exec(ctx, `UPDATE capacity_runs SET phase = $2 WHERE id = $1 AND status = 'running'`, id, phase))
 }
 
 // GetCapacityRun returns one run.
@@ -92,17 +160,20 @@ func (s *Store) RunningCapacityRuns(ctx context.Context) ([]CapacityRun, error) 
 	return list(ctx, s, scanRun, runSelect+` WHERE r.status = 'running' ORDER BY r.created_at`)
 }
 
-// LatestCapacityRuns returns, for every model and shape, the newest run
-// that found a load the instance serves at the promised latency.
+// LatestCapacityRuns returns, for every deployment, spec and profile
+// version, the newest run that found a load the instance serves at the
+// promised latency. Runs of shapes from before 0.16 are left out: they
+// count for nothing.
 func (s *Store) LatestCapacityRuns(ctx context.Context) ([]CapacityRun, error) {
-	runs, err := list(ctx, s, scanRun, runSelect+` WHERE r.status = 'succeeded' ORDER BY r.model_id, r.created_at DESC`)
+	runs, err := list(ctx, s, scanRun, runSelect+` WHERE r.status = 'succeeded' AND r.spec_hash <> '' AND r.profile_version IS NOT NULL
+	    ORDER BY r.created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
 	out := []CapacityRun{}
 	seen := map[string]bool{}
 	for _, run := range runs {
-		key := run.ModelID + "|" + run.Shape.Key()
+		key := fmt.Sprintf("%s|%s/%s|%s|%d", run.ClusterID, run.Namespace, run.Deployment, run.SpecHash, *run.ProfileVersion)
 		if run.Result.Best == nil || seen[key] {
 			continue
 		}

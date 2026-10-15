@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"aigw-ui/internal/capacity"
 	"aigw-ui/internal/render"
 )
 
@@ -54,6 +55,9 @@ type Config struct {
 	CapacityImage string
 	// CapacityEvery is how often a running measurement's Job is read.
 	CapacityEvery time.Duration
+	// CapacityWindow is when the hub measures what is not measured or
+	// stale by itself; nil never.
+	CapacityWindow *capacity.Window
 
 	// Fleet is what every site's entry route has in common. PeerSNI is
 	// empty when neither FLEET_PEER_SNI nor FLEET_DOMAIN is set, and no
@@ -126,6 +130,9 @@ func Load() (*Config, error) {
 	c.CapacityEvery, err = time.ParseDuration(envOr("CAPACITY_INTERVAL", "20s"))
 	if err != nil || c.CapacityEvery < 5*time.Second {
 		return nil, errors.New("CAPACITY_INTERVAL must be a duration of at least 5s such as 20s")
+	}
+	if c.CapacityWindow, err = capacity.ParseWindow(os.Getenv("CAPACITY_WINDOW")); err != nil {
+		return nil, fmt.Errorf("CAPACITY_WINDOW: %w", err)
 	}
 	c.Fleet.BestEffortPriority, err = strconv.ParseInt(envOr("BEST_EFFORT_PRIORITY", strconv.Itoa(render.DefaultBestEffortPriority)), 10, 32)
 	if err != nil || c.Fleet.BestEffortPriority >= 0 {

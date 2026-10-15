@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.16.0](v0.16.0.md) | not released yet | Every LLMInferenceService measured on its own with one versioned benchmark profile: spec hash, a sweep that doubles then bisects, drained or live, a check for other traffic, prefill/decode through the peer listener, and a campaign window |
 | [0.15.0](v0.15.0.md) | not released yet | Market prices: a model's default price is its OpenRouter price, from a snapshot built into the server, matched by Hugging Face id, annotation or by hand; nothing changes a price by itself, and the page shows when the market moved |
 | [0.14.2](v0.14.2.md) | not released yet | Prices set by hand are the normal path: the Prices dialog shows the other models' prices beside the ones typed; GPU costs are optional and only check the prices |
 | [0.14.1](v0.14.1.md) | not released yet | Site weights of the entry route from the measurements, once every deployment of a model is measured; the annotation stays the fallback |

@@ -76,6 +76,8 @@ A profile is a row in a new table `benchmark_profiles`: name, version, workload,
 
 Every result stores its profile id and version. Capacity uses only results of the active version.
 
+*As built (0.16.0):* "only results of the active version" and "kept and marked stale … so capacity does not fall to zero all at once" (below) cannot both hold right after the profile changes. A model is counted with one version: the one whose results cover the most of its ready instances, the active one on a tie. After a change the old results keep counting, marked stale, until enough LLMIs are measured with the new version; a model never adds figures of two versions (`internal/llmi`). Across models, each model's own version is used. A profile also carries a highest load (`max_concurrency`, 1,024): the doubling has to stop somewhere for a model that meets the SLO at any load. A deployment that takes shorter requests than the profile's longest prompt gets its sessions scaled down by one factor, as 0.13 did.
+
 ### The sweep: up until it breaks, then bisect
 
 1. Run concurrency 1, 2, 4, 8 … until a step misses the SLO or the error share.
@@ -95,6 +97,8 @@ An LLMI is measured with no user traffic when the platform allows it, and with a
 3. It measures, then restores the weight with the existing gradual ramp.
 4. One drained site per model at a time.
 
+*As built (0.16.0):* the drain is the existing one (`SetDrained`), so a site an operator drained is used as it is and stays drained; a drained measurement of a model that no other site serves is refused before anything is recorded; the Job starts once the entry weight is 0, at most 30 minutes after the start.
+
 **Live (by hand only).** For a model served on one site only, or when the operator chooses it. Before starting, the page shows:
 
 > This LLMI serves users now. The benchmark adds load until it misses the SLO. Users of *model* on *site* will get slower answers or errors for up to *duration*, and their traffic makes the result lower than what the LLMI could serve alone.
@@ -109,6 +113,8 @@ The operator confirms by typing the model's name. The result is marked `live`. I
 ### Prefill/decode
 
 Measured through the LLMI's own scheduler on the gateway's peer listener. The Job runs in the gateway namespace and mounts the existing peer client certificate read-only. Lab check B confirms that requests on the peer listener are not counted or limited by any QuotaPolicy; if they are, the Job uses a benchmark tenant with no limits.
+
+*As built (0.16.0):* lab check B passed (peer requests created no quota counter; the peer route goes to the InferencePool and a QuotaPolicy attaches to an AIServiceBackend only), so no benchmark tenant. AIPerf cannot present a client certificate, so the Job's script runs a small local proxy that passes AIPerf's requests to the peer listener with the mounted certificate and streams the answers back. The contamination check and the idle wait read every decode pod's counters.
 
 ### When an LLMI is measured again
 

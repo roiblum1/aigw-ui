@@ -298,3 +298,11 @@ func (s *Store) RefreshFleetZones(ctx context.Context) ([]string, error) {
 	})
 	return changed, mapErr(err)
 }
+
+// SiteWeight returns the weight the entry route gives a model's site now,
+// nil before it has one.
+func (s *Store) SiteWeight(ctx context.Context, modelID, clusterID string) (*float64, error) {
+	var w *float64
+	err := s.db.QueryRow(ctx, `SELECT capacity_applied FROM model_endpoints WHERE model_id = $1 AND cluster_id = $2`, modelID, clusterID).Scan(&w)
+	return w, mapErr(err)
+}

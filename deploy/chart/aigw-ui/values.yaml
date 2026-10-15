@@ -44,6 +44,11 @@ config:
 # deploy/aiperf/Containerfile; the offline bundle does.
 capacity:
   image: ""
+  # When the hub measures by itself every LLMInferenceService that is not
+  # measured or whose result is stale, drained, one per site and per model at
+  # a time: once a week, such as "Fri 22:00 - Sat 06:00 Asia/Jerusalem", or
+  # every day, such as "01:00 - 05:00 UTC". Empty never.
+  window: ""
 
 # What every site's entry route has in common. Leave domain and peerSNI empty
 # if the hub should not render entry routes.
