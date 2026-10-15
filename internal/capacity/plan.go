@@ -43,6 +43,35 @@ func ThroughputOf(s Step) Throughput {
 	return t
 }
 
+// Throughput returns what a step served as the measurement counts it. A live
+// measurement counts the instance's own counters over the time between their
+// readings, users' traffic included: the latency was measured under that
+// load. Any other counts what the measurement sent.
+func (set Settings) Throughput(s Step) Throughput {
+	if set.Mode != ModeLive || s.ServerPromptTokens == nil || s.ServerOutputTokens == nil || s.ServerSeconds <= 0 {
+		return ThroughputOf(s)
+	}
+	t := Throughput{Concurrency: s.Concurrency, InputPerSecond: *s.ServerPromptTokens / s.ServerSeconds,
+		OutputPerSecond: *s.ServerOutputTokens / s.ServerSeconds, CachedShare: s.CachedShare()}
+	if t.CachedShare != nil {
+		t.CachedPerSecond = t.InputPerSecond * *t.CachedShare
+	}
+	return t
+}
+
+// PerInstance is what one of n instances served when the measurement was
+// spread over them: the decode replicas of a prefill/decode deployment,
+// which has no instance of its own.
+func (t Throughput) PerInstance(n float64) Throughput {
+	if n <= 1 {
+		return t
+	}
+	t.InputPerSecond /= n
+	t.CachedPerSecond /= n
+	t.OutputPerSecond /= n
+	return t
+}
+
 // InputEquivalent is what one instance serves a second in input-equivalent
 // tokens: uncached prompt tokens, cached ones and output tokens weighted by
 // what each costs against an input token. It is what the input price is
@@ -51,6 +80,24 @@ func ThroughputOf(s Step) Throughput {
 func InputEquivalent(t Throughput, cachedRatio, outputRatio float64) float64 {
 	return t.InputPerSecond - t.CachedPerSecond + cachedRatio*t.CachedPerSecond + outputRatio*t.OutputPerSecond
 }
+
+// Value is what one instance serves a second in the model's unit: credits
+// at its prices, uncached prompt, cached prompt and output tokens each at its
+// price per million; or, for a model without prices, tokens, prompt and
+// output together, as a budget in tokens counts them.
+func (t Throughput) Value(p *Prices) float64 {
+	if p == nil {
+		return t.InputPerSecond + t.OutputPerSecond
+	}
+	uncached := t.InputPerSecond - t.CachedPerSecond
+	return (uncached*float64(p.Input) + t.CachedPerSecond*float64(p.Cached) + t.OutputPerSecond*float64(p.Output)) / 1e6
+}
+
+// Saturated is the share of what a model's instances serve at the targets
+// beyond which they are taken as full: its busiest hour above it is marked
+// saturated, and the campaign does not drain a site whose load would bring
+// the others above it.
+const Saturated = 0.85
 
 // Ratios returns what a cached prompt token and an output token cost against
 // an input token: the model's own prices, or a tenth and four without them.
@@ -292,7 +339,7 @@ func MakePlan(in PlanInput) Plan {
 	case p.Instances == 0:
 		p.Notes = append(p.Notes, "No instance of the model is ready on any site that is not drained, so it can be given nothing now.")
 	case p.MeasuredInstances < p.Instances:
-		p.Notes = append(p.Notes, fmtInstances(p.Instances-p.MeasuredInstances)+" in shapes not measured yet "+isAre(p.Instances-p.MeasuredInstances)+" not counted. Measure them to count them.")
+		p.Notes = append(p.Notes, fmtInstances(p.Instances-p.MeasuredInstances)+" of LLMInferenceServices without a result "+isAre(p.Instances-p.MeasuredInstances)+" not counted. Measure them to count them.")
 	}
 	// GPU costs are optional: a model's prices are set by hand and need none.
 	// A note is only for a model whose GPUs are costed in part, where the
@@ -301,9 +348,9 @@ func MakePlan(in PlanInput) Plan {
 	case gpuUnknown:
 		// Nothing to cost: its nodes carry no nvidia.com/gpu.product, or
 		// its pods ask for no GPU.
-		p.Notes = append(p.Notes, "The GPU of a measured shape is not known, so no GPU cost applies to it. The hub reads it from the label nvidia.com/gpu.product of the nodes its pods run on and from the pods' requests for nvidia.com/gpu, and must be allowed to list both; the cluster's discovery message says when it is not.")
+		p.Notes = append(p.Notes, "The GPU of a measured LLMInferenceService is not known, so no GPU cost applies to it. The hub reads it from the label nvidia.com/gpu.product of the nodes its pods run on and from the pods' requests for nvidia.com/gpu, and must be allowed to list both; the cluster's discovery message says when it is not.")
 	case !costKnown && anyCost:
-		p.Notes = append(p.Notes, "A measured shape runs on a GPU without a cost, so what the instances cost and a price that pays for them are not worked out. Give it one under GPU costs, or remove the others: the model's prices do not need them.")
+		p.Notes = append(p.Notes, "A measured LLMInferenceService runs on a GPU without a cost, so what the instances cost and a price that pays for them are not worked out. Give it one under GPU costs, or remove the others: the model's prices do not need them.")
 	}
 	if noCache {
 		p.Notes = append(p.Notes, "An instance did not report the prompt tokens it took from its cache, so its prompt tokens are valued as uncached.")

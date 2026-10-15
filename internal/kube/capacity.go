@@ -137,6 +137,7 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 	}
 
 	gpus := c.gpuShapes(ctx)
+	configs := c.baseConfigs(ctx)
 	byModel := map[string]*ModelCapacity{}
 	for i := range items {
 		svc := &items[i]
@@ -159,6 +160,15 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 		mc.Capacity += instances * w.PerInstance
 		d := gpus.of(svc, instances, known)
 		d.Revision = svc.GetAnnotations()[RevisionAnnotation]
+		// While the pods of a rollout disagree, or the configs could not be
+		// read this time, the hash is left empty: the hub keeps the one it
+		// has.
+		images, imagesOK := gpus.images(svc)
+		if bases, basesOK := configs.of(svc); imagesOK && basesOK {
+			d.SpecHash = SpecHash(svc, bases, images)
+		}
+		d.Quantization, d.LMCache = Serving(svc)
+		d.DecodeReplicas = replicas(svc, "spec", "replicas")
 		d.MarketID = strings.TrimSpace(svc.GetAnnotations()[MarketIDAnnotation])
 		mc.Deployments = append(mc.Deployments, d)
 		mc.Step = max(mc.Step, w.PerInstance)
@@ -297,6 +307,15 @@ type Deployment struct {
 	Revision        string
 	// MarketID is the annotation aigw-ui.io/market-id, "" when absent.
 	MarketID string
+	// SpecHash identifies what it runs, whatever its scale (SpecHash); empty
+	// while that cannot be told, as during a rollout.
+	SpecHash string
+	// Quantization and LMCache say how it serves the model (Serving).
+	Quantization string
+	LMCache      bool
+	// DecodeReplicas is its desired replicas: for a prefill/decode service,
+	// the decode replicas a measurement of it is divided by.
+	DecodeReplicas int64
 	// Instances is its ready instances; Known is false until it reports them.
 	Instances float64
 	Known     bool
@@ -306,6 +325,7 @@ type Deployment struct {
 // once per look at the cluster.
 type gpuShapes struct {
 	pods     []unstructured.Unstructured
+	listed   bool              // the pods were listed
 	products map[string]string // node name -> GPU product
 	denied   []string          // what the hub may not list
 }
@@ -318,7 +338,7 @@ func (c *Client) gpuShapes(ctx context.Context) gpuShapes {
 	var g gpuShapes
 	pods, err := c.dyn.Resource(podsGVR).List(ctx, metav1.ListOptions{LabelSelector: "kserve.io/component=workload"})
 	if err == nil {
-		g.pods = pods.Items
+		g.pods, g.listed = pods.Items, true
 	} else if apierrors.IsForbidden(err) {
 		g.denied = append(g.denied, "pods")
 	}

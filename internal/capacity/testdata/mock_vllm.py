@@ -3,7 +3,8 @@
 import asyncio, json, time
 from aiohttp import web
 
-counters = {"vllm:prompt_tokens_total": 0.0, "vllm:prompt_tokens_cached_total": 0.0, "vllm:generation_tokens_total": 0.0}
+counters = {"vllm:prompt_tokens_total": 0.0, "vllm:prompt_tokens_cached_total": 0.0, "vllm:generation_tokens_total": 0.0,
+            "vllm:num_requests_running": 0.0}
 seen = set()
 requests = {"n": 0}
 
@@ -29,6 +30,7 @@ async def chat(req):
     counters["vllm:generation_tokens_total"] += out
     resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
     await resp.prepare(req)
+    counters["vllm:num_requests_running"] += 1
     rid, created = "chatcmpl-x", int(time.time())
     await asyncio.sleep(0.05)
     for i in range(out):
@@ -41,6 +43,7 @@ async def chat(req):
             "usage": {"prompt_tokens": prompt, "completion_tokens": out, "total_tokens": prompt + out,
                       "prompt_tokens_details": {"cached_tokens": cached}}}
     await resp.write(b"data: " + json.dumps(last).encode() + b"\n\ndata: [DONE]\n\n")
+    counters["vllm:num_requests_running"] -= 1
     return resp
 
 async def metrics(_):

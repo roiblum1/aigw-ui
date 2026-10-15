@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func ptr(f float64) *float64 { return &f }
@@ -32,22 +33,153 @@ func TestDefaults(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	for name, change := range map[string]func(*Settings){
-		"no steps":           func(s *Settings) { s.Concurrency = nil },
-		"steps go down":      func(s *Settings) { s.Concurrency = []int{4, 2} },
-		"a step repeats":     func(s *Settings) { s.Concurrency = []int{2, 2} },
-		"zero in flight":     func(s *Settings) { s.Concurrency = []int{0, 1} },
+		"no mode":            func(s *Settings) { s.Mode = "" },
+		"a list of steps":    func(s *Settings) { s.Concurrency = []int{1, 2} },
+		"zero in flight":     func(s *Settings) { s.FirstConcurrency = 0 },
+		"max below first":    func(s *Settings) { s.FirstConcurrency, s.MaxConcurrency = 8, 4 },
+		"too many in flight": func(s *Settings) { s.MaxConcurrency = 2000 },
+		"many bisections":    func(s *Settings) { s.BisectSteps = 9 },
 		"short step":         func(s *Settings) { s.StepSeconds = 10 },
 		"no ttft target":     func(s *Settings) { s.TTFTMillis = 0 },
 		"few requests":       func(s *Settings) { s.MinRequests = 2 },
 		"tiny prompt":        func(s *Settings) { s.MaxPromptTokens = 10 },
-		"too many steps":     func(s *Settings) { s.Concurrency = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13} },
-		"too many in flight": func(s *Settings) { s.Concurrency = []int{1, 2000} },
+		"errors allowed":     func(s *Settings) { s.MaxErrorShare = 0.9 },
 	} {
 		s := Defaults(0)
 		change(&s)
 		if s.Validate() == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	if err := Defaults(0).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// 1 to 1,024 is eleven doublings, then two bisections, of five minutes
+	// each with the time to finish, to settle and watch the instance, and
+	// to start.
+	if d := Defaults(0); d.Steps() != 13 || d.Duration() != 13*(300+300+60+20+60)+600+900 {
+		t.Fatalf("steps %d, duration %d", d.Steps(), d.Duration())
+	}
+}
+
+func TestProfile(t *testing.T) {
+	p := DefaultProfile()
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*Profile){
+		"no name":             func(p *Profile) { p.Name = "" },
+		"prefix over half":    func(p *Profile) { p.Workload.SharedPrefixTokens = p.Workload.MaxPromptTokens },
+		"negative pause":      func(p *Profile) { p.Workload.PauseMillis = -1 },
+		"no itl target":       func(p *Profile) { p.SLO.ITLMillis = 0 },
+		"max below first":     func(p *Profile) { p.Sweep.MaxConcurrency = 0 },
+		"bisections negative": func(p *Profile) { p.Sweep.BisectSteps = -1 },
+	} {
+		q := DefaultProfile()
+		change(&q)
+		if q.Validate() == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// One profile for every deployment: a short one gets its sessions scaled
+	// down, the rest stays.
+	s := p.Settings(8192, ModeLive)
+	if s.MaxPromptTokens+s.MaxOutputTokens > 8192 || s.Mode != ModeLive || s.SharedPrefixTokens != 32000 || s.StepSeconds != 300 || s.Validate() != nil {
+		t.Fatalf("8k: %+v %v", s, s.Validate())
+	}
+	now := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		version int
+		age     time.Duration
+		want    string
+	}{{1, time.Hour, ""}, {1, 31 * 24 * time.Hour, StaleAge}, {2, time.Hour, StaleProfile}} {
+		if got := Staleness(tc.version, 1, now.Add(-tc.age), now); got != tc.want {
+			t.Errorf("version %d, %v old: %q", tc.version, tc.age, got)
+		}
+	}
+}
+
+// With bisection the steps do not come in order: 1, 2, 4 and 8 met the
+// targets, 16 missed, 12 met them, 14 missed. The best is 12, and a step
+// above the lowest miss that passes is noise.
+func TestAnalyzeBisected(t *testing.T) {
+	set := Defaults(0)
+	steps := []Step{step(1, 900, 20), step(2, 1000, 20), step(4, 1500, 20), step(8, 2500, 20), step(16, 7000, 20),
+		step(12, 4500, 20), step(14, 5500, 20), step(32, 1000, 20)}
+	r := Analyze(set, steps)
+	if r.Best == nil || r.Best.Concurrency != 12 || !strings.Contains(r.Limit, "at 14 in flight") {
+		t.Fatalf("best %+v, limit %q", r.Best, r.Limit)
+	}
+}
+
+// A drained step with other traffic in it does not count; live, the same
+// step does, and shows how much was not the measurement's.
+func TestContamination(t *testing.T) {
+	s := step(4, 900, 20) // sent 4,000,000 prompt tokens
+	s.ServerPromptTokens = ptr(4_300_000)
+	set := Defaults(0)
+	if ok, why := s.Check(set); ok || !strings.Contains(why, "contaminated: 7%") {
+		t.Fatalf("drained: %v %q", ok, why)
+	}
+	s.ServerPromptTokens = ptr(4_100_000) // 2.4%: within the 5%
+	if ok, _ := s.Check(set); !ok {
+		t.Fatal("2.4% failed")
+	}
+
+	// The measurement's own failed requests: their prompts are counted by
+	// the instance and not by AIPerf. Two of 202 (1%) failed, and the
+	// instance counted 300,000 more than was answered: within the longest
+	// prompt (167,000) for each, so not contaminated, whatever the latency.
+	e := step(4, 900, 20)
+	e.Errors, e.Requests = 2, 200
+	e.ServerPromptTokens = ptr(4_300_000)
+	if ok, why := e.Check(set); !ok || *e.ForeignShare(set) != 0 {
+		t.Fatalf("own failures: %v %q %v", ok, why, *e.ForeignShare(set))
+	}
+	// With more failures than the settings allow, they are the reason.
+	e.Errors = 10
+	if ok, why := e.Check(set); ok || why != "10 of 210 requests failed" {
+		t.Fatalf("failures first: %v %q", ok, why)
+	}
+
+	// The quiet spell before the step: 1,000 prompt tokens a second came
+	// while nothing was sent; over the step's 100 seconds that is 100,000
+	// of the 4,100,000 counted, 2.4%. At 5,000 a second, 12%.
+	q := step(4, 900, 20)
+	q.ServerPromptTokens, q.ServerSeconds, q.QuietSeconds = ptr(4_100_000), 100, 20
+	q.QuietPromptTokens = ptr(20_000)
+	if ok, _ := q.Check(set); !ok || math.Abs(*q.ForeignShare(set)-100_000.0/4_100_000) > 1e-9 {
+		t.Fatalf("quiet 1,000/s: %v %v", ok, *q.ForeignShare(set))
+	}
+	q.QuietPromptTokens = ptr(100_000)
+	if ok, why := q.Check(set); ok || !strings.Contains(why, "contaminated: 12%") {
+		t.Fatalf("quiet 5,000/s: %v %q", ok, why)
+	}
+	// Nothing came in the quiet spell, and the instance counted 7% beyond
+	// what AIPerf reported: a request cut off at the end of the step, which
+	// AIPerf does not report as failed. Drained, the quiet spell decides;
+	// the 7% is shown.
+	q.ServerPromptTokens, q.QuietPromptTokens = ptr(4_300_000), ptr(0)
+	if ok, why := q.Check(set); !ok || *q.ForeignShare(set) != 0 || math.Abs(*q.CountedBeyondSent(set)-300_000.0/4_300_000) > 1e-9 {
+		t.Fatalf("cut off: %v %q %v", ok, why, *q.CountedBeyondSent(set))
+	}
+	if v := Analyze(set, []Step{q}).Steps[0]; *v.ForeignShare != 0 || *v.BeyondSent < 0.069 {
+		t.Fatalf("view: %+v", v)
+	}
+
+	set.Mode = ModeLive
+	s.ServerPromptTokens = ptr(8_000_000)
+	if ok, _ := s.Check(set); !ok || math.Abs(*s.ForeignShare(set)-0.5) > 1e-9 {
+		t.Fatalf("live: %v %v", ok, *s.ForeignShare(set))
+	}
+	// Live throughput is the instance's own counters, over their own time.
+	s.ServerOutputTokens, s.ServerSeconds = ptr(20_000), 200
+	if tp := set.Throughput(s); tp.InputPerSecond != 40_000 || tp.OutputPerSecond != 100 || tp.CachedPerSecond != 4500 { // 900,000 of 8,000,000 prompt tokens were cached
+		t.Fatalf("live throughput: %+v", tp)
+	}
+	// A prefill/decode run spread over 4 decode replicas.
+	if tp := set.Throughput(s).PerInstance(4); tp.InputPerSecond != 10_000 || tp.OutputPerSecond != 25 {
+		t.Fatalf("per instance: %+v", tp)
 	}
 }
 
@@ -203,7 +335,7 @@ func TestPlanWithoutPrices(t *testing.T) {
 	// GPU to price, and the note says what is missing instead.
 	cpu := MakePlan(PlanInput{Unit: "tokens", Utilization: 0.6,
 		Shapes: []ShapeInput{{Shape: Shape{Topology: "single"}, Instances: 1, Measured: &thr}}})
-	if cpu.FullDay != 1050*86400 || cpu.CostPerHour != nil || !strings.Contains(cpu.Notes[0], "GPU of a measured shape is not known") {
+	if cpu.FullDay != 1050*86400 || cpu.CostPerHour != nil || !strings.Contains(cpu.Notes[0], "GPU of a measured LLMInferenceService is not known") {
 		t.Fatalf("cpu: %+v", cpu)
 	}
 
@@ -297,6 +429,37 @@ func TestJob(t *testing.T) {
 	}
 	if job.GetLabels()[RunLabel] != "0123" || pod["automountServiceAccountToken"] != false {
 		t.Fatalf("labels %v", job.GetLabels())
+	}
+}
+
+// A prefill/decode Job reaches the peer listener with the site's client
+// certificate, mounted read-only, and reads every decode pod's counters.
+func TestJobPeer(t *testing.T) {
+	job, err := Job(JobSpec{RunID: "0123", Name: "aigw-capacity-0123", Namespace: "envoy-ai-gateway-system", Image: "registry/aiperf:1", Model: "glm",
+		Settings: Defaults(0), MetricsURLs: []string{"http://10.0.0.5:8000", "http://10.0.0.6:8000"},
+		Peer: &Peer{Address: "gw.svc:8443", SNI: "peers.llm.example", ClientSecret: "llm-peer-client", CAConfigMap: "llm-peer-ca"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := job.Object["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	c := pod["containers"].([]any)[0].(map[string]any)
+	var cfg struct {
+		Peer        map[string]string `json:"peer"`
+		MetricsURLs []string          `json:"metrics_urls"`
+	}
+	json.Unmarshal([]byte(c["env"].([]any)[0].(map[string]any)["value"].(string)), &cfg)
+	if cfg.Peer["address"] != "gw.svc:8443" || cfg.Peer["sni"] != "peers.llm.example" || cfg.Peer["cert"] != "/peer/tls.crt" || len(cfg.MetricsURLs) != 2 {
+		t.Fatalf("config: %+v", cfg)
+	}
+	mounts, _ := json.Marshal(c["volumeMounts"])
+	volumes, _ := json.Marshal(pod["volumes"])
+	if !strings.Contains(string(mounts), `"mountPath":"/peer","name":"peer","readOnly":true`) ||
+		!strings.Contains(string(volumes), `"secret":{"secretName":"llm-peer-client"}`) || !strings.Contains(string(volumes), `"configMap":{"name":"llm-peer-ca"}`) {
+		t.Fatalf("mounts %s, volumes %s", mounts, volumes)
+	}
+	// The proxy runs beside AIPerf: four CPUs, not two.
+	if cpu := c["resources"].(map[string]any)["requests"].(map[string]any)["cpu"]; cpu != "4" {
+		t.Fatalf("cpu %v", cpu)
 	}
 }
 

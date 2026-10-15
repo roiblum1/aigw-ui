@@ -393,10 +393,18 @@ export interface MyBudget {
 }
 
 /** What a tenant sees of itself after signing in with one of its keys. */
-/** What an operator chooses for one capacity measurement. */
+/** What one measurement executes: the active benchmark profile as it applies to one deployment. */
 export interface CapacitySettings {
-  /** Requests in flight at each load step, ascending. */
-  concurrency: number[];
+  /** The steps of a measurement from before 0.16, which went up a fixed list. */
+  concurrency?: number[];
+  first_concurrency?: number;
+  bisect_steps?: number;
+  max_concurrency?: number;
+  shared_prefix_tokens?: number;
+  pause_ms?: number;
+  max_error_share?: number;
+  /** "drained" or "live"; absent before 0.16. */
+  mode?: "drained" | "live";
   /** Requests a step sends at least; four per request in flight above it. */
   min_requests: number;
   /** The longest a step may take, in seconds. */
@@ -434,6 +442,7 @@ export interface CapacityStep {
   itl_p95_ms: number;
   server_prompt_tokens: number | null;
   server_cached_tokens: number | null;
+  server_output_tokens?: number | null;
   error?: string;
 }
 
@@ -447,6 +456,9 @@ export interface CapacityStepView {
   input_per_s: number;
   output_per_s: number;
   cached_share: number | null;
+  /** The part of the instance's prompt tokens other traffic sent: a failure when drained. */
+  foreign_share: number | null;
+  beyond_sent: number | null;
 }
 
 export interface CapacityRun {
@@ -470,6 +482,57 @@ export interface CapacityRun {
   result: { best: CapacityStep | null; limit: string; steps: CapacityStepView[] };
   created_at: string;
   finished_at: string | null;
+  /** The deployment's spec when measured; "" for a measurement of a shape from before 0.16, kept as history. */
+  spec_hash: string;
+  profile_id: string | null;
+  profile_version: number | null;
+  mode: "" | "drained" | "live";
+  /** What the result is divided by for one instance: the decode replicas of a prefill/decode deployment. */
+  instances_during: number;
+  /** Where a running measurement is: draining the site, or measuring. */
+  phase: "" | "draining" | "measuring";
+  drained_site: boolean;
+  started_by: "operator" | "campaign";
+}
+
+/** The one benchmark every LLMInferenceService is measured with. Editing it makes a new version. */
+export interface BenchmarkProfile {
+  id: string;
+  name: string;
+  version: number;
+  workload: { max_prompt_tokens: number; max_output_tokens: number; sessions: number; shared_prefix_tokens: number; pause_ms: number };
+  slo: { ttft_p95_ms: number; itl_p95_ms: number; max_error_share: number };
+  sweep: { first_concurrency: number; bisect_steps: number; step_seconds: number; min_requests: number; max_concurrency: number };
+  note: string;
+  active: boolean;
+  created_at: string;
+}
+
+/** A deployment the hub measures by itself in its window. */
+export interface CampaignItem {
+  model_id: string;
+  cluster_id: string;
+  cluster_name: string;
+  namespace: string;
+  name: string;
+  topology: string;
+  /** Why it is in the queue: not measured, "spec", "profile" or "age". */
+  reason: string;
+  /** "next", "running", or what it waits for. */
+  state: string;
+  /**
+   * What the model's other sites serve in an hour, up to 85% of it, over its busiest hour in the
+   * window: below 1 they cannot take its load while this site is drained. Null without traffic.
+   */
+  cover: number | null;
+}
+
+export interface Campaign {
+  /** The chart's capacity.window; "" when the hub never measures by itself. */
+  window: string;
+  open: boolean;
+  next: string | null;
+  queue: CampaignItem[];
 }
 
 export interface CapacityPrices {
@@ -546,7 +609,8 @@ export interface CapacityPlan {
 }
 
 /** A deployment (LLMInferenceService) of a model on a site. */
-export interface CapacityDeployment {
+/** One LLMInferenceService of a model, with the result that counts for it. */
+export interface CapacityLLMI {
   cluster_id: string;
   cluster_name: string;
   namespace: string;
@@ -559,8 +623,18 @@ export interface CapacityDeployment {
   instances: number | null;
   drained: boolean;
   observed_at: string;
+  /** What it runs, whatever its scale. A result counts only for the spec it was measured on. */
+  spec_hash: string;
+  quantization: string;
+  lmcache: boolean;
+  decode_replicas: number;
   shape: CapacityShape;
   max_model_len: number;
+  /** The measurement that counts, null when none does; why then says why. */
+  run: CapacityRun | null;
+  /** Why the result should be measured again: "spec", "profile" or "age". */
+  stale: "" | "spec" | "profile" | "age";
+  why: string;
 }
 
 export interface CapacityModel {
@@ -568,10 +642,13 @@ export interface CapacityModel {
   model_name: string;
   unit: Unit;
   target_utilization: number;
-  deployments: CapacityDeployment[];
-  defaults: CapacitySettings;
-  /** The newest measurement of each shape that found a load within the targets. */
-  latest: CapacityRun[];
+  /** Its LLMInferenceServices, each with the result that counts for it. */
+  llmis: CapacityLLMI[];
+  /** The version of the profile its figures are counted with. */
+  profile_version: number;
+  /** Sites with a ready instance that is not drained: a drained measurement needs another one. */
+  sites: number;
+  /** What follows from the results. Its shapes are the LLMIs, in the same order. */
   plan: CapacityPlan;
   running: CapacityRun | null;
 }
@@ -586,8 +663,12 @@ export interface CapacityGPU {
 export interface CapacityOverview {
   /** The AIPerf image the server runs, or "" when none is set. */
   image: string;
+  /** Whether prefill/decode LLMIs are measured (capacity.peerMeasurements). */
+  peer_measurements: boolean;
   gpus: CapacityGPU[];
   models: CapacityModel[];
+  profile: BenchmarkProfile;
+  campaign: Campaign;
 }
 
 export interface MyUsage {
@@ -736,9 +817,12 @@ export const api = {
   capacityRuns: (modelId: string) => request<CapacityRun[]>("GET", `/models/${modelId}/capacity-runs`),
   startCapacityRun: (
     modelId: string,
-    body: { cluster_id: string; namespace: string; deployment: string; pod: string; settings: CapacitySettings },
+    body: { cluster_id: string; namespace: string; deployment: string; pod: string; mode: "drained" | "live"; confirm?: string },
   ) => request<CapacityRun>("POST", `/models/${modelId}/capacity-runs`, body),
   cancelCapacityRun: (id: string) => request<CapacityRun>("POST", `/capacity-runs/${id}/cancel`),
+  benchmarkProfiles: () => request<BenchmarkProfile[]>("GET", "/benchmark-profiles"),
+  setBenchmarkProfile: (p: Pick<BenchmarkProfile, "name" | "workload" | "slo" | "sweep" | "note">) =>
+    request<BenchmarkProfile>("PUT", "/benchmark-profile", p),
   deleteCapacityRun: (id: string) => request<void>("DELETE", `/capacity-runs/${id}`),
   deploymentPods: (clusterId: string, namespace: string, name: string) =>
     request<string[]>("GET", `/clusters/${clusterId}/deployments/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/pods`),

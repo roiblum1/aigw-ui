@@ -66,6 +66,10 @@ spec:
             - name: CAPACITY_IMAGE
               value: {{ . | quote }}
             {{- end }}
+            - name: CAPACITY_WINDOW
+              value: {{ .Values.capacity.window | quote }}
+            - name: CAPACITY_PEER_MEASUREMENTS
+              value: {{ .Values.capacity.peerMeasurements | quote }}
             {{- if or .Values.redis.url .Values.redis.existingSecret }}
             - name: REDIS_URL
               valueFrom:

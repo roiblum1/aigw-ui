@@ -1,12 +1,10 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"sort"
@@ -16,31 +14,41 @@ import (
 
 	"aigw-ui/internal/benchmark"
 	"aigw-ui/internal/capacity"
+	"aigw-ui/internal/llmi"
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
 )
 
-// capacityDeployment is a deployment of a model as the capacity page shows it.
-type capacityDeployment struct {
+// capacityLLMI is one LLMInferenceService of a model as the Capacity page
+// shows it, with the result that counts for it (package llmi).
+type capacityLLMI struct {
 	store.Deployment
 	Shape       capacity.Shape `json:"shape"`
 	MaxModelLen int            `json:"max_model_len"`
+	// Run is the measurement that counts, nil when none does; Why then says
+	// why. Stale says why it should be measured again.
+	Run   *store.CapacityRun `json:"run"`
+	Stale string             `json:"stale"`
+	Why   string             `json:"why"`
 }
 
 // capacityModel is what the capacity page shows of one model.
 type capacityModel struct {
-	ModelID           string               `json:"model_id"`
-	ModelName         string               `json:"model_name"`
-	Unit              string               `json:"unit"`
-	TargetUtilization float64              `json:"target_utilization"`
-	Deployments       []capacityDeployment `json:"deployments"`
-	// Defaults are the settings a new measurement starts from.
-	Defaults capacity.Settings `json:"defaults"`
-	// Latest is the newest measurement of each shape that found a load
-	// within the targets, and Plan what follows from them.
-	Latest  []store.CapacityRun `json:"latest"`
-	Plan    capacity.Plan       `json:"plan"`
-	Running *store.CapacityRun  `json:"running"`
+	ModelID           string         `json:"model_id"`
+	ModelName         string         `json:"model_name"`
+	Unit              string         `json:"unit"`
+	TargetUtilization float64        `json:"target_utilization"`
+	LLMIs             []capacityLLMI `json:"llmis"`
+	// ProfileVersion is the version of the profile the model's figures are
+	// counted with: never two at once.
+	ProfileVersion int `json:"profile_version"`
+	// Sites counts the sites with a ready instance that is not drained: a
+	// drained measurement needs another one.
+	Sites int `json:"sites"`
+	// Plan is what follows from the results. Its shapes are the LLMIs, in
+	// the same order.
+	Plan    capacity.Plan      `json:"plan"`
+	Running *store.CapacityRun `json:"running"`
 }
 
 // capacityGPU is a GPU the fleet runs on, or one with a price.
@@ -52,23 +60,79 @@ type capacityGPU struct {
 	Deployments int `json:"deployments"`
 }
 
+// capacityCampaign is the queue the hub measures by itself, and when.
+type capacityCampaign struct {
+	// Window is the chart's capacity.window, "" when the hub never
+	// measures by itself.
+	Window string           `json:"window"`
+	Open   bool             `json:"open"`
+	Next   *time.Time       `json:"next"`
+	Queue  []llmi.QueueItem `json:"queue"`
+}
+
 // recentDays is how far back the use of a model is looked at.
 const recentDays = 30
 
-// capacityPlans returns, for every model, its deployments and their shapes,
-// what each shape serves, what the model can be given and what it has been
-// given, and the GPUs with their prices.
+// capacityPlans returns, for every model, its LLMInferenceServices and the
+// result that counts for each, what the model can be given and what it has
+// been given; the GPUs with their costs; the active benchmark profile and
+// the campaign.
 func (s *Server) capacityPlans(w http.ResponseWriter, r *http.Request) {
-	models, gpus, err := s.plans(r.Context())
+	ctx := r.Context()
+	models, gpus, err := s.plans(ctx)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"image": s.bench.Image(), "gpus": gpus, "models": models})
+	profile, err := s.st.ActiveProfile(ctx)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	campaign, err := s.campaign(ctx, profile.Version)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"image": s.bench.Image(), "peer_measurements": s.bench.PeerMeasurements(),
+		"gpus": gpus, "models": models, "profile": profile, "campaign": campaign})
 }
 
-// plans works out every model's plan from its deployments, its latest
-// measurements, the tenants' budgets on it and its recent use.
+func (s *Server) campaign(ctx context.Context, active int) (capacityCampaign, error) {
+	c := capacityCampaign{Queue: []llmi.QueueItem{}}
+	now := time.Now()
+	queue, err := s.bench.Queue(ctx, now)
+	if err != nil {
+		return c, err
+	}
+	c.Queue = queue
+	if win := s.bench.Window(); win != nil {
+		next := win.Next(now)
+		c.Window, c.Open, c.Next = win.String(), win.Open(now), &next
+	}
+	return c, nil
+}
+
+// readyInstances is what a deployment's ready instances count for in what
+// its model can be given: nothing while an operator drains its site, all of
+// them while a measurement does, since that drain lasts the run only.
+func readyInstances(d store.Deployment, running []store.CapacityRun) float64 {
+	if d.Instances == nil {
+		return 0
+	}
+	if !d.Drained {
+		return *d.Instances
+	}
+	for _, r := range running {
+		if r.DrainedSite && r.ModelID == d.ModelID && r.ClusterID == d.ClusterID {
+			return *d.Instances
+		}
+	}
+	return 0
+}
+
+// plans works out every model's plan from its LLMInferenceServices, the
+// results that count for them, the tenants' budgets on it and its recent use.
 func (s *Server) plans(ctx context.Context) ([]capacityModel, []capacityGPU, error) {
 	models, err := s.st.ListModels(ctx)
 	if err != nil {
@@ -83,6 +147,10 @@ func (s *Server) plans(ctx context.Context) ([]capacityModel, []capacityGPU, err
 		return nil, nil, err
 	}
 	running, err := s.st.RunningCapacityRuns(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	profile, err := s.st.ActiveProfile(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -117,62 +185,46 @@ func (s *Server) plans(ctx context.Context) ([]capacityModel, []capacityGPU, err
 		gpus[d.GPU].Deployments++
 	}
 
+	now := time.Now()
 	out := make([]capacityModel, 0, len(models))
 	for _, m := range models {
-		cm := capacityModel{ModelID: m.ID, ModelName: m.Name, Unit: m.Unit, TargetUtilization: targets[m.ID].Utilization, Deployments: []capacityDeployment{}, Latest: []store.CapacityRun{}}
+		cm := capacityModel{ModelID: m.ID, ModelName: m.Name, Unit: m.Unit, TargetUtilization: targets[m.ID].Utilization, LLMIs: []capacityLLMI{}}
 		maxLen := map[string]int{}
 		for _, e := range m.Endpoints {
 			maxLen[e.ClusterID] = maxModelLen(e.Capacity.MaxModelLen)
 		}
-		shortest := 0
-		byShape := map[string]*capacity.ShapeInput{}
-		var order []string
+		var own []store.Deployment
+		sites := map[string]bool{}
 		for _, d := range deployments {
-			if d.ModelID != m.ID {
-				continue
-			}
-			shape := capacity.Shape{Topology: d.Topology, GPU: d.GPU, GPUsPerInstance: d.GPUsPerInstance, Revision: d.Revision}
-			cm.Deployments = append(cm.Deployments, capacityDeployment{Deployment: d, Shape: shape, MaxModelLen: maxLen[d.ClusterID]})
-			if l := maxLen[d.ClusterID]; l > 0 && (shortest == 0 || l < shortest) {
-				shortest = l
-			}
-			in := byShape[shape.Key()]
-			if in == nil {
-				in = &capacity.ShapeInput{Shape: shape}
-				if p := gpus[d.GPU]; p != nil && p.USDPerHour != nil {
-					c := capacity.CreditsPerHour(*p.USDPerHour)
-					in.GPUPrice = &c
+			if d.ModelID == m.ID {
+				own = append(own, d)
+				if !d.Drained && d.Instances != nil && *d.Instances > 0 {
+					sites[d.ClusterID] = true
 				}
-				byShape[shape.Key()] = in
-				order = append(order, shape.Key())
 			}
-			if d.Instances != nil && !d.Drained {
-				in.Instances += *d.Instances
-			}
-			in.Sites = appendNew(in.Sites, d.ClusterName)
 		}
-		cm.Defaults = capacity.Defaults(shortest)
+		cm.Sites = len(sites)
+		version, results := llmi.Model(own, latest, profile.Version, now)
+		cm.ProfileVersion = version
+
+		in := capacity.PlanInput{Unit: m.Unit, CostExpression: m.CostExpression, Utilization: targets[m.ID].Utilization,
+			OvercommitLimit: targets[m.ID].OvercommitLimit, Days: recentDays}
+		for _, res := range results {
+			d := res.Deployment
+			shape := capacity.Shape{Topology: d.Topology, GPU: d.GPU, GPUsPerInstance: d.GPUsPerInstance, Revision: d.Revision}
+			cm.LLMIs = append(cm.LLMIs, capacityLLMI{Deployment: d, Shape: shape, MaxModelLen: maxLen[d.ClusterID], Run: res.Run, Stale: res.Stale, Why: res.Why})
+			row := capacity.ShapeInput{Shape: shape, Sites: []string{d.ClusterName}, Measured: res.PerInstance,
+				Instances: readyInstances(d, running)}
+			if p := gpus[d.GPU]; p != nil && p.USDPerHour != nil {
+				c := capacity.CreditsPerHour(*p.USDPerHour)
+				row.GPUPrice = &c
+			}
+			in.Shapes = append(in.Shapes, row)
+		}
 		for i := range running {
 			if running[i].ModelID == m.ID {
 				cm.Running = &running[i]
 			}
-		}
-		for i := range latest {
-			run := latest[i]
-			if run.ModelID != m.ID {
-				continue
-			}
-			cm.Latest = append(cm.Latest, run)
-			if in := byShape[run.Shape.Key()]; in != nil {
-				t := capacity.ThroughputOf(*run.Result.Best)
-				in.Measured = &t
-			}
-		}
-
-		in := capacity.PlanInput{Unit: m.Unit, CostExpression: m.CostExpression, Utilization: targets[m.ID].Utilization,
-			OvercommitLimit: targets[m.ID].OvercommitLimit, Days: recentDays}
-		for _, key := range order {
-			in.Shapes = append(in.Shapes, *byShape[key])
 		}
 		if m.Prices != nil {
 			in.Prices = &capacity.Prices{Input: m.Prices.Input, Cached: m.Prices.Cached, Output: m.Prices.Output}
@@ -421,72 +473,54 @@ func (s *Server) listCapacityRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runs)
 }
 
-// capacityRunBody starts a measurement of one pod of one deployment.
-// Settings that are left out take their defaults for the deployment.
+// capacityRunBody starts a measurement of one LLMInferenceService with the
+// active profile. A live measurement slows the model's users down, so it is
+// confirmed by typing the model's name.
 type capacityRunBody struct {
-	ClusterID  string            `json:"cluster_id"`
-	Namespace  string            `json:"namespace"`
-	Deployment string            `json:"deployment"`
-	Pod        string            `json:"pod"`
-	Settings   capacity.Settings `json:"settings"`
+	ClusterID  string `json:"cluster_id"`
+	Namespace  string `json:"namespace"`
+	Deployment string `json:"deployment"`
+	// Pod is the instance measured; a prefill/decode deployment takes none.
+	Pod     string `json:"pod"`
+	Mode    string `json:"mode"`
+	Confirm string `json:"confirm"`
+}
+
+// check refuses a body that names no deployment or mode, and a live
+// measurement that is not confirmed with the model's name.
+func (b capacityRunBody) check(model string) error {
+	switch {
+	case b.ClusterID == "" || b.Namespace == "" || b.Deployment == "":
+		return invalid("cluster_id, namespace and deployment are required")
+	case b.Mode != capacity.ModeDrained && b.Mode != capacity.ModeLive:
+		return invalid("mode must be %q or %q", capacity.ModeDrained, capacity.ModeLive)
+	case b.Mode == capacity.ModeLive && b.Confirm != model:
+		return invalid("a live measurement slows down the users of %s: confirm it with the model's name", model)
+	}
+	return nil
 }
 
 func (s *Server) startCapacityRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	modelID := r.PathValue("id")
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	// The defaults depend on the site, so the site is read first and the
-	// body is then read over the defaults.
 	var b capacityRunBody
-	if err := json.Unmarshal(body, &b); err != nil {
-		fail(w, invalid("invalid JSON body: %v", err))
-		return
-	}
-	switch {
-	case b.ClusterID == "" || b.Namespace == "" || b.Deployment == "":
-		fail(w, invalid("cluster_id, namespace and deployment are required"))
-		return
-	case b.Pod == "":
-		fail(w, invalid("pod is required: the pod keeps its own traffic while it is measured, so it is chosen on purpose"))
-		return
-	}
-	models, err := s.st.ListModels(ctx)
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	var model *store.Model
-	for i := range models {
-		if models[i].ID == modelID {
-			model = &models[i]
-		}
-	}
-	if model == nil {
-		fail(w, store.ErrNotFound)
-		return
-	}
-	shortest := 0
-	for _, e := range model.Endpoints {
-		if e.ClusterID == b.ClusterID {
-			shortest = maxModelLen(e.Capacity.MaxModelLen)
-		}
-	}
-	b = capacityRunBody{Settings: capacity.Defaults(shortest)}
-	dec := json.NewDecoder(bytes.NewReader(body))
+	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&b); err != nil {
 		fail(w, invalid("invalid JSON body: %v", err))
 		return
 	}
-	if err := b.Settings.Validate(); err != nil {
-		fail(w, invalid("%s", err.Error()))
+	model, err := s.st.GetModel(ctx, modelID)
+	if err != nil {
+		fail(w, err)
 		return
 	}
-	run, err := s.bench.Start(ctx, modelID, b.ClusterID, b.Namespace, b.Deployment, b.Pod, b.Settings)
+	if err := b.check(model.Name); err != nil {
+		fail(w, err)
+		return
+	}
+	run, err := s.bench.Start(ctx, benchmark.Request{ModelID: modelID, ClusterID: b.ClusterID, Namespace: b.Namespace, Deployment: b.Deployment,
+		Pod: b.Pod, Mode: b.Mode, StartedBy: store.ByOperator})
 	switch {
 	case errors.Is(err, benchmark.ErrNoImage):
 		writeError(w, http.StatusConflict, "The server has no AIPerf image to run. Set capacity.image in the chart (CAPACITY_IMAGE) to an image in a registry the clusters can pull from.")
@@ -495,7 +529,17 @@ func (s *Server) startCapacityRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, b.Namespace+"/"+b.Deployment+" is not a deployment of "+model.Name+" on that cluster.")
 		return
 	case errors.Is(err, benchmark.ErrBusy):
-		writeError(w, http.StatusConflict, "A measurement of "+model.Name+" is running. Wait for it or stop it first: two at once would share the GPUs and both be wrong.")
+		writeError(w, http.StatusConflict, "A measurement of "+model.Name+" is running. Wait for it or stop it first: two at once would share the load and both be wrong.")
+		return
+	case errors.Is(err, benchmark.ErrNoOtherSite):
+		writeError(w, http.StatusConflict, "No other site serves "+model.Name+", so its site cannot be drained. Measure it live.")
+		return
+	case errors.Is(err, benchmark.ErrPeerOff):
+		writeError(w, http.StatusConflict, "Measuring a prefill/decode LLMInferenceService is off on this hub. Its Job would run in the gateway's namespace with the site's peer client certificate, "+
+			"which reaches every model on the peer listener with no key and no quota. See capacity.peerMeasurements in the security guide.")
+		return
+	case errors.Is(err, benchmark.ErrUnknownSpec):
+		writeError(w, http.StatusConflict, "What "+b.Namespace+"/"+b.Deployment+" runs is not known yet: none of its pods is ready, or they run different images, as during a rollout. Measure it once its pods agree.")
 		return
 	case errors.Is(err, store.ErrNotFound):
 		fail(w, err)
@@ -504,8 +548,47 @@ func (s *Server) startCapacityRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	note(r, "capacity.start", "Started measuring "+model.Name+" on "+run.ClusterName+" ("+run.Namespace+"/"+run.Instance+", "+run.Shape.Label()+")")
+	what := "Started measuring "
+	if b.Mode == capacity.ModeLive {
+		what = "Started measuring live, with its users, "
+	}
+	note(r, "capacity.start", what+model.Name+" on "+run.ClusterName+" ("+run.Namespace+"/"+run.Deployment+", profile version "+
+		strconv.Itoa(*run.ProfileVersion)+")")
 	writeJSON(w, http.StatusCreated, run)
+}
+
+// profiles returns the active benchmark profile and every version of it.
+func (s *Server) profiles(w http.ResponseWriter, r *http.Request) {
+	list, err := s.st.ListProfiles(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// setProfile stores an edited profile as its next version, which every
+// measurement uses from then on. Results of the earlier version stay and
+// are marked stale until measured again.
+func (s *Server) setProfile(w http.ResponseWriter, r *http.Request) {
+	var p capacity.Profile
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		fail(w, invalid("invalid JSON body: %v", err))
+		return
+	}
+	if err := p.Validate(); err != nil {
+		fail(w, invalid("%s", err.Error()))
+		return
+	}
+	saved, err := s.st.AddProfileVersion(r.Context(), p)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	note(r, "capacity.profile", fmt.Sprintf("Set the benchmark profile %s, version %d", saved.Name, saved.Version))
+	writeJSON(w, http.StatusOK, saved)
 }
 
 func (s *Server) getCapacityRun(w http.ResponseWriter, r *http.Request) {

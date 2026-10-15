@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"aigw-ui/internal/capacity"
+	"aigw-ui/internal/store"
 )
 
 // A limit outside 1 to 10 is refused before anything is stored.
@@ -48,5 +49,51 @@ func TestCents(t *testing.T) {
 	}
 	if got := cents(97_868_736, "tokens"); got != 97_868_736 {
 		t.Fatalf("tokens: %d", got)
+	}
+}
+
+// A live measurement starts only once the model's name is typed.
+func TestCapacityRunBody(t *testing.T) {
+	b := capacityRunBody{ClusterID: "c", Namespace: "llm", Deployment: "glm", Pod: "glm-0", Mode: capacity.ModeLive}
+	if err := b.check("glm-5.3"); err == nil || !strings.Contains(err.Error(), "confirm it with the model's name") {
+		t.Fatalf("unconfirmed: %v", err)
+	}
+	b.Confirm = "GLM-5.3"
+	if b.check("glm-5.3") == nil {
+		t.Fatal("a name in another case confirmed it")
+	}
+	b.Confirm = "glm-5.3"
+	if err := b.check("glm-5.3"); err != nil {
+		t.Fatal(err)
+	}
+	// Drained needs no confirmation; a mode is needed.
+	if err := (capacityRunBody{ClusterID: "c", Namespace: "llm", Deployment: "glm", Mode: capacity.ModeDrained}).check("glm-5.3"); err != nil {
+		t.Fatal(err)
+	}
+	if (capacityRunBody{ClusterID: "c", Namespace: "llm", Deployment: "glm"}).check("glm-5.3") == nil {
+		t.Fatal("no mode accepted")
+	}
+}
+
+// A site an operator drained counts for nothing in what its model can be
+// given; one a measurement drained counts in full: the drain lasts the run.
+func TestReadyInstances(t *testing.T) {
+	two := 2.0
+	d := store.Deployment{ModelID: "glm", ClusterID: "a", Instances: &two}
+	run := []store.CapacityRun{{ModelID: "glm", ClusterID: "a", DrainedSite: true}}
+	if readyInstances(d, nil) != 2 {
+		t.Fatal("not drained")
+	}
+	d.Drained = true
+	if readyInstances(d, nil) != 0 || readyInstances(d, run) != 2 {
+		t.Fatalf("drained: by an operator %v, by a measurement %v", readyInstances(d, nil), readyInstances(d, run))
+	}
+	// A run on the site that found it drained already did not drain it.
+	run[0].DrainedSite = false
+	if readyInstances(d, run) != 0 {
+		t.Fatal("an operator's drain counted")
+	}
+	if readyInstances(store.Deployment{}, nil) != 0 {
+		t.Fatal("unknown ready count")
 	}
 }

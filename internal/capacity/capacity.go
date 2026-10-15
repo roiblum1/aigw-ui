@@ -3,10 +3,11 @@
 // given: tokens or dollars per day, the price that covers its cost, and how
 // far the budgets handed out exceed it.
 //
-// The measurement is AIPerf in a Job on the cluster, aimed at one pod of the
-// model. It replays made-up coding-agent sessions at a growing number of
-// requests in flight. The Job makes up its prompts itself and prints one
-// line of numbers per step; nothing of a prompt reaches the server.
+// The measurement is AIPerf in a Job on the cluster, aimed at one instance of
+// one LLMInferenceService. It replays made-up coding-agent sessions, doubling
+// the requests in flight until a step misses the promised latency, then
+// halving the gap. The Job makes up its prompts itself and prints one line of
+// numbers per step; nothing of a prompt reaches the server.
 package capacity
 
 import (
@@ -14,10 +15,17 @@ import (
 	"math"
 )
 
-// Settings are what an operator chooses for one measurement.
+// Settings are what one measurement executes: the active benchmark profile
+// as it applies to one deployment (Profile.Settings).
 type Settings struct {
-	// Concurrency lists the load steps: requests in flight, ascending.
-	Concurrency []int `json:"concurrency"`
+	// Concurrency lists the load steps of a 0.13–0.14 measurement, which
+	// went up a fixed list. A sweep leaves it empty.
+	Concurrency []int `json:"concurrency,omitempty"`
+	// The sweep: doubling from FirstConcurrency up to MaxConcurrency until a
+	// step misses, then BisectSteps halvings of the gap.
+	FirstConcurrency int `json:"first_concurrency,omitempty"`
+	BisectSteps      int `json:"bisect_steps,omitempty"`
+	MaxConcurrency   int `json:"max_concurrency,omitempty"`
 	// MinRequests is how many requests a step sends at least, so that its
 	// 95th percentile rests on enough of them; more at a higher load.
 	MinRequests int `json:"min_requests"`
@@ -33,48 +41,40 @@ type Settings struct {
 	MaxPromptTokens int `json:"max_prompt_tokens"`
 	// MaxOutputTokens is the longest answer.
 	MaxOutputTokens int `json:"max_output_tokens"`
+	// SharedPrefixTokens is the system prompt every session shares, before
+	// scaling; 0 is AIPerf's 32,000. PauseMillis is the longest pause between
+	// turns; 0 is none.
+	SharedPrefixTokens int `json:"shared_prefix_tokens,omitempty"`
+	PauseMillis        int `json:"pause_ms,omitempty"`
 	// The latency an operator promises, as the 95th percentile of a step:
 	// time to the first token, and time between two tokens after it.
 	TTFTMillis float64 `json:"ttft_p95_ms"`
 	ITLMillis  float64 `json:"itl_p95_ms"`
+	// MaxErrorShare is the part of a step's requests that may fail; 0 is
+	// 1%.
+	MaxErrorShare float64 `json:"max_error_share,omitempty"`
+	// Mode is ModeDrained or ModeLive; "" for a 0.13–0.14 measurement, which
+	// was neither.
+	Mode string `json:"mode,omitempty"`
 }
 
 // AIPerf's coding-agent sessions grow to at most this many prompt tokens.
 const agenticMaxPrompt = 167000
 
-// Defaults returns the settings for a model whose deployments accept at most
-// maxModelLen tokens, or an unknown length when it is 0.
-func Defaults(maxModelLen int) Settings {
-	s := Settings{
-		Concurrency:     []int{1, 2, 4, 8, 16, 32, 64},
-		MinRequests:     60,
-		StepSeconds:     1200,
-		Sessions:        200,
-		MaxPromptTokens: agenticMaxPrompt,
-		MaxOutputTokens: 1500,
-		TTFTMillis:      5000,
-		ITLMillis:       50,
-	}
-	if maxModelLen > 0 && maxModelLen-s.MaxOutputTokens < s.MaxPromptTokens {
-		s.MaxPromptTokens = max(maxModelLen-s.MaxOutputTokens, 0)
-		if s.MaxPromptTokens < 2*s.MaxOutputTokens {
-			s.MaxOutputTokens = max(maxModelLen/4, 16)
-			s.MaxPromptTokens = maxModelLen - s.MaxOutputTokens
-		}
-	}
-	return s
-}
-
 // Validate refuses settings that cannot give a meaningful answer, or that
 // would keep a GPU busy for an unreasonable time.
 func (s Settings) Validate() error {
 	switch {
-	case len(s.Concurrency) == 0 || len(s.Concurrency) > 12:
-		return fmt.Errorf("concurrency must list from 1 to 12 steps")
-	case !ascending(s.Concurrency):
-		return fmt.Errorf("concurrency must go up from one step to the next")
-	case s.Concurrency[0] < 1 || s.Concurrency[len(s.Concurrency)-1] > 1024:
-		return fmt.Errorf("concurrency must be from 1 to 1024")
+	case s.Mode != ModeDrained && s.Mode != ModeLive:
+		return fmt.Errorf("mode must be %q or %q", ModeDrained, ModeLive)
+	case len(s.Concurrency) > 0:
+		return fmt.Errorf("a measurement sweeps the load; a list of steps is no longer taken")
+	case s.FirstConcurrency < 1 || s.MaxConcurrency < s.FirstConcurrency || s.MaxConcurrency > 1024:
+		return fmt.Errorf("the load must sweep from 1 to 1024 requests in flight")
+	case s.BisectSteps < 0 || s.BisectSteps > 5:
+		return fmt.Errorf("bisect_steps must be from 0 to 5")
+	case s.MaxErrorShare < 0 || s.MaxErrorShare > 0.5:
+		return fmt.Errorf("max_error_share must be from 0 to 0.5")
 	case s.MinRequests < 10 || s.MinRequests > 2000:
 		return fmt.Errorf("min_requests must be from 10 to 2,000")
 	case s.StepSeconds < 60 || s.StepSeconds > 3600:
@@ -93,15 +93,6 @@ func (s Settings) Validate() error {
 	return nil
 }
 
-func ascending(steps []int) bool {
-	for i := 1; i < len(steps); i++ {
-		if steps[i] <= steps[i-1] {
-			return false
-		}
-	}
-	return true
-}
-
 // Requests is how many requests a step at a load sends: at least
 // MinRequests, and four per request in flight.
 func (s Settings) Requests(concurrency int) int {
@@ -109,10 +100,43 @@ func (s Settings) Requests(concurrency int) int {
 }
 
 // Duration is the longest the measurement may take, in seconds: every step,
-// the time to let its last requests finish, and the time to make up the
-// sessions and start.
+// the time to let its last requests finish, the wait for an instance with
+// no requests in flight, and the time to make up the sessions and start.
 func (s Settings) Duration() int {
-	return len(s.Concurrency)*(s.StepSeconds+stepGrace+60) + 900
+	return s.Steps()*(s.StepSeconds+stepGrace+settleWait+quietSpell+60) + idleWait + 900
+}
+
+// Steps is the most steps the measurement runs: the doublings from
+// FirstConcurrency to MaxConcurrency, then the bisections.
+func (s Settings) Steps() int {
+	if len(s.Concurrency) > 0 {
+		return len(s.Concurrency)
+	}
+	n := 1
+	for c := max(s.FirstConcurrency, 1); c < s.MaxConcurrency; c *= 2 {
+		n++
+	}
+	return n + s.BisectSteps
+}
+
+// idleWait is how long a drained measurement waits for its instance to have
+// no request in flight before it gives up: other traffic still reaches it.
+const idleWait = 600
+
+// settleWait is how long a drained step waits for the previous step's
+// requests to leave the instance, and quietSpell how long it then watches
+// the instance's prompt counter while nothing is sent.
+const (
+	settleWait = 60
+	quietSpell = 20
+)
+
+// errorShare is the part of a step's requests that may fail.
+func (s Settings) errorShare() float64 {
+	if s.MaxErrorShare > 0 {
+		return s.MaxErrorShare
+	}
+	return maxErrorShare
 }
 
 // stepGrace is how long a step waits for the requests still in flight when
@@ -142,6 +166,16 @@ type Step struct {
 	// instance served at the same time.
 	ServerPromptTokens *float64 `json:"server_prompt_tokens"`
 	ServerCachedTokens *float64 `json:"server_cached_tokens"`
+	// ServerOutputTokens is what its counter of generated tokens grew by,
+	// and ServerSeconds the time the counters are taken over: from the
+	// step's first request to its last answer, as DurationSeconds.
+	ServerOutputTokens *float64 `json:"server_output_tokens,omitempty"`
+	ServerSeconds      float64  `json:"server_seconds,omitempty"`
+	// QuietSeconds and QuietPromptTokens are, for a drained step, the quiet
+	// spell before it: how long the instance's prompt counter was watched
+	// while the measurement sent nothing, and what it grew by.
+	QuietSeconds      float64  `json:"quiet_s,omitempty"`
+	QuietPromptTokens *float64 `json:"quiet_prompt_tokens,omitempty"`
 	// Error is set when the step could not run at all.
 	Error string `json:"error,omitempty"`
 }
@@ -168,20 +202,71 @@ func (s Step) CachedShare() *float64 {
 	return &share
 }
 
+// ForeignShare is the part of the prompt tokens the instance counted in a
+// step that something other than the measurement sent, or nil when the
+// instance does not publish its counter. A drained step is judged by it.
+//
+// It is the quiet spell's figure when there is one (QuietShare): the quiet
+// spell sees nothing but other traffic, however many of the measurement's
+// own requests failed or were cut off at the end of the step. Otherwise,
+// live, it is what the instance counted beyond what was sent
+// (CountedBeyondSent).
+func (s Step) ForeignShare(set Settings) *float64 {
+	if q := s.QuietShare(); q != nil {
+		return q
+	}
+	return s.CountedBeyondSent(set)
+}
+
+// QuietShare is, for a drained step, what the instance counted in the quiet
+// spell before it, while the measurement sent nothing, at the same rate over
+// the step, as a part of what it counted in the step. Nil without a quiet
+// spell.
+func (s Step) QuietShare() *float64 {
+	if s.ServerPromptTokens == nil || *s.ServerPromptTokens <= 0 || s.QuietPromptTokens == nil || s.QuietSeconds <= 0 || s.ServerSeconds <= 0 {
+		return nil
+	}
+	share := math.Min(math.Max(*s.QuietPromptTokens/s.QuietSeconds*s.ServerSeconds / *s.ServerPromptTokens, 0), 1)
+	return &share
+}
+
+// CountedBeyondSent is the part of the prompt tokens the instance counted in
+// the step beyond what the measurement sent. The prompts of the
+// measurement's own failed requests are counted there too, and AIPerf does
+// not report them, so the longest prompt is taken off for each failed
+// request. A request cut off at the end of the step is not taken off: a
+// drained step shows this figure and is not judged by it.
+func (s Step) CountedBeyondSent(set Settings) *float64 {
+	if s.ServerPromptTokens == nil || *s.ServerPromptTokens <= 0 {
+		return nil
+	}
+	counted := *s.ServerPromptTokens
+	own := float64(s.InputTokens) + float64(s.Errors)*float64(set.MaxPromptTokens)
+	share := math.Min(math.Max((counted-own)/counted, 0), 1)
+	return &share
+}
+
 // maxErrorShare is the part of a step's requests that may fail for the step
-// to count.
+// to count, unless the settings say otherwise.
 const maxErrorShare = 0.01
 
-// Check says whether a step meets the settings, and if not, why.
+// Check says whether a step meets the settings, and if not, why. A drained
+// step with more than MaxForeignShare of other traffic does not count: what
+// it measured was not the instance alone. Failed requests come first: they
+// are the measurement's own, whatever else the counters show.
 func (s Step) Check(set Settings) (bool, string) {
 	total := s.Requests + s.Errors
+	foreign := s.ForeignShare(set)
 	switch {
 	case s.Error != "":
 		return false, s.Error
 	case s.Requests == 0:
 		return false, "no request was answered"
-	case float64(s.Errors) > maxErrorShare*float64(total):
+	case float64(s.Errors) > set.errorShare()*float64(total):
 		return false, fmt.Sprintf("%d of %d requests failed", s.Errors, total)
+	case set.Mode == ModeDrained && foreign != nil && *foreign > MaxForeignShare:
+		return false, fmt.Sprintf("contaminated: %.0f%% of the prompt tokens the instance counted were not the measurement's; something still sends to it, such as a client of the site's own route",
+			*foreign*100)
 	case s.TTFTP95 > set.TTFTMillis:
 		return false, fmt.Sprintf("time to first token p95 %.0f ms is over %.0f ms", s.TTFTP95, set.TTFTMillis)
 	case s.ITLP95 > set.ITLMillis:
@@ -214,33 +299,43 @@ type StepView struct {
 	InputPerSecond  float64  `json:"input_per_s"`
 	OutputPerSecond float64  `json:"output_per_s"`
 	CachedShare     *float64 `json:"cached_share"`
+	// ForeignShare is the part of the instance's prompt tokens that other
+	// traffic sent: a failure when drained, shown when live. BeyondSent is
+	// what the instance counted beyond what was sent, shown only.
+	ForeignShare *float64 `json:"foreign_share"`
+	BeyondSent   *float64 `json:"beyond_sent"`
 }
 
 // Analyze finds the highest load the instance serves at the promised
-// latency. It stops at the first step that misses: a step above it that
-// passes again is noise, not capacity.
+// latency: the highest step that met the targets below the lowest step that
+// missed them. Steps come in the order they ran; with bisection that is not
+// ascending. A step that passes above one that missed is noise, not
+// capacity.
 func Analyze(set Settings, steps []Step) Result {
 	r := Result{Steps: make([]StepView, 0, len(steps))}
-	missed := false
+	lowestMiss, why := 0, ""
+	met := make([]bool, len(steps))
 	for i := range steps {
 		s := &steps[i]
-		ok, why := s.Check(set)
-		r.Steps = append(r.Steps, StepView{Concurrency: s.Concurrency, Met: ok, Reason: why,
+		ok, reason := s.Check(set)
+		met[i] = ok
+		r.Steps = append(r.Steps, StepView{Concurrency: s.Concurrency, Met: ok, Reason: reason,
 			FewSamples:     s.Error == "" && s.Requests < set.MinRequests,
-			InputPerSecond: s.InputPerSecond(), OutputPerSecond: s.OutputPerSecond(), CachedShare: s.CachedShare()})
-		switch {
-		case missed:
-		case !ok:
-			r.Limit = fmt.Sprintf("at %d in flight: %s", s.Concurrency, why)
-			missed = true
-		default:
-			r.Best = s
+			InputPerSecond: s.InputPerSecond(), OutputPerSecond: s.OutputPerSecond(), CachedShare: s.CachedShare(),
+			ForeignShare: s.ForeignShare(set), BeyondSent: s.CountedBeyondSent(set)})
+		if !ok && (lowestMiss == 0 || s.Concurrency < lowestMiss) {
+			lowestMiss, why = s.Concurrency, reason
 		}
 	}
-	if missed {
-		return r
+	for i := range steps {
+		if met[i] && (lowestMiss == 0 || steps[i].Concurrency < lowestMiss) && (r.Best == nil || steps[i].Concurrency > r.Best.Concurrency) {
+			r.Best = &steps[i]
+		}
 	}
-	if r.Best != nil {
+	switch {
+	case lowestMiss > 0:
+		r.Limit = fmt.Sprintf("at %d in flight: %s", lowestMiss, why)
+	case r.Best != nil:
 		r.Limit = fmt.Sprintf("every step met the targets; the instance may serve more than %d in flight", r.Best.Concurrency)
 	}
 	return r

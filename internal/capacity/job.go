@@ -27,26 +27,66 @@ type JobSpec struct {
 	Namespace string
 	Image     string
 	// URL is the instance, for example http://10.0.0.5:8000, and Model the
-	// name it serves the model under.
+	// name it serves the model under. A prefill/decode deployment has Peer
+	// instead: it is measured through its scheduler on the gateway's peer
+	// listener, and the Job runs in the gateway's namespace.
 	URL      string
 	Model    string
+	Peer     *Peer
 	Settings Settings
+	// MetricsURLs are the pods whose vLLM counters the measurement reads:
+	// the pod measured, or every decode pod. Empty is URL.
+	MetricsURLs []string
+}
+
+// Peer is where a Job reaches the gateway's peer listener: the address of
+// the site's own gateway, the server name the listener answers to, and the
+// secret and ConfigMap with the site's client certificate and the CA.
+type Peer struct {
+	Address      string
+	SNI          string
+	ClientSecret string
+	CAConfigMap  string
 }
 
 // Job returns the Job that runs a measurement. It never restarts: a second
 // try would measure a warm cache and a half-done step as if they were one.
 func Job(spec JobSpec) (*unstructured.Unstructured, error) {
-	config, err := json.Marshal(map[string]any{
-		"url":           spec.URL,
-		"model":         spec.Model,
-		"settings":      spec.Settings,
-		"grace_seconds": stepGrace,
-		"agentic":       Agentic(spec.Settings),
-	})
+	cfg := map[string]any{
+		"url":               spec.URL,
+		"model":             spec.Model,
+		"settings":          spec.Settings,
+		"grace_seconds":     stepGrace,
+		"agentic":           Agentic(spec.Settings),
+		"metrics_urls":      spec.MetricsURLs,
+		"wait_idle_seconds": idleWait,
+		"settle_seconds":    settleWait,
+		"quiet_seconds":     quietSpell,
+	}
+	mounts := []any{map[string]any{"name": "work", "mountPath": "/tmp"}}
+	volumes := []any{map[string]any{"name": "work", "emptyDir": map[string]any{}}}
+	if p := spec.Peer; p != nil {
+		cfg["peer"] = map[string]string{"address": p.Address, "sni": p.SNI,
+			"cert": "/peer/tls.crt", "key": "/peer/tls.key", "ca": "/peer-ca/ca.crt"}
+		mounts = append(mounts,
+			map[string]any{"name": "peer", "mountPath": "/peer", "readOnly": true},
+			map[string]any{"name": "peer-ca", "mountPath": "/peer-ca", "readOnly": true})
+		volumes = append(volumes,
+			map[string]any{"name": "peer", "secret": map[string]any{"secretName": p.ClientSecret}},
+			map[string]any{"name": "peer-ca", "configMap": map[string]any{"name": p.CAConfigMap}})
+	}
+	config, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, err
 	}
 	labels := map[string]any{ManagedByLabel: "aigw-ui", RunLabel: spec.RunID}
+	// Through the peer listener the Job also runs the proxy, which passes
+	// every token on: with AIPerf on two CPUs it adds to the time between
+	// tokens at a few hundred streams, on four it does not.
+	cpus := "2"
+	if spec.Peer != nil {
+		cpus = "4"
+	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "batch/v1",
 		"kind":       "Job",
@@ -81,16 +121,16 @@ func Job(spec JobSpec) (*unstructured.Unstructured, error) {
 						},
 						"workingDir": "/tmp",
 						"resources": map[string]any{
-							"requests": map[string]any{"cpu": "2", "memory": "4Gi"},
+							"requests": map[string]any{"cpu": cpus, "memory": "4Gi"},
 							"limits":   map[string]any{"memory": "8Gi"},
 						},
 						"securityContext": map[string]any{
 							"allowPrivilegeEscalation": false,
 							"capabilities":             map[string]any{"drop": []any{"ALL"}},
 						},
-						"volumeMounts": []any{map[string]any{"name": "work", "mountPath": "/tmp"}},
+						"volumeMounts": mounts,
 					}},
-					"volumes": []any{map[string]any{"name": "work", "emptyDir": map[string]any{}}},
+					"volumes": volumes,
 				},
 			},
 		},
@@ -99,14 +139,19 @@ func Job(spec JobSpec) (*unstructured.Unstructured, error) {
 
 // Agentic returns AIPerf's coding-agent session settings for a measurement.
 // They are AIPerf's own defaults, in which a prompt grows to 167,000 tokens
-// and is about 100,000 on average, without the pauses between turns. A smaller longest prompt scales every
-// part of a session by the same factor, so the share of a prompt that other
-// sessions share stays the same.
+// and is about 100,000 on average, with the profile's shared system prompt
+// and pauses (none by default). A smaller longest prompt scales every part of
+// a session by the same factor, so the share of a prompt that other sessions
+// share stays the same.
 func Agentic(s Settings) map[string]any {
 	f := math.Min(float64(s.MaxPromptTokens)/agenticMaxPrompt, 1)
 	tokens := func(n float64) float64 { return math.Max(math.Round(n*f), 1) }
 	answer := math.Min(1000, math.Round(float64(s.MaxOutputTokens)*2/3))
 	block := math.Min(512, math.Max(64, math.Round(512*f/16)*16))
+	shared := 32000.0
+	if s.SharedPrefixTokens > 0 {
+		shared = float64(s.SharedPrefixTokens)
+	}
 	return map[string]any{
 		"new_tokens_per_turn": map[string]any{"mean": tokens(6000), "median": tokens(6000), "max": tokens(10000), "bias": 1.1},
 		"generation_length":   map[string]any{"mean": answer, "median": answer, "max": float64(s.MaxOutputTokens)},
@@ -117,13 +162,13 @@ func Agentic(s Settings) map[string]any {
 			"agentic_fraction": 0.7,
 			"agentic_delay":    map[string]any{"mean": 2500, "median": 1800, "max": 10000},
 			"human_delay":      map[string]any{"mean": 40000, "median": 25000, "max": 120000},
-			"max":              0,
+			"max":              s.PauseMillis,
 		},
 		"reset":             map[string]any{"base_probability": 0.01, "context_scaling": 1.5},
 		"max_prompt_tokens": s.MaxPromptTokens,
 		"block_size":        int(block),
 		"cache": map[string]any{
-			"layer1_tokens":   int(tokens(32000)),
+			"layer1_tokens":   int(tokens(shared)),
 			"layer1_5_tokens": 0,
 			"layer2":          map[string]any{"mean": tokens(15000), "median": tokens(5000), "max": tokens(30000)},
 			"layer1_5_groups": map[string]any{"num_groups": 1, "zipf_alpha": 0.6},

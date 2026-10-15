@@ -15,19 +15,29 @@ func TestCapacityRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := capacity.Defaults(0)
+	profile, err := s.ActiveProfile(ctx)
+	if err != nil || profile.Version != 1 || profile.Sweep.BisectSteps != 2 || profile.Workload.SharedPrefixTokens != 32000 {
+		t.Fatalf("seeded profile = %+v, %v", profile, err)
+	}
+	set := profile.Settings(0, capacity.ModeDrained)
 	b300 := capacity.Shape{Topology: "single", GPU: "NVIDIA-B300", GPUsPerInstance: 8}
 	h200 := capacity.Shape{Topology: "single", GPU: "NVIDIA-H200", GPUsPerInstance: 8}
-	const first, second, third = "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-000000000003"
-	newRun := func(id string, shape capacity.Shape) NewRun {
-		return NewRun{ID: id, ModelID: glm, ClusterID: site.ID, Namespace: "llm", Deployment: "glm", Instance: "glm-0", JobName: "aigw-capacity-" + id[len(id)-1:], Shape: shape, Settings: set}
+	const first, second, third, legacy = "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002",
+		"00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000004"
+	newRun := func(id, deployment, spec string, shape capacity.Shape) NewRun {
+		return NewRun{ID: id, ModelID: glm, ClusterID: site.ID, Namespace: "llm", Deployment: deployment, Instance: deployment + "-0",
+			JobName: "aigw-capacity-" + id[len(id)-1:], Shape: shape, Settings: set, SpecHash: spec, Profile: profile,
+			Phase: PhaseDraining, StartedBy: ByCampaign, InstancesDuring: 1}
 	}
-	if err := s.CreateCapacityRun(ctx, newRun(first, b300)); err != nil {
+	if err := s.CreateCapacityRun(ctx, newRun(first, "glm-b300", "s1", b300)); err != nil {
 		t.Fatal(err)
 	}
 	// One running measurement per model.
-	if err := s.CreateCapacityRun(ctx, newRun(second, h200)); !errors.Is(err, ErrConflict) {
+	if err := s.CreateCapacityRun(ctx, newRun(second, "glm-h200", "h1", h200)); !errors.Is(err, ErrConflict) {
 		t.Fatalf("second running run: %v", err)
+	}
+	if err := s.SetRunPhase(ctx, first, PhaseMeasuring); err != nil {
+		t.Fatal(err)
 	}
 
 	steps := []capacity.Step{
@@ -39,7 +49,9 @@ func TestCapacityRuns(t *testing.T) {
 	}
 	running, err := s.RunningCapacityRuns(ctx)
 	if err != nil || len(running) != 1 || running[0].ModelName != "glm" || running[0].ClusterName != "site-a" || len(running[0].Steps) != 2 ||
-		running[0].Dataset.PromptMean != 99000 || running[0].Shape != b300 || running[0].Deployment != "glm" {
+		running[0].Dataset.PromptMean != 99000 || running[0].Shape != b300 || running[0].Deployment != "glm-b300" ||
+		running[0].Phase != PhaseMeasuring || running[0].StartedBy != ByCampaign || running[0].Mode != capacity.ModeDrained ||
+		running[0].SpecHash != "s1" || *running[0].ProfileVersion != 1 || *running[0].ProfileID != profile.ID {
 		t.Fatalf("running = %+v, %v", running, err)
 	}
 	if latest, _ := s.LatestCapacityRuns(ctx); len(latest) != 0 {
@@ -57,21 +69,27 @@ func TestCapacityRuns(t *testing.T) {
 	}
 	run, err := s.GetCapacityRun(ctx, first)
 	if err != nil || run.Status != RunSucceeded || run.FinishedAt == nil || run.Result.Best == nil || run.Result.Best.Concurrency != 1 ||
-		run.Settings.StepSeconds != set.StepSeconds || len(run.Result.Steps) != 2 {
+		run.Settings.StepSeconds != set.StepSeconds || len(run.Result.Steps) != 2 || run.PerInstance() == nil {
 		t.Fatalf("run = %+v, %v", run, err)
 	}
 
-	// A second shape keeps its own latest result; a newer run of the first
-	// shape that found nothing does not replace the first.
+	// A second LLMI keeps its own latest result; a newer run of the first
+	// that found nothing does not replace it; a run of a shape from before
+	// 0.16, with no spec, counts for nothing.
 	for _, r := range []struct {
-		id    string
-		shape capacity.Shape
-		steps []capacity.Step
+		id, deployment, spec string
+		shape                capacity.Shape
+		steps                []capacity.Step
 	}{
-		{second, h200, steps[:1]},
-		{third, b300, []capacity.Step{{Concurrency: 1, Requests: 60, TTFTP95: 99999}}},
+		{second, "glm-h200", "h1", h200, steps[:1]},
+		{third, "glm-b300", "s1", b300, []capacity.Step{{Concurrency: 1, Requests: 60, TTFTP95: 99999}}},
+		{legacy, "glm-b300", "", b300, steps[:1]},
 	} {
-		if err := s.CreateCapacityRun(ctx, newRun(r.id, r.shape)); err != nil {
+		n := newRun(r.id, r.deployment, r.spec, r.shape)
+		if r.spec == "" {
+			n.Profile = capacity.Profile{}
+		}
+		if err := s.CreateCapacityRun(ctx, n); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.UpdateCapacityRun(ctx, r.id, nil, r.steps); err != nil {
@@ -85,9 +103,12 @@ func TestCapacityRuns(t *testing.T) {
 	if err != nil || len(latest) != 2 {
 		t.Fatalf("latest = %+v, %v", latest, err)
 	}
-	got := map[string]string{latest[0].Shape.GPU: latest[0].ID, latest[1].Shape.GPU: latest[1].ID}
-	if got["NVIDIA-B300"] != first || got["NVIDIA-H200"] != second {
-		t.Fatalf("latest by shape = %v", got)
+	got := map[string]string{latest[0].Deployment: latest[0].ID, latest[1].Deployment: latest[1].ID}
+	if got["glm-b300"] != first || got["glm-h200"] != second {
+		t.Fatalf("latest by LLMI = %v", got)
+	}
+	if err := s.DeleteCapacityRun(ctx, legacy); err != nil {
+		t.Fatal(err)
 	}
 	runs, err := s.ListCapacityRuns(ctx, glm)
 	if err != nil || len(runs) != 3 || runs[0].ID != third {
@@ -98,6 +119,73 @@ func TestCapacityRuns(t *testing.T) {
 	}
 	if _, err := s.GetCapacityRun(ctx, third); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted run: %v", err)
+	}
+}
+
+// A drained run drains its site in the transaction that records it, and
+// restores it in the one that ends it: no drain outlives its run, and none
+// is made for a run that is not recorded.
+func TestDrainedRun(t *testing.T) {
+	s, ctx := open(t)
+	glm := model(t, s, ctx, "glm", false)
+	var sites []string
+	for _, name := range []string{"site-a", "site-b"} {
+		c, err := s.CreateCluster(ctx, Cluster{Name: name, Namespace: "ai-gateway", GatewayName: "gw"}, []byte("kubeconfig"), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(ctx, `UPDATE clusters SET fleet_enabled = true WHERE id = $1;`, c.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(ctx, `INSERT INTO model_endpoints (model_id, cluster_id, upstream_model, source, backends, capacity_applied)
+			VALUES ($1, $2, '', 'discovered', '[]', 2)`, glm, c.ID); err != nil {
+			t.Fatal(err)
+		}
+		sites = append(sites, c.ID)
+	}
+	drained := func(site string) bool {
+		t.Helper()
+		var d bool
+		if err := s.db.QueryRow(ctx, `SELECT drained FROM model_endpoints WHERE model_id = $1 AND cluster_id = $2`, glm, site).Scan(&d); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	profile, _ := s.ActiveProfile(ctx)
+	run := func(id, site string) NewRun {
+		return NewRun{ID: id, ModelID: glm, ClusterID: site, Namespace: "llm", Deployment: "glm", JobName: "aigw-capacity-" + id[len(id)-1:],
+			Settings: profile.Settings(0, capacity.ModeDrained), SpecHash: "s", Profile: profile, Phase: PhaseDraining, DrainedSite: true}
+	}
+	const first, second, third = "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-000000000003"
+	if err := s.CreateCapacityRun(ctx, run(first, sites[0])); err != nil || !drained(sites[0]) {
+		t.Fatalf("recorded: %v, drained %v", err, drained(sites[0]))
+	}
+	// A second run of the model is refused, and its site is not drained.
+	if err := s.CreateCapacityRun(ctx, run(second, sites[1])); !errors.Is(err, ErrConflict) || drained(sites[1]) {
+		t.Fatalf("second: %v, drained %v", err, drained(sites[1]))
+	}
+	if err := s.FinishCapacityRun(ctx, first, RunFailed, "gave up"); err != nil || drained(sites[0]) {
+		t.Fatalf("ended: %v, drained %v", err, drained(sites[0]))
+	}
+	// With the other site drained by an operator, this one is the last: the
+	// run is refused and not recorded.
+	if _, _, err := s.SetDrained(ctx, glm, sites[1], true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateCapacityRun(ctx, run(third, sites[0])); !errors.Is(err, ErrLastSite) || drained(sites[0]) {
+		t.Fatalf("last site: %v, drained %v", err, drained(sites[0]))
+	}
+	if _, err := s.GetCapacityRun(ctx, third); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("refused run recorded: %v", err)
+	}
+	// A run that did not drain its site leaves an operator's drain alone.
+	n := run(third, sites[1])
+	n.DrainedSite = false
+	if err := s.CreateCapacityRun(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishCapacityRun(ctx, third, RunSucceeded, ""); err != nil || !drained(sites[1]) {
+		t.Fatalf("operator's drain: %v, drained %v", err, drained(sites[1]))
 	}
 }
 
@@ -121,19 +209,22 @@ func TestDeploymentsFromDiscovery(t *testing.T) {
 		}
 	}
 	report(
-		Deployment{Namespace: "llm", Name: "glm-b300", Topology: "single", GPU: "NVIDIA-B300", GPUsPerInstance: 8, Instances: &two},
+		Deployment{Namespace: "llm", Name: "glm-b300", Topology: "single", GPU: "NVIDIA-B300", GPUsPerInstance: 8, Instances: &two,
+			SpecHash: "abc", Quantization: "modelopt_fp4", LMCache: true, DecodeReplicas: 2},
 		Deployment{Namespace: "llm", Name: "glm-pd", Topology: "prefill-decode", GPU: "NVIDIA-H200", GPUsPerInstance: 24},
 	)
 	all, err := s.ListDeployments(ctx)
 	if err != nil || len(all) != 2 || all[0].Name != "glm-b300" || *all[0].Instances != 2 || all[0].ModelID != glm || all[0].ClusterName != "site-a" ||
-		all[1].Instances != nil || all[1].GPUsPerInstance != 24 {
+		all[1].Instances != nil || all[1].GPUsPerInstance != 24 || all[0].SpecHash != "abc" || all[0].Quantization != "modelopt_fp4" ||
+		!all[0].LMCache || all[0].DecodeReplicas != 2 || all[1].DecodeReplicas != 1 {
 		t.Fatalf("deployments = %+v, %v", all, err)
 	}
 	if d, err := s.GetDeployment(ctx, glm, site.ID, "llm", "glm-pd"); err != nil || d.Topology != "prefill-decode" {
 		t.Fatalf("one deployment = %+v, %v", d, err)
 	}
+	// No hash this time, as during a rollout: the one it had stays.
 	report(Deployment{Namespace: "llm", Name: "glm-b300", Topology: "single", GPU: "NVIDIA-B300", GPUsPerInstance: 8, Instances: &two})
-	if all, _ := s.ListDeployments(ctx); len(all) != 1 {
+	if all, _ := s.ListDeployments(ctx); len(all) != 1 || all[0].SpecHash != "abc" {
 		t.Fatalf("after one is gone: %+v", all)
 	}
 	// A cluster that reports nothing has none left.
@@ -242,6 +333,11 @@ func TestUsageSinceAndAllQuotas(t *testing.T) {
 	if err != nil || len(used) != 1 || used[0].Busiest != 170 || used[0].Total != 260 || used[0].ModelID != glm {
 		t.Fatalf("used = %+v, %v", used, err)
 	}
+	// By the hour, over the tenants, best-effort included.
+	hours, err := s.HourlyUse(ctx, day.Add(10*time.Hour))
+	if err != nil || len(hours) != 2 || hours[0].Used != 50 || !hours[0].Hour.Equal(day.Add(10*time.Hour)) || hours[1].Used != 90 || hours[1].Unit != UnitTokens {
+		t.Fatalf("hours = %+v, %v", hours, err)
+	}
 
 	if err := s.UpsertQuota(ctx, a.ID, glm, 1000, "1h", nil); err != nil {
 		t.Fatal(err)
@@ -252,5 +348,27 @@ func TestUsageSinceAndAllQuotas(t *testing.T) {
 	quotas, err := s.AllQuotas(ctx)
 	if err != nil || len(quotas) != 2 {
 		t.Fatalf("quotas = %+v, %v", quotas, err)
+	}
+}
+
+// Editing the profile adds a version and makes it the active one; the earlier
+// versions stay.
+func TestProfiles(t *testing.T) {
+	s, ctx := open(t)
+	p, err := s.ActiveProfile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SLO.TTFTMillis, p.Note = 3000, "tighter"
+	v2, err := s.AddProfileVersion(ctx, p)
+	if err != nil || v2.Version != 2 || !v2.Active || v2.SLO.TTFTMillis != 3000 || v2.ID == p.ID {
+		t.Fatalf("v2 = %+v, %v", v2, err)
+	}
+	all, err := s.ListProfiles(ctx)
+	if err != nil || len(all) != 2 || all[0].Version != 2 || all[1].Active || all[1].SLO.TTFTMillis != 5000 {
+		t.Fatalf("profiles = %+v, %v", all, err)
+	}
+	if active, _ := s.ActiveProfile(ctx); active.Version != 2 {
+		t.Fatalf("active = %d", active.Version)
 	}
 }

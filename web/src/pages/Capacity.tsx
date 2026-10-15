@@ -2,7 +2,10 @@ import { Fragment, useState } from "react";
 import { Gauge } from "lucide-react";
 import {
   api,
+  type BenchmarkProfile,
+  type Campaign,
   type CapacityGPU,
+  type CapacityLLMI,
   type CapacityModel,
   type CapacityPlan,
   type CapacityPrices,
@@ -50,7 +53,8 @@ export default function Capacity() {
   const { data, error, reload } = useLoad(api.capacity);
   const running = data?.models.some((m) => m.running) ?? false;
   usePolling(reload, running ? 15_000 : 60_000);
-  const [measuring, setMeasuring] = useState<{ m: CapacityModel; shape: string } | null>(null);
+  const [measuring, setMeasuring] = useState<{ m: CapacityModel; llmi: CapacityLLMI } | null>(null);
+  const [profiling, setProfiling] = useState(false);
   const [history, setHistory] = useState<CapacityModel | null>(null);
   const [costing, setCosting] = useState(false);
   const [pricesFor, setPricesFor] = useState<{ model: Model; suggested: CapacityPrices; note: string } | null>(null);
@@ -82,8 +86,11 @@ export default function Capacity() {
     <section>
       <PageHeader
         title="Capacity"
-        subtitle="What each shape of a model serves at the latency you promise, what the model can therefore be given a day at its prices, and how much of that the budgets take. GPU costs are optional: they add what the GPUs cost and a price that would pay for them, to check the prices against."
+        subtitle="What each LLMInferenceService of a model serves at the latency you promise, measured with one benchmark profile, what the model can therefore be given a day at its prices, and how much of that the budgets take. GPU costs are optional: they add what the GPUs cost and a price that would pay for them, to check the prices against."
       >
+        <button onClick={() => setProfiling(true)} title="The one benchmark every LLMInferenceService is measured with. Editing it makes a new version.">
+          Benchmark profile
+        </button>
         <button
           onClick={() => setCosting(true)}
           title="Optional. What each GPU costs an hour, used only on this page. Tenants pay the model's prices, the same on every site and GPU."
@@ -108,20 +115,41 @@ export default function Capacity() {
           <LeftToGive left={total((p) => p.left_day)} format={formatDollars} /> a day.
         </div>
       )}
+      {data && <ProfileLine profile={data.profile} onEdit={() => setProfiling(true)} />}
+      {data && <CampaignPanel campaign={data.campaign} models={data.models} />}
       {data?.models.length === 0 && <Empty icon={Gauge}>No models yet. Add one on the Models page.</Empty>}
       {data?.models.map((m) => (
         <ModelCard
           key={m.model_id}
           m={m}
           canMeasure={!!data.image && !action.busy}
-          onMeasure={(shape) => setMeasuring({ m, shape })}
+          peerMeasurements={data.peer_measurements}
+          onMeasure={(llmi) => setMeasuring({ m, llmi })}
           onHistory={() => setHistory(m)}
           onStop={stop}
           onChanged={reload}
           onUsePrices={() => usePrices(m)}
         />
       ))}
-      {measuring && <MeasureForm m={measuring.m} shape={measuring.shape} onClose={() => setMeasuring(null)} onStarted={reload} />}
+      {measuring && data && (
+        <MeasureForm
+          m={measuring.m}
+          llmi={measuring.llmi}
+          profile={data.profile}
+          onClose={() => setMeasuring(null)}
+          onStarted={reload}
+        />
+      )}
+      {profiling && data && (
+        <ProfileForm
+          profile={data.profile}
+          onClose={() => setProfiling(false)}
+          onSaved={async () => {
+            setProfiling(false);
+            await reload();
+          }}
+        />
+      )}
       {history && <RunHistory m={history} onClose={() => setHistory(null)} onChanged={reload} />}
       {costing && data && <GPUCosts gpus={data.gpus} onClose={() => setCosting(false)} onChanged={reload} />}
       {pricesFor && (
@@ -144,7 +172,8 @@ export default function Capacity() {
 function ModelCard(props: {
   m: CapacityModel;
   canMeasure: boolean;
-  onMeasure: (shape: string) => void;
+  peerMeasurements: boolean;
+  onMeasure: (llmi: CapacityLLMI) => void;
   onHistory: () => void;
   onStop: (run: CapacityRun) => void;
   onChanged: () => Promise<void>;
@@ -185,7 +214,6 @@ function ModelCard(props: {
       await props.onChanged();
     });
   };
-  const latest = (key: string) => m.latest.find((r) => r.shape.key === key);
 
   return (
     <div className="card">
@@ -215,7 +243,7 @@ function ModelCard(props: {
       </div>
       <ErrorBanner message={action.error} />
       {m.running && <Running run={m.running} />}
-      {m.deployments.length === 0 ? (
+      {m.llmis.length === 0 ? (
         <p className="detail">No site has a deployment of this model, or discovery has not read it yet.</p>
       ) : (
         <>
@@ -224,37 +252,38 @@ function ModelCard(props: {
             <table className="plain">
               <thead>
                 <tr>
-                  <th>Shape</th>
-                  <th>Sites</th>
+                  <th>LLMInferenceService</th>
                   <th className="text-right">Ready</th>
                   <th className="text-right wrap">In flight within targets</th>
                   <th className="text-right wrap">One instance a day</th>
                   <th className="text-right wrap">Cost an hour</th>
-                  <th className="text-right wrap" title="What a million input-equivalent tokens cost on this shape busy all day">
+                  <th className="text-right wrap" title="What a million input-equivalent tokens cost on this LLMI busy all day">
                     Cost per 1M
                   </th>
                   <th />
                 </tr>
               </thead>
               <tbody>
-                {m.plan.shapes.map((s) => {
-                  const run = latest(s.shape.key);
+                {m.llmis.map((l, i) => {
+                  const key = `${l.cluster_id}/${l.namespace}/${l.name}`;
                   return (
-                    <Fragment key={s.shape.key}>
-                      <ShapeRow
-                        s={s}
+                    <Fragment key={key}>
+                      <LLMIRow
+                        l={l}
+                        s={m.plan.shapes[i]}
                         unit={m.unit}
-                        run={run}
-                        canMeasure={props.canMeasure && !m.running && s.shape.topology !== "prefill-decode"}
-                        open={open === s.shape.key}
-                        onToggle={() => setOpen(open === s.shape.key ? "" : s.shape.key)}
-                        onMeasure={() => props.onMeasure(s.shape.key)}
+                        version={m.profile_version}
+                        canMeasure={props.canMeasure && !m.running}
+                        peerMeasurements={props.peerMeasurements}
+                        open={open === key}
+                        onToggle={() => setOpen(open === key ? "" : key)}
+                        onMeasure={() => props.onMeasure(l)}
                       />
-                      {open === s.shape.key && run && (
+                      {open === key && l.run && (
                         <tr>
-                          <td colSpan={8}>
+                          <td colSpan={7}>
                             <div className="run-cell">
-                              <RunDetail run={run} />
+                              <RunDetail run={l.run} />
                             </div>
                           </td>
                         </tr>
@@ -276,28 +305,55 @@ function ModelCard(props: {
   );
 }
 
-function ShapeRow(props: {
+/** Why a result should be measured again. */
+const staleText: Record<string, string> = {
+  spec: "its spec, a config it is built on or its image changed since",
+  profile: "measured with an earlier version of the profile",
+  age: "older than 30 days",
+};
+
+function LLMIRow(props: {
+  l: CapacityLLMI;
   s: CapacityShapePlan;
   unit: Unit;
-  run?: CapacityRun;
+  version: number;
   canMeasure: boolean;
+  peerMeasurements: boolean;
   open: boolean;
   onToggle: () => void;
   onMeasure: () => void;
 }) {
-  const { s, run } = props;
-  const pd = s.shape.topology === "prefill-decode";
+  const { l, s } = props;
+  const run = l.run;
+  const serving = [l.quantization && `quantization ${l.quantization}`, l.lmcache && "LMCache"].filter(Boolean).join(", ");
   return (
     <tr>
       <td className="shape-cell">
-        {s.shape.label}
-        {run && (
+        <span className="strong">{l.cluster_name}</span> · {l.namespace}/{l.name}
+        <div className="detail">
+          {l.shape.label}
+          {serving && ` · ${serving}`}
+          {l.spec_hash && (
+            <span className="mono" title={`What it runs, whatever its scale: ${l.spec_hash}`}>
+              {" "}
+              · spec {l.spec_hash.slice(0, 8)}
+            </span>
+          )}
+        </div>
+        {run ? (
           <div className="detail">
-            Measured {formatTime(run.created_at)} on {run.cluster_name}
+            Measured {formatTime(run.finished_at ?? run.created_at)}, profile version {props.version}
+            {run.mode === "live" && (
+              <span className="tag warn" title="Measured while it served users: their traffic makes the result lower than what it serves alone">
+                live
+              </span>
+            )}
+            {l.stale && <span className="tag warn">stale: {staleText[l.stale] ?? l.stale}</span>}
           </div>
+        ) : (
+          <div className="detail warn-text">{l.why}</div>
         )}
       </td>
-      <td className="nowrap">{s.sites.join(", ")}</td>
       <td className="text-right tabular-nums">{s.instances}</td>
       <td className="text-right tabular-nums">{s.measured ? s.concurrency : <span className="tag warn">not measured</span>}</td>
       <td className="text-right tabular-nums">{s.measured ? perDay(s.per_instance_day, props.unit) : "–"}</td>
@@ -305,18 +361,23 @@ function ShapeRow(props: {
       <td className="text-right tabular-nums">{s.cost_per_million == null ? "–" : formatPrice(s.cost_per_million)}</td>
       <td className="row-actions">
         {run && <button onClick={props.onToggle}>{props.open ? "Hide steps" : "Steps"}</button>}
-        <button
-          className={s.measured ? undefined : "primary"}
-          disabled={!props.canMeasure}
-          title={
-            pd
-              ? "An instance of this shape is prefill and decode pods together, which is not measured yet."
-              : "Measure one ready pod of this shape with AIPerf. It runs as a Job on its cluster."
-          }
-          onClick={props.onMeasure}
-        >
-          Measure
-        </button>
+        {l.topology === "prefill-decode" && !props.peerMeasurements ? (
+          <span
+            className="detail"
+            title="Its Job would run in the gateway's namespace with the site's peer client certificate, which reaches every model on the peer listener with no key and no quota. Turn on capacity.peerMeasurements to measure it; see the security guide."
+          >
+            Measuring prefill/decode is off
+          </span>
+        ) : (
+          <button
+            className={s.measured && !l.stale ? undefined : "primary"}
+            disabled={!props.canMeasure}
+            title="Measure it with the benchmark profile: AIPerf in a Job on its cluster."
+            onClick={props.onMeasure}
+          >
+            Measure
+          </button>
+        )}
       </td>
     </tr>
   );
@@ -344,7 +405,7 @@ function Summary({ plan, onUsePrices }: { plan: CapacityPlan; onUsePrices: () =>
         {plan.capacity_day > 0 ? (
           <Bar label="Given to tenants, against the ceiling" used={plan.given_day} limit={plan.ceiling_day} format={show} />
         ) : (
-          <p className="detail">Nothing yet: no measured shape has a ready instance.</p>
+          <p className="detail">Nothing yet: no measured LLMInferenceService has a ready instance.</p>
         )}
         {plan.measured_instances > 0 && (
           <>
@@ -442,16 +503,25 @@ function Summary({ plan, onUsePrices }: { plan: CapacityPlan; onUsePrices: () =>
 
 function Running({ run }: { run: CapacityRun }) {
   const last = run.steps[run.steps.length - 1];
+  const what = run.instance ? `pod ${run.namespace}/${run.instance}` : `${run.namespace}/${run.deployment}, every decode pod`;
+  if (run.phase === "draining") {
+    return (
+      <div className="banner info">
+        Draining {run.cluster_name} for {run.model_name} since {formatTime(run.created_at)}: the entry route's weight steps
+        down to 0, then {what} is measured with no user traffic. The site comes back with the usual steps afterwards.
+      </div>
+    );
+  }
   return (
-    <div className="banner info">
-      Measuring {run.shape.label}: pod {run.namespace}/{run.instance} on {run.cluster_name} since{" "}
-      {formatTime(run.created_at)}.{" "}
+    <div className={run.mode === "live" ? "banner warn" : "banner info"}>
+      Measuring {what} on {run.cluster_name}
+      {run.mode === "live" ? ", with its users," : ", drained,"} since {formatTime(run.created_at)}.{" "}
       {last
-        ? `${run.steps.length} of ${run.settings.concurrency.length} steps done, the last at ${last.concurrency} in flight.`
+        ? `${run.steps.length} ${run.steps.length === 1 ? "step" : "steps"} done, the last at ${last.concurrency} in flight.`
         : run.dataset
           ? `${run.dataset.sessions} sessions made up, prompts up to ${run.dataset.prompt_max.toLocaleString("en-US")} tokens; the first step is running.`
           : "Making up the sessions."}{" "}
-      It stops at the first step that misses a target.
+      The load doubles until a step misses a target, then the gap is halved.
     </div>
   );
 }
@@ -460,7 +530,9 @@ function RunDetail({ run }: { run: CapacityRun }) {
   return (
     <>
       <p className="detail">
-        Pod {run.namespace}/{run.instance}.{" "}
+        {run.instance ? `Pod ${run.namespace}/${run.instance}` : `${run.namespace}/${run.deployment} through its scheduler, over ${run.instances_during} decode pods`}
+        {run.profile_version != null && `, profile version ${run.profile_version}`}
+        {run.mode && `, ${run.mode}`}.{" "}
         {run.dataset &&
           `${run.dataset.sessions} sessions, prompts of ${Math.round(run.dataset.prompt_mean).toLocaleString("en-US")} tokens on average and up to ${run.dataset.prompt_max.toLocaleString("en-US")}. `}
         {run.result.limit && `${sentence(run.result.limit)}.`}
@@ -527,6 +599,17 @@ function Steps({ run }: { run: CapacityRun }) {
                       missed
                     </span>
                   )}
+                  {v.foreign_share != null && v.foreign_share > 0.01 && (
+                    <span
+                      className={v.met ? "tag" : "tag warn"}
+                      title={
+                        "The part of the prompt tokens the instance counted that the measurement did not send" +
+                        (v.beyond_sent != null ? `; counted beyond what was sent: ${percent(v.beyond_sent)}` : "")
+                      }
+                    >
+                      {percent(v.foreign_share)} other traffic
+                    </span>
+                  )}
                   {v.few_samples && (
                     <span className="tag warn" title="The step reached its longest time before enough requests were answered">
                       few samples
@@ -542,139 +625,268 @@ function Steps({ run }: { run: CapacityRun }) {
   );
 }
 
-const targetKey = (x: { cluster_id: string; namespace: string; name: string }) => `${x.cluster_id}/${x.namespace}/${x.name}`;
+/** The longest a measurement may take, as the server works it out: every step, its grace and start, the wait for an idle instance and the start of the Job. */
+function longest(p: BenchmarkProfile): string {
+  let steps = 1;
+  for (let c = Math.max(p.sweep.first_concurrency, 1); c < p.sweep.max_concurrency; c *= 2) steps++;
+  steps += p.sweep.bisect_steps;
+  const hours = (steps * (p.sweep.step_seconds + 300 + 60) + 600 + 900) / 3600;
+  return hours < 1 ? `${Math.round(hours * 60)} minutes` : `${hours.toFixed(1)} hours`;
+}
 
-function MeasureForm(props: { m: CapacityModel; shape: string; onClose: () => void; onStarted: () => Promise<void> }) {
-  const { m } = props;
-  const d = m.defaults;
-  const candidates = m.deployments.filter((x) => x.shape.key === props.shape && !x.drained);
-  const [target, setTarget] = useState(candidates[0] ? targetKey(candidates[0]) : "");
-  const chosen = candidates.find((x) => targetKey(x) === target);
-  const pods = useLoad(() => (chosen ? api.deploymentPods(chosen.cluster_id, chosen.namespace, chosen.name) : Promise.resolve([])));
+function MeasureForm(props: {
+  m: CapacityModel;
+  llmi: CapacityLLMI;
+  profile: BenchmarkProfile;
+  onClose: () => void;
+  onStarted: () => Promise<void>;
+}) {
+  const { m, llmi: l, profile: p } = props;
+  const pd = l.topology === "prefill-decode";
+  // A drained measurement needs another site to serve the model meanwhile;
+  // a site that is drained already needs none.
+  const canDrain = l.drained || m.sites > 1;
+  const [mode, setMode] = useState<"drained" | "live">(canDrain ? "drained" : "live");
+  const pods = useLoad(() => (pd ? Promise.resolve([]) : api.deploymentPods(l.cluster_id, l.namespace, l.name)));
   const [pod, setPod] = useState("");
-  const [accept, setAccept] = useState(false);
-  const [steps, setSteps] = useState(d.concurrency.join(", "));
-  const [minRequests, setMinRequests] = useState(String(d.min_requests));
-  const [stepSeconds, setStepSeconds] = useState(String(d.step_seconds));
-  const [sessions, setSessions] = useState(String(d.sessions));
-  const longest = chosen?.max_model_len ? Math.min(d.max_prompt_tokens, chosen.max_model_len - d.max_output_tokens) : d.max_prompt_tokens;
-  const [maxPrompt, setMaxPrompt] = useState(String(longest));
-  const [maxOutput, setMaxOutput] = useState(String(d.max_output_tokens));
-  const [ttft, setTTFT] = useState(String(d.ttft_p95_ms));
-  const [itl, setITL] = useState(String(d.itl_p95_ms));
+  const [confirmName, setConfirmName] = useState("");
 
   const start = async () => {
-    if (!chosen) throw new Error("Choose a deployment.");
-    if (!pod) throw new Error("Choose the pod to measure.");
-    if (!accept) throw new Error("Confirm that the pod's users may get slower answers.");
+    if (!pd && !pod) throw new Error("Choose the pod to measure.");
+    if (mode === "live" && confirmName !== m.model_name) throw new Error(`Type ${m.model_name} to confirm.`);
     await api.startCapacityRun(m.model_id, {
-      cluster_id: chosen.cluster_id,
-      namespace: chosen.namespace,
-      deployment: chosen.name,
-      pod,
-      settings: {
-        concurrency: steps
-          .split(/[\s,]+/)
-          .filter(Boolean)
-          .map(Number),
-        min_requests: Number(minRequests),
-        step_seconds: Number(stepSeconds),
-        sessions: Number(sessions),
-        max_prompt_tokens: Number(maxPrompt),
-        max_output_tokens: Number(maxOutput),
-        ttft_p95_ms: Number(ttft),
-        itl_p95_ms: Number(itl),
-      },
+      cluster_id: l.cluster_id,
+      namespace: l.namespace,
+      deployment: l.name,
+      pod: pd ? "" : pod,
+      mode,
+      confirm: mode === "live" ? confirmName : undefined,
     });
     await props.onStarted();
   };
 
   return (
-    <FormModal
-      title={`Measure ${m.model_name}: ${chosen?.shape.label ?? ""}`}
-      submitLabel="Start"
-      onClose={props.onClose}
-      onSubmit={start}
-      wide
-    >
+    <FormModal title={`Measure ${m.model_name} on ${l.cluster_name}: ${l.namespace}/${l.name}`} submitLabel="Start" onClose={props.onClose} onSubmit={start} wide>
       <p className="hint">
-        AIPerf runs in a Job on the cluster and sends made-up coding-agent sessions straight to one pod, past the gateway
-        and the scheduler: a shared system prompt and tools, repository files, and a history that grows each turn. Every
-        step keeps a number of requests in flight until enough are answered; the first step that misses a target ends the
-        measurement. The result counts for every deployment of this shape. Nothing of a prompt reaches this server, and no
-        tenant is charged.
+        AIPerf runs in a Job on the cluster with the benchmark profile {p.name}, version {p.version}: made-up coding-agent
+        sessions sent {pd ? "through the deployment's scheduler on the gateway's peer listener" : "straight to one pod"}, the
+        load doubling from {p.sweep.first_concurrency} in flight until a step misses p95 {seconds(p.slo.ttft_p95_ms)} to
+        the first token or {seconds(p.slo.itl_p95_ms)} between tokens, then the gap halved {p.sweep.bisect_steps === 1 ? "once" : `${p.sweep.bisect_steps} times`}.
+        It takes up to {longest(p)}. Nothing of a prompt reaches this server, and no tenant is charged.
       </p>
       <div className="grid-2">
-        <Field
-          label="Deployment"
-          hint={
-            chosen?.max_model_len
-              ? `Takes up to ${chosen.max_model_len.toLocaleString("en-US")} tokens.`
-              : "It does not declare how long a request it takes (aigw-ui.io/max-model-len). The Job asks the pod and stops at once if the longest prompt and answer do not fit."
-          }
-        >
-          <select
-            value={target}
-            onChange={(e) => {
-              setTarget(e.target.value);
-              setPod("");
-              setTimeout(pods.reload);
-            }}
-          >
-            {candidates.map((x) => (
-              <option key={targetKey(x)} value={targetKey(x)}>
-                {x.cluster_name}: {x.namespace}/{x.name} ({x.instances ?? "?"} ready)
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Pod" hint={pods.error || "A pod that takes no traffic gives the cleanest figure, such as one extra replica."}>
-          <select required value={pod} onChange={(e) => setPod(e.target.value)}>
-            <option value="">
-              {pods.error ? "The pods could not be read" : !pods.data ? "Reading the pods…" : pods.data.length ? "Choose a ready pod" : "No ready pod"}
+        <Field label="Mode">
+          <select value={mode} onChange={(e) => setMode(e.target.value as "drained" | "live")}>
+            <option value="drained" disabled={!canDrain}>
+              Drained: no user traffic{canDrain ? "" : " (no other site serves the model)"}
             </option>
-            {pods.data?.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
+            <option value="live">Live: while it serves its users</option>
           </select>
         </Field>
+        {!pd && (
+          <Field label="Pod" hint={pods.error || "Its instance is what is measured."}>
+            <select required value={pod} onChange={(e) => setPod(e.target.value)}>
+              <option value="">
+                {pods.error ? "The pods could not be read" : !pods.data ? "Reading the pods…" : pods.data.length ? "Choose a ready pod" : "No ready pod"}
+              </option>
+              {pods.data?.map((x) => (
+                <option key={x} value={x}>
+                  {x}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
       </div>
-      <label className="check">
-        <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} />
-        <span>The pod keeps its own traffic while it is measured, and its users get slower answers until it ends.</span>
-      </label>
-      <h3>Load</h3>
+      {mode === "drained" ? (
+        <p className="detail">
+          The entry route's weight for {l.cluster_name} steps down to 0, so its users go to the other sites; the measurement
+          starts when the site has no request in flight, and the weight comes back afterwards with the usual steps. A step
+          in which the instance served other traffic, such as a client of the site's own route, fails.
+        </p>
+      ) : (
+        <>
+          <div className="banner warn">
+            This LLMI serves users now. The benchmark adds load until it misses the SLO. Users of {m.model_name} on{" "}
+            {l.cluster_name} will get slower answers or errors for up to {longest(p)}, and their traffic makes the result
+            lower than what the LLMI could serve alone.
+          </div>
+          <Field label={`Type ${m.model_name} to confirm`}>
+            <input value={confirmName} onChange={(e) => setConfirmName(e.target.value)} autoComplete="off" />
+          </Field>
+        </>
+      )}
+    </FormModal>
+  );
+}
+
+/** The active benchmark profile, in one line. */
+function ProfileLine({ profile: p, onEdit }: { profile: BenchmarkProfile; onEdit: () => void }) {
+  return (
+    <p className="detail">
+      <span className="strong">
+        Benchmark profile {p.name}, version {p.version}:
+      </span>{" "}
+      prompts up to {short(p.workload.max_prompt_tokens)} tokens with a {short(p.workload.shared_prefix_tokens)} shared prefix,{" "}
+      {p.workload.pause_ms ? `pauses up to ${seconds(p.workload.pause_ms)}` : "no pause between turns"}; p95{" "}
+      {seconds(p.slo.ttft_p95_ms)} to the first token, {seconds(p.slo.itl_p95_ms)} between tokens, at most{" "}
+      {percent(p.slo.max_error_share)} errors; steps of up to {Math.round(p.sweep.step_seconds / 60)} minutes.{" "}
+      <button className="link" onClick={onEdit}>
+        change
+      </button>
+    </p>
+  );
+}
+
+/** What the hub measures by itself, and when. */
+function CampaignPanel({ campaign: c, models }: { campaign: Campaign; models: CapacityModel[] }) {
+  const name = (id: string) => models.find((m) => m.model_id === id)?.model_name ?? id;
+  return (
+    <div className="card">
+      <div className="dash-head">
+        <div>
+          <h2>Measuring by itself</h2>
+          <p className="detail">
+            {c.window
+              ? c.open
+                ? `Inside its window now (${c.window}): one drained measurement per site and per model at a time.`
+                : `In its window, ${c.window}; next from ${c.next ? formatTime(c.next) : "–"}.`
+              : "Never: set capacity.window in the chart, such as \"Fri 22:00 - Sat 06:00 Asia/Jerusalem\"."}{" "}
+            What is not measured comes first, then what is stale.
+          </p>
+        </div>
+      </div>
+      {c.queue.length === 0 ? (
+        <p className="detail">Every LLMInferenceService with a ready instance has a fresh result.</p>
+      ) : (
+        <div className="table-wrap">
+          <table className="plain">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>LLMInferenceService</th>
+                <th>Why</th>
+                <th>State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {c.queue.map((q) => (
+                <tr key={`${q.cluster_id}/${q.namespace}/${q.name}`}>
+                  <td>{name(q.model_id)}</td>
+                  <td>
+                    {q.cluster_name} · {q.namespace}/{q.name}
+                  </td>
+                  <td className="detail">{staleText[q.reason] ?? q.reason}</td>
+                  <td>
+                    <span className={q.state === "next" || q.state === "running" ? "tag" : "tag warn"}>{q.state}</span>
+                    {q.cover != null && q.cover < 1 && (
+                      <div className="detail">
+                        The other sites take {percent(q.cover)} of its busiest hour in the window.
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Edits the benchmark profile: saving makes a new version, which every measurement uses from then on. */
+function ProfileForm(props: { profile: BenchmarkProfile; onClose: () => void; onSaved: () => Promise<void> }) {
+  const p = props.profile;
+  const versions = useLoad(api.benchmarkProfiles);
+  const [f, setF] = useState({
+    name: p.name,
+    max_prompt_tokens: String(p.workload.max_prompt_tokens),
+    max_output_tokens: String(p.workload.max_output_tokens),
+    sessions: String(p.workload.sessions),
+    shared_prefix_tokens: String(p.workload.shared_prefix_tokens),
+    pause_ms: String(p.workload.pause_ms),
+    ttft_p95_ms: String(p.slo.ttft_p95_ms),
+    itl_p95_ms: String(p.slo.itl_p95_ms),
+    max_error_pct: String(p.slo.max_error_share * 100),
+    first_concurrency: String(p.sweep.first_concurrency),
+    bisect_steps: String(p.sweep.bisect_steps),
+    step_seconds: String(p.sweep.step_seconds),
+    min_requests: String(p.sweep.min_requests),
+    max_concurrency: String(p.sweep.max_concurrency),
+    note: "",
+  });
+  const field = (key: keyof typeof f, label: string, hint?: string) => (
+    <Field label={label} hint={hint}>
+      <input required={key !== "note"} value={f[key]} onChange={(e) => setF({ ...f, [key]: e.target.value })} />
+    </Field>
+  );
+  const save = async () => {
+    const n = (k: keyof typeof f) => Number(f[k]);
+    await api.setBenchmarkProfile({
+      name: f.name.trim(),
+      workload: {
+        max_prompt_tokens: n("max_prompt_tokens"),
+        max_output_tokens: n("max_output_tokens"),
+        sessions: n("sessions"),
+        shared_prefix_tokens: n("shared_prefix_tokens"),
+        pause_ms: n("pause_ms"),
+      },
+      slo: { ttft_p95_ms: n("ttft_p95_ms"), itl_p95_ms: n("itl_p95_ms"), max_error_share: n("max_error_pct") / 100 },
+      sweep: {
+        first_concurrency: n("first_concurrency"),
+        bisect_steps: n("bisect_steps"),
+        step_seconds: n("step_seconds"),
+        min_requests: n("min_requests"),
+        max_concurrency: n("max_concurrency"),
+      },
+      note: f.note.trim(),
+    });
+    await props.onSaved();
+  };
+  return (
+    <FormModal title={`Benchmark profile, version ${p.version}`} submitLabel="Save as a new version" onClose={props.onClose} onSubmit={save} wide>
+      <ErrorBanner message={versions.error} />
+      <p className="hint">
+        Every LLMInferenceService is measured with this one profile, so their results compare. Saving makes version{" "}
+        {p.version + 1}: the results of version {p.version} keep counting, marked stale, until the LLMIs are measured again,
+        and a model never adds figures of two versions. A deployment that takes shorter requests gets every part of a
+        session scaled down by the same factor.
+      </p>
+      {field("name", "Name")}
+      <h3>Workload</h3>
       <div className="grid-3">
-        <Field label="Requests in flight, by step" hint="Ascending, up to 12 steps.">
-          <input required value={steps} onChange={(e) => setSteps(e.target.value)} />
-        </Field>
-        <Field label="Requests per step, at least" hint="Four per request in flight above it. A p95 needs enough.">
-          <input required type="number" min={10} max={2000} value={minRequests} onChange={(e) => setMinRequests(e.target.value)} />
-        </Field>
-        <Field label="Longest a step may take, s" hint="A step that runs out first is marked as having few samples.">
-          <input required type="number" min={60} max={3600} value={stepSeconds} onChange={(e) => setStepSeconds(e.target.value)} />
-        </Field>
-        <Field label="Sessions" hint="Made up once, replayed at every step.">
-          <input required type="number" min={10} max={5000} value={sessions} onChange={(e) => setSessions(e.target.value)} />
-        </Field>
-        <Field label="Longest prompt, tokens" hint="Sessions grow to this; about 60% of it on average.">
-          <input required type="number" min={1000} max={1000000} value={maxPrompt} onChange={(e) => setMaxPrompt(e.target.value)} />
-        </Field>
-        <Field label="Longest answer, tokens">
-          <input required type="number" min={16} max={32768} value={maxOutput} onChange={(e) => setMaxOutput(e.target.value)} />
-        </Field>
+        {field("max_prompt_tokens", "Longest prompt, tokens", "Sessions grow to this; about 60% of it on average.")}
+        {field("max_output_tokens", "Longest answer, tokens")}
+        {field("sessions", "Sessions", "Made up once, replayed at every step.")}
+        {field("shared_prefix_tokens", "Shared prefix, tokens", "The system prompt every session shares.")}
+        {field("pause_ms", "Longest pause between turns, ms", "0: turns follow each other.")}
       </div>
       <h3>What you promise</h3>
       <div className="grid-3">
-        <Field label="Time to first token p95, ms">
-          <input required type="number" min={1} max={600000} value={ttft} onChange={(e) => setTTFT(e.target.value)} />
-        </Field>
-        <Field label="Time between tokens p95, ms" hint="50 ms is 20 tokens a second for each user.">
-          <input required type="number" min={1} max={10000} step="any" value={itl} onChange={(e) => setITL(e.target.value)} />
-        </Field>
+        {field("ttft_p95_ms", "Time to first token p95, ms")}
+        {field("itl_p95_ms", "Time between tokens p95, ms", "50 ms is 20 tokens a second for each user.")}
+        {field("max_error_pct", "Failed requests, at most %")}
       </div>
+      <h3>Sweep</h3>
+      <div className="grid-3">
+        {field("first_concurrency", "First step, requests in flight")}
+        {field("max_concurrency", "Most in flight", "A model that meets the targets there serves at least that.")}
+        {field("bisect_steps", "Halvings of the gap")}
+        {field("step_seconds", "Longest a step may take, s")}
+        {field("min_requests", "Requests per step, at least")}
+      </div>
+      {field("note", "Note", "Optional. Why it changed, for the next person.")}
+      {versions.data && versions.data.length > 1 && (
+        <p className="detail">
+          Earlier versions:{" "}
+          {versions.data
+            .filter((v) => !v.active)
+            .map((v) => `${v.version} (${formatTime(v.created_at)}${v.note ? `: ${v.note}` : ""})`)
+            .join(", ")}
+          .
+        </p>
+      )}
     </FormModal>
   );
 }
@@ -793,8 +1005,17 @@ function RunHistory(props: { m: CapacityModel; onClose: () => void; onChanged: (
         <div key={run.id} className="endpoint">
           <div className="dash-head">
             <div>
-              <span className="strong">{formatTime(run.created_at)}</span> · {run.shape.label} · {run.cluster_name}, pod{" "}
-              {run.instance} <span className={run.status === "succeeded" ? "tag" : "tag warn"}>{run.status}</span>
+              <span className="strong">{formatTime(run.created_at)}</span> · {run.cluster_name} · {run.namespace}/{run.deployment}
+              {run.instance && `, pod ${run.instance}`} <span className={run.status === "succeeded" ? "tag" : "tag warn"}>{run.status}</span>
+              {run.spec_hash ? (
+                <span className="tag">
+                  profile {run.profile_version} · {run.mode}
+                </span>
+              ) : (
+                <span className="tag" title="Measured by shape before 0.16: kept as history, counted for nothing">
+                  shape, history
+                </span>
+              )}
               <p className="detail">
                 {run.result.best
                   ? `${run.result.best.concurrency} in flight within the targets. ${sentence(run.result.limit)}.`

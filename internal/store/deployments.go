@@ -28,15 +28,26 @@ type Deployment struct {
 	ObservedAt time.Time `json:"observed_at"`
 	// MarketID is the annotation aigw-ui.io/market-id, "" when absent.
 	MarketID string `json:"market_id"`
+	// SpecHash identifies what it runs, whatever its scale; a measurement
+	// counts only for the spec it was made on.
+	SpecHash string `json:"spec_hash"`
+	// Quantization and LMCache say how it serves the model.
+	Quantization string `json:"quantization"`
+	LMCache      bool   `json:"lmcache"`
+	// DecodeReplicas is its desired replicas.
+	DecodeReplicas int64 `json:"decode_replicas"`
 }
 
 func upsertDeployment(ctx context.Context, tx pgx.Tx, clusterID, modelID string, d Deployment) error {
 	_, err := tx.Exec(ctx,
-		`INSERT INTO model_deployments (cluster_id, namespace, name, model_id, topology, gpu, gpus_per_instance, revision, instances, market_id, observed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+		`INSERT INTO model_deployments (cluster_id, namespace, name, model_id, topology, gpu, gpus_per_instance, revision, instances,
+		     spec_hash, quantization, lmcache, decode_replicas, market_id, observed_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
 		 ON CONFLICT (cluster_id, namespace, name) DO UPDATE SET model_id = $4, topology = $5, gpu = $6, gpus_per_instance = $7,
-		     revision = $8, instances = $9, market_id = $10, observed_at = now()`,
-		clusterID, d.Namespace, d.Name, modelID, d.Topology, d.GPU, d.GPUsPerInstance, d.Revision, d.Instances, d.MarketID)
+		     revision = $8, instances = $9, spec_hash = COALESCE(NULLIF($10, ''), model_deployments.spec_hash), quantization = $11,
+		     lmcache = $12, decode_replicas = $13, market_id = $14, observed_at = now()`,
+		clusterID, d.Namespace, d.Name, modelID, d.Topology, d.GPU, d.GPUsPerInstance, d.Revision, d.Instances,
+		d.SpecHash, d.Quantization, d.LMCache, max(d.DecodeReplicas, 1), d.MarketID)
 	return err
 }
 
@@ -46,10 +57,10 @@ func (s *Store) ListDeployments(ctx context.Context) ([]Deployment, error) {
 	return list(ctx, s, func(r scanner) (Deployment, error) {
 		var d Deployment
 		err := r.Scan(&d.ClusterID, &d.ClusterName, &d.Namespace, &d.Name, &d.ModelID, &d.Topology, &d.GPU, &d.GPUsPerInstance,
-			&d.Revision, &d.Instances, &d.Drained, &d.ObservedAt, &d.MarketID)
+			&d.Revision, &d.Instances, &d.Drained, &d.ObservedAt, &d.SpecHash, &d.Quantization, &d.LMCache, &d.DecodeReplicas, &d.MarketID)
 		return d, err
 	}, `SELECT d.cluster_id, c.name, d.namespace, d.name, d.model_id, d.topology, d.gpu, d.gpus_per_instance, d.revision, d.instances,
-	           COALESCE(e.drained, false), d.observed_at, d.market_id
+	           COALESCE(e.drained, false), d.observed_at, d.spec_hash, d.quantization, d.lmcache, d.decode_replicas, d.market_id
 	    FROM model_deployments d JOIN clusters c ON c.id = d.cluster_id
 	    LEFT JOIN model_endpoints e ON e.model_id = d.model_id AND e.cluster_id = d.cluster_id
 	    ORDER BY d.model_id, c.name, d.namespace, d.name`)

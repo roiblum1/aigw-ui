@@ -255,14 +255,16 @@ serve of the model.
 **How.** A site's capacity is its ready instances times the capacity of one
 instance, which you declare on the `LLMInferenceService` with
 `aigw-ui.io/capacity-per-instance`, or which the hub takes from the
-measurements once every deployment of the model is measured. The weight is
-the capacity times 100.
+measurements once every LLMInferenceService of the model is measured. The
+weight is the capacity times 100.
 
 **Why.**
 
-- *The capacity of one instance is declared, not measured.* A multi-node
-  instance is one instance and can be worth several single-node ones. Only
-  a benchmark can tell.
+- *The capacity of one instance comes from a benchmark.* A multi-node
+  instance is one instance and can be worth several single-node ones, and
+  the same GPU at another quantization serves another amount. Only a
+  benchmark of each LLMInferenceService can tell; the annotation stands in
+  until there is one.
 - *Up by one instance per poll.* A site that comes back gets its
   conversations back gradually, not all at once onto a cold cache.
 - *Down only after two polls agree.* One failed readiness check then moves
@@ -282,6 +284,36 @@ the capacity times 100.
 - *Once per round, for the whole fleet.* Working the weights out after each
   cluster would send the gateways several lists in a row, and every list
   moves conversations.
+
+### Measure an LLMInferenceService
+
+**What it does.** Finds how many requests one instance of an
+LLMInferenceService serves at the latency you promise, and the tokens a
+second it serves there. The Capacity page and the site weights count it.
+
+**How.** AIPerf runs in a Job on the cluster with the one benchmark profile:
+made-up coding-agent sessions, the load doubled until a step misses a
+target, then the gap halved. **Drained**, the hub first takes the site's
+entry weight to 0 and gives it back afterwards; **live**, it measures while
+the LLMI serves its users, after you type the model's name. Inside
+`capacity.window` the hub measures by itself, drained, whatever is not
+measured or stale, when the model's other sites can take its busiest hour
+there.
+
+**Why.**
+
+- *Each LLMI, not each GPU.* The same GPU at FP4 with LMCache and at FP8
+  without serves different amounts; the spec says which, with the configs
+  it is built on and the image it runs, so a result counts for what it was
+  measured on, whatever the scale.
+- *One profile, versioned.* Results compare only when measured the same
+  way. A model never adds figures of two versions.
+- *Drained when it can be.* Users' traffic makes the result lower, and the
+  measurement makes their answers slower. A step that still served other
+  traffic fails. A drain lives exactly as long as its measurement, and the
+  hub drains on its own only what the other sites can cover.
+- *The Job makes its prompts up*, and the hub reads only numbers: no prompt
+  passes through the hub.
 
 ### Cache-aware routing between sites
 
