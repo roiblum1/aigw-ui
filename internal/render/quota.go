@@ -37,8 +37,9 @@ func quotaRevision(m Model) string {
 		Window string
 		Cost   string
 		// Left out when unset, so a model keeps the revision it had.
-		DryRun bool `json:",omitempty"`
-	}{tenantRules(m), limit, window, m.CostExpression, m.DryRun})
+		DryRun   bool    `json:",omitempty"`
+		Standard *Budget `json:",omitempty"`
+	}{tenantRules(m), limit, window, m.CostExpression, m.DryRun, m.standard()})
 	if err != nil {
 		return ""
 	}
@@ -83,7 +84,20 @@ func quotaPolicies(s State, m Model) []*unstructured.Unstructured {
 // default bucket that never runs out.
 func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *unstructured.Unstructured {
 	quotas := tenantRules(m)
-	rules := make([]any, 0, len(quotas))
+	rules := make([]any, 0, len(quotas)+1)
+	if st := m.standard(); st != nil {
+		// One bucket per tenant, whatever its name: the rule names none.
+		rule := map[string]any{
+			"clientSelectors": []any{
+				map[string]any{"headers": []any{map[string]any{"name": TenantHeader, "type": "Distinct"}}},
+			},
+			"quota": map[string]any{"limit": st.Limit, "duration": st.Window},
+		}
+		if overage || m.DryRun {
+			rule["shadowMode"] = true
+		}
+		rules = append(rules, rule)
+	}
 	for _, q := range quotas {
 		if q.TenantSlug == "" {
 			rules = append(rules, placeholderRule())
@@ -91,9 +105,7 @@ func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *uns
 		}
 		rule := map[string]any{
 			"clientSelectors": []any{
-				map[string]any{"headers": []any{
-					map[string]any{"name": ClientIDHeader, "type": "RegularExpression", "value": TenantClientIDPattern(q.TenantSlug)},
-				}},
+				map[string]any{"headers": []any{tenantMatch(m, q.TenantSlug)}},
 			},
 			"quota": map[string]any{"limit": q.Limit, "duration": q.Window},
 		}
@@ -157,6 +169,45 @@ func (m Model) defaultBucket(overage bool) (int64, string) {
 		limit = serviceQuotaLimit
 	}
 	return limit, window
+}
+
+// standard returns the model's standard when it can be rendered, else nil.
+func (m Model) standard() *Budget {
+	if m.Standard == nil || !validQuota(m.Standard.Limit, m.Standard.Window) {
+		return nil
+	}
+	return m.Standard
+}
+
+// tenantMatch matches the requests of one tenant: by its client IDs, or,
+// under a standard, by the tenant header a token sets.
+func tenantMatch(m Model, slug string) map[string]any {
+	if m.standard() != nil {
+		return map[string]any{"name": TenantHeader, "type": "Exact", "value": slug}
+	}
+	return map[string]any{"name": ClientIDHeader, "type": "RegularExpression", "value": TenantClientIDPattern(slug)}
+}
+
+// ruleCount is how many bucket rules the model's QuotaPolicy has before its
+// default bucket: the standard's, then one per position of the tenant
+// quotas.
+func (m Model) ruleCount() int {
+	n := len(tenantRules(m))
+	if m.standard() != nil {
+		n++
+	}
+	return n
+}
+
+// RuleCount is how many bucket rules the model's QuotaPolicy has, and how
+// many it would have with a rule for every one of tenants enabled tenants
+// instead of the standard: the figure the standard saves.
+func RuleCount(m Model, tenants int) (now, perTenant int) {
+	now = m.ruleCount()
+	if m.standard() == nil {
+		return now, now
+	}
+	return now, max(tenants, now-1)
 }
 
 // tenantRules returns the bucket rules of a model in order: the rule at

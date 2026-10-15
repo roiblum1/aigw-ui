@@ -53,7 +53,14 @@ type marketPrices struct {
 // market price.
 type modelOut struct {
 	store.Model
-	Market *marketInfo `json:"market"`
+	// Rules is how many bucket rules the model's QuotaPolicy has, and
+	// RulesPerTenant how many it would have with a rule for every enabled
+	// tenant in place of its standard. StandardHeld says why a standard is
+	// not rendered.
+	Rules          int         `json:"rules"`
+	RulesPerTenant int         `json:"rules_per_tenant"`
+	StandardHeld   string      `json:"standard_held,omitempty"`
+	Market         *marketInfo `json:"market"`
 	// MarketNote says why a model has no market price when it is not for
 	// want of a match, such as an annotation the snapshot does not have.
 	MarketNote string `json:"market_note"`

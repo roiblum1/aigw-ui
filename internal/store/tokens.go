@@ -214,14 +214,9 @@ func (s *Store) Identity(ctx context.Context) (render.Identity, error) {
 	if err != nil || len(keys) == 0 {
 		return render.Identity{Mode: render.IdentityKeys}, err
 	}
-	id := render.Identity{Mode: render.IdentityTokens, Issuer: s.tokens.Issuer, Audience: s.tokens.Audience, JWKS: token.JWKS(GatewayKeys(keys))}
-	var apiKeys bool
-	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM api_keys k JOIN tenants t ON t.id = k.tenant_id
-	                              WHERE k.kind = 'key' AND k.revoked_at IS NULL AND t.enabled)`).Scan(&apiKeys); err != nil {
+	id := render.Identity{Issuer: s.tokens.Issuer, Audience: s.tokens.Audience, JWKS: token.JWKS(GatewayKeys(keys))}
+	if id.Mode, err = s.IdentityMode(ctx); err != nil {
 		return id, err
-	}
-	if apiKeys {
-		id.Mode = render.IdentityBoth
 	}
 	if id.Denied, err = s.DeniedTokens(ctx); err != nil {
 		return id, err
@@ -254,4 +249,19 @@ func (s *Store) SignUnstored(ctx context.Context, c token.Claims) (string, error
 		return "", err
 	}
 	return token.Sign(k, c)
+}
+
+// IdentityMode is Identity's mode alone, without reading anything else.
+func (s *Store) IdentityMode(ctx context.Context) (string, error) {
+	var signed, apiKeys bool
+	err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM signing_keys),
+	                                  EXISTS (SELECT 1 FROM api_keys k JOIN tenants t ON t.id = k.tenant_id
+	                                          WHERE k.kind = 'key' AND k.revoked_at IS NULL AND t.enabled)`).Scan(&signed, &apiKeys)
+	switch {
+	case err != nil || !signed:
+		return render.IdentityKeys, mapErr(err)
+	case apiKeys:
+		return render.IdentityBoth, nil
+	}
+	return render.IdentityTokens, nil
 }

@@ -492,6 +492,9 @@ func TestPricesStartOnTheirDay(t *testing.T) {
 		t.Errorf("rendered %q, dry-run %v before the day", cost, dry)
 	}
 
+	if _, err := s.SetStandard(ctx, glm, &Standard{Limit: 50_000_000, Window: "1d"}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.db.Exec(ctx, `UPDATE model_prices SET effective_at = now() - interval '1 second' WHERE model_id = $1`, glm); err != nil {
 		t.Fatal(err)
 	}
@@ -509,6 +512,11 @@ func TestPricesStartOnTheirDay(t *testing.T) {
 	// 50,000,000 tokens at 11574 credits a million.
 	if m.DefaultLimit != 578_700 {
 		t.Errorf("pool = %d credits", m.DefaultLimit)
+	}
+	// Limits that are not set stay unset: no best-effort limit, no
+	// standard. A standard of 50,000,000 tokens is 578,700 credits.
+	if m.BestEffortLimit != nil || m.Standard != nil || m.StandardNext == nil || m.StandardNext.Standard.Limit != 578_700 {
+		t.Errorf("best-effort limit %v, standard %+v, next %+v", m.BestEffortLimit, m.Standard, m.StandardNext)
 	}
 	limits := map[string]int64{}
 	for _, tn := range []Tenant{team, small} {

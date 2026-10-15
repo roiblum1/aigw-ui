@@ -107,3 +107,39 @@ func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) (
 	}
 	return out, nil
 }
+
+// StandardUsed is what the model's standard counted for the tenant slug in
+// the window that contains now, the most of any backend: 0 for a slug no
+// request named. ok is false when the model has no standard on any cluster.
+func (s *Service) StandardUsed(ctx context.Context, modelSlug, slug string, now time.Time) (used int64, ok bool, err error) {
+	clusters, err := s.st.ListClusters(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	var keys []string
+	for _, c := range clusters {
+		state, err := s.st.RenderStateWithoutKeys(ctx, c.ID)
+		if err != nil {
+			return 0, false, err
+		}
+		for _, ct := range render.Counters(state) {
+			if ct.ModelSlug != modelSlug || !ct.Pool {
+				continue
+			}
+			if other, has := ct.StandardFor(slug); has {
+				keys = append(keys, other.RedisKey(s.rd.Prefix, now))
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return 0, false, nil
+	}
+	values, err := s.rd.Values(ctx, keys)
+	if err != nil {
+		return 0, true, RedisError{err}
+	}
+	for _, v := range values {
+		used = max(used, v)
+	}
+	return used, true, nil
+}

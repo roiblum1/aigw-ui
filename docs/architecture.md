@@ -95,7 +95,8 @@ cluster's own routes cannot be removed by a sync.
 1. A key has the client ID `<tenant>.<random>`, for example `team-search.5018d00f`. A token's is `<tenant>.<jti>`, 16 hex digits, and is in the token as `cid`.
 2. The gateway's API key auth validates the key and forwards the client ID in the `x-aigw-client-id` header. A token is checked by the gateway's JWT provider against the hub's public keys: while any tenant has an API key, every token is listed as one too and the API key auth writes its client ID; once none has, the JWT provider writes it from `cid`. Either way it also writes `x-aigw-tenant` (`sub`) and `x-aigw-key` (`jti`). See [security](security.md#tokens).
 3. The model's `QuotaPolicy` has one bucket rule per tenant that matches `^<tenant>\.[a-f0-9]+$`, so all keys of a tenant share one bucket.
-4. The gateway's quota rate limit service counts tokens in Redis.
+   A model with a **standard budget**, once the gateways take tokens only, has instead one rule that matches `x-aigw-tenant` with `type: Distinct`, which gives every tenant a bucket of its own at the standard, and one rule per tenant with a quota of its own, matching `x-aigw-tenant` exactly: an exception, which only adds to the standard since a request passes when any bucket has room.
+4. The gateway's quota rate limit service counts tokens in Redis. Under a standard, the key of a tenant's bucket holds the tenant's slug (`…_rule-0-x-aigw-tenant-match-0_<tenant>_<window start>`), and an exception's the rule's position and the slug; `render.Counters` names both, so the Usage page, the best-effort mover, usage reset and the history read them as before.
 
 `QuotaPolicy` runs in `Shared` mode: a request passes if any matching bucket
 has quota left, and it is also charged to the model's default bucket. The

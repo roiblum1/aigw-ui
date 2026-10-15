@@ -115,6 +115,20 @@ export interface Model {
   market: MarketPrice | null;
   /** Why the model has no market price, when it is not for want of a match. */
   market_note: string;
+  /** The budget every tenant has on the model, in its unit; null when none. */
+  standard: Standard | null;
+  /** A change of the standard that starts at the next 00:00 UTC; its standard null removes it. */
+  standard_next: { standard: Standard | null; at: string } | null;
+  /** Bucket rules in the model's QuotaPolicy now, and with a rule per enabled tenant instead of the standard. */
+  rules: number;
+  rules_per_tenant: number;
+  /** Why the standard is not rendered, when it is not. */
+  standard_held?: string;
+}
+
+export interface Standard {
+  limit: number;
+  window: Window;
 }
 
 /** A model's entry in the market snapshot, in dollars for a million tokens. */
@@ -865,6 +879,9 @@ export const api = {
   updateModel: (id: string, m: ModelInput) => request<{ id: string }>("PUT", `/models/${id}`, m),
   deleteModel: (id: string) => request<void>("DELETE", `/models/${id}`),
   setModelFleet: (id: string, enabled: boolean) => request<void>("PUT", `/models/${id}/fleet`, { enabled }),
+  setStandard: (id: string, standard: Standard | null) =>
+    request<void>("PUT", `/models/${id}/standard`, standard ?? { limit: null }),
+  cancelStandard: (id: string) => request<void>("DELETE", `/models/${id}/standard/pending`),
   setModelSpent: (id: string, mode: SpentMode, unlimited: boolean, limit: number | null) =>
     request<void>("PUT", `/models/${id}/spent`, { mode, best_effort_unlimited: unlimited, best_effort_limit: limit }),
   prices: (id: string) => request<Price[]>("GET", `/models/${id}/prices`),

@@ -46,7 +46,11 @@ func TestRealAPIServerIdentity(t *testing.T) {
 		t.Fatalf("backend headers: %v", b.Object["spec"])
 	}
 
+	// Tokens only, with a standard: one Distinct rule on the tenant header
+	// and team-a's quota as an Exact exception on it.
 	s.Identity.Mode = render.IdentityTokens
+	s.Models[0].Standard = &render.Budget{Limit: 100, Window: "1h"}
+	s.Tenants = []string{"team-a", "team-b"}
 	res, err := c.Sync(ctx, ns, render.Objects(s), nil)
 	if err != nil {
 		t.Fatalf("tokens: the API server refused a rendered object: %v", err)
@@ -60,5 +64,15 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	}
 	if _, has, _ := unstructured.NestedMap(live.Object, "spec", "apiKeyAuth"); has {
 		t.Fatal("tokens only, yet the API key check is there")
+	}
+	qp, _ := gvrFor("QuotaPolicy")
+	q, err := c.dyn.Resource(qp).Namespace(ns).Get(ctx, "glm-5-3", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quotas, _, _ := unstructured.NestedSlice(q.Object, "spec", "perModelQuotas")
+	rules := quotas[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
+	if len(rules) != 2 || fmt.Sprint(rules[0]) != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1h limit:100]]" {
+		t.Fatalf("standard rules: %v", rules)
 	}
 }

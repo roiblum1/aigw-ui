@@ -23,6 +23,9 @@ func (s *Syncer) RunPrices(ctx context.Context) {
 		if _, err := s.ApplyPrices(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("apply prices", "err", err)
 		}
+		if _, err := s.ApplyStandards(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("apply standard budgets", "err", err)
+		}
 		timer := time.NewTimer(time.Until(NextDay(time.Now())))
 		select {
 		case <-ctx.Done():
@@ -53,6 +56,27 @@ func (s *Syncer) ApplyPrices(ctx context.Context) (int, error) {
 		lines = append(lines, priceLine(a, time.Now()))
 	}
 	s.Changed(ctx, "model.prices", strings.Join(lines, " "))
+	return len(applied), nil
+}
+
+// ApplyStandards starts every change of a model's standard budget whose day
+// has come, and returns how many. They get one line in the task log, and the
+// clusters are synced once.
+func (s *Syncer) ApplyStandards(ctx context.Context) (int, error) {
+	applied, err := s.st.ApplyDueStandards(ctx)
+	if err != nil || len(applied) == 0 {
+		return 0, err
+	}
+	lines := make([]string, 0, len(applied))
+	for _, a := range applied {
+		if a.Standard == nil {
+			lines = append(lines, a.ModelName+" has no standard budget from now on.")
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s gives every tenant a standard budget of %d per %s from now on, through one rule.",
+			a.ModelName, a.Standard.Limit, a.Standard.Window))
+	}
+	s.Changed(ctx, "model.standard", strings.Join(lines, " "))
 	return len(applied), nil
 }
 

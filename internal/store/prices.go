@@ -174,7 +174,11 @@ func toCredits(ctx context.Context, tx pgx.Tx, modelID string, priceInput int64)
 	for _, q := range []string{
 		`UPDATE quotas SET token_limit = ` + fmt.Sprintf(converted, "token_limit") + ` WHERE model_id = $1`,
 		`UPDATE models SET price_dry_run = true, default_limit = ` + fmt.Sprintf(converted, "default_limit") +
-			`, best_effort_limit = ` + fmt.Sprintf(converted, "best_effort_limit") + ` WHERE id = $1`,
+			// GREATEST ignores a NULL, so a limit that is not set is kept
+			// apart: before 0.19 no best-effort limit became 1 credit.
+			`, best_effort_limit = CASE WHEN best_effort_limit IS NULL THEN NULL ELSE ` + fmt.Sprintf(converted, "best_effort_limit") + ` END` +
+			`, standard_limit = CASE WHEN standard_limit IS NULL THEN NULL ELSE ` + fmt.Sprintf(converted, "standard_limit") + ` END` +
+			`, standard_next_limit = CASE WHEN standard_next_limit IS NULL THEN NULL ELSE ` + fmt.Sprintf(converted, "standard_next_limit") + ` END WHERE id = $1`,
 		// Nobody is moved to best-effort during dry-run, and a period that
 		// began against a limit in tokens says nothing about one in credits.
 		`UPDATE overage SET until = now() WHERE model_id = $1 AND until > now() AND $2::bigint > 0 AND $3::bigint > 0`,

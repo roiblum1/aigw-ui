@@ -243,6 +243,27 @@ clients and `/anthropic/v1/messages` for Anthropic-style ones.
 
 A quota is one budget for the tenant on that model across all sites.
 
+**A standard budget.** **Standard budget** in a model's row on the Models
+page gives every tenant the same budget on the model, each with a count of
+its own, through one rule on the gateway in place of a rule per tenant. A
+tenant's own quota on that model is then an **exception** that adds to the
+standard: a request passes while either has room, so no tenant can be held
+below the standard. To give a tenant less, lower the standard and give the
+others exceptions; a standard of the smallest amount closes the model to
+everyone without one. The model's row shows how many rules its QuotaPolicy
+has, and how many a rule per tenant would take.
+
+- It starts at the next 00:00 UTC, when every count starts anew, so nobody's
+  count is lost. Removing it waits for that too.
+- It needs every tenant on tokens: the gateway reads the tenant from the
+  token. Until the last API key is revoked it cannot be set, and while a
+  model has one, no API key can be created and no tenant with one enabled.
+- Giving a tenant an exception, or taking it away, mid-window: the
+  exception's count starts at 0, while the standard's has counted the
+  tenant all along. A new exception can therefore let the tenant use up to
+  the exception's limit more in that window. Make such changes near the
+  start of a window when it matters.
+
 **Tokens and API keys.** Before 0.18 a key was an API key (`sk-...`) that
 every gateway had to list. Now a new key is a token the hub signs, which the
 gateways check against the hub's public keys without listing it. **Keys and

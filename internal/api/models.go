@@ -102,11 +102,28 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	mode, err := s.st.IdentityMode(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	tenants, err := s.st.ListTenants(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	enabled := 0
+	for _, t := range tenants {
+		if t.Enabled {
+			enabled++
+		}
+	}
 	snap := market.Current()
 	models := make([]modelOut, len(out))
 	for i := range out {
 		out[i].Warnings = s.modelWarnings(out[i], fleet, peers, len(bestEffort[out[i].ID]))
 		models[i] = withMarket(out[i], snap)
+		models[i].Rules, models[i].RulesPerTenant, models[i].StandardHeld = ruleCounts(out[i], mode, enabled)
 	}
 	writeJSON(w, http.StatusOK, models)
 }
@@ -170,4 +187,23 @@ func (s *Server) deleteModel(w http.ResponseWriter, r *http.Request) {
 	}
 	s.changed(r, "model.delete", "Deleted model "+m.Name+" and its quotas")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ruleCounts is how many bucket rules a model's QuotaPolicy has, how many it
+// would have with a rule for each of the enabled tenants in place of its
+// standard, and why its standard is not rendered, if it is not.
+func ruleCounts(m store.Model, mode string, enabled int) (now, perTenant int, held string) {
+	rm := render.Model{}
+	for i := 0; i < m.QuotaRules; i++ {
+		rm.Quotas = append(rm.Quotas, render.TenantQuota{TenantSlug: "t", Slot: i, Limit: 1, Window: "1d"})
+	}
+	if m.Standard != nil {
+		if mode == render.IdentityTokens {
+			rm.Standard = &render.Budget{Limit: m.Standard.Limit, Window: m.Standard.Window}
+		} else {
+			held = "the gateways take API keys too, and a request with one has no tenant header: the tenants' own quotas count, and the standard waits until the last API key is revoked"
+		}
+	}
+	now, perTenant = render.RuleCount(rm, enabled)
+	return now, perTenant, held
 }

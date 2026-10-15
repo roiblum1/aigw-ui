@@ -340,7 +340,15 @@ As specified in the task: an ES256 signing key stored encrypted with `ENCRYPTION
 
 A model gets a standard per-tenant budget (amount and window), rendered as one `Distinct` rule on `x-aigw-tenant`; a tenant above it gets an `Exact` rule. A tenant cannot be put below the standard (`Shared` mode passes if any bucket has room): use a smaller standard with exceptions, or a wallet cap. Every authenticated tenant can use every model at the standard; a model closed to some tenants has a standard of 1 credit and exceptions. The Redis keys hold the tenant's slug; the usage reader, the best-effort mover, usage reset and the hourly history move to them. Moving a tenant between the standard and an exception starts its spend in the window again: applied at the next window start. The first sync loses the current window's spend once: do it at 00:00 UTC. The Models page shows the rule count per model.
 
-From check A1: a request with an API key has no `x-aigw-tenant` and matches no `Distinct` rule. During the switch, a tenant that still has an API key keeps its rule on the client ID as well.
+*As built (0.19.0):*
+
+- **A standard needs tokens only.** Check A1 found that a request with an API key has no `x-aigw-tenant` and matches no `Distinct` bucket: under a standard, such a request would fall to the model's pool. So a standard is rendered only while the gateways take tokens only; until then the API refuses to set one (409, naming the reason), and while a model has one it refuses an API key and enabling a tenant that still has one. Upgrading therefore changes no rule and loses no count; the switch happens per model, when an operator sets its standard.
+- **A model's switch starts at the next 00:00 UTC**, as prices do (`standard_next_*`, applied by the same daily loop): every quota window starts there, so the switch from per-tenant rules to the standard loses nobody's count, and the "first sync at 00:00 UTC" of the task is how every switch happens.
+- **Exceptions are a tenant's existing quota on the model**, matched `Exact` on `x-aigw-tenant` at their slot after the standard's rule. Moving a tenant between the standard and an exception is not deferred: the standard's count goes on (it counts the tenant all along, as `Shared` mode charges every matching bucket), and a new exception starts at 0. The guide says so.
+- **Counters:** `render.Counters` names a counter per enabled tenant under the standard and one per exception, in the forms check A3 found, so the Usage page, the best-effort mover, usage reset, the hourly history and the tenants' own page read them unchanged. The best-effort route still matches the client ID, which a token writes as `cid`.
+- **Rule count:** the Models page shows the rules of each model's QuotaPolicy and what a rule per enabled tenant would take.
+- **Self-test:** "A client cannot choose its tenant by the tenant header" sends a token with another slug in `x-aigw-tenant` and checks the request is counted for the token's tenant and nothing for the slug sent; the step "a request over the quota is refused" is skipped under a standard, which no quota can lower.
+- Also fixed: a model's first prices turned an unset best-effort limit into 1 credit (Postgres `GREATEST` ignores a NULL); since 0.11.0.
 
 ### 5c — Wallets
 

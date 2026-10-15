@@ -25,6 +25,7 @@ const (
 	stepOverage = "overage"
 	stepReset   = "reset"
 	stepSpoof   = "client-id"
+	stepTenant  = "tenant-header"
 	stepCached  = "cached-tokens"
 	stepSize    = "long-prompt"
 	stepSticky  = "sticky"
@@ -44,6 +45,7 @@ func plan() []Step {
 		{ID: stepOverage, Title: "A tenant past its budget is served as best-effort", Status: Pending},
 		{ID: stepReset, Title: "A usage reset lets the tenant through again", Status: Pending},
 		{ID: stepSpoof, Title: "A client cannot choose its tenant", Status: Pending},
+		{ID: stepTenant, Title: "A client cannot choose its tenant by the tenant header", Status: Pending},
 		{ID: stepCached, Title: "The model reports cached prompt tokens", Status: Pending},
 		{ID: stepSize, Title: "A long prompt is accepted", Status: Pending},
 		{ID: stepSticky, Title: "A conversation stays on one site", Status: Pending},
@@ -82,7 +84,9 @@ type test struct {
 	tenant *store.Tenant // set once the temporary tenant exists
 	key    string        // its API key or token; empty when the cluster does not enforce keys
 	// tokens is set when the hub issues tokens: the tenant's key is one.
+	// mode is how the gateways tell tenants apart (render.Identity*).
 	tokens bool
+	mode   string
 	// counted and refused remember what earlier steps found out.
 	counted, refused bool
 	// first is the first answered request, the one the counter step looks for.
@@ -114,6 +118,7 @@ func (t *test) steps() {
 		{stepOverage, t.overage, false},
 		{stepReset, t.reset, false},
 		{stepSpoof, t.clientID, false},
+		{stepTenant, t.tenantHeader, false},
 		{stepCached, t.cachedTokens, false},
 		{stepSize, t.longPrompt, false},
 		{stepSticky, t.sticky, false},
@@ -194,7 +199,7 @@ func (t *test) apply() (string, string) {
 	if err != nil {
 		return Failed, err.Error()
 	}
-	t.tokens = id.Mode != render.IdentityKeys
+	t.tokens, t.mode = id.Mode != render.IdentityKeys, id.Mode
 	var key string
 	if t.tokens {
 		_, key, err = t.r.st.CreateToken(t.ctx, tenant.ID, "self-test", t.tokenSettings(), time.Now())

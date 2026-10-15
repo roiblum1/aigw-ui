@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"aigw-ui/internal/store"
 )
 
 // counter looks for the tokens of the first request in Redis, under the name
@@ -69,6 +71,10 @@ func (t *test) limit() (string, string) {
 	}
 	if t.bestEffort() {
 		return Skipped, "The model serves a tenant past its budget as best-effort and does not refuse it. The next step tests that."
+	}
+	if t.standard() {
+		return Skipped, fmt.Sprintf("The model gives every tenant a standard budget of %s per %s, and a tenant's own quota only adds to it: a quota of 1 holds nobody below the standard. To test a refusal, run the self-test on a model without a standard.",
+			store.Amount(t.model.Standard.Limit, t.model.Unit), t.model.Standard.Window)
 	}
 	start := time.Now()
 	var last string
