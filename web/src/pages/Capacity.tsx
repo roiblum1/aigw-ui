@@ -126,6 +126,7 @@ export default function Capacity() {
       {costing && data && <GPUCosts gpus={data.gpus} onClose={() => setCosting(false)} onChanged={reload} />}
       {pricesFor && (
         <ModelPrices
+          key={pricesFor.model.id}
           model={pricesFor.model}
           suggested={pricesFor.suggested}
           suggestedNote={pricesFor.note}

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Run on a machine WITH internet access. Builds the application image and the
-# AIPerf image for capacity measurements, pulls the Postgres image, and packs
-# them with the Helm chart into one tarball to carry into the disconnected
+# Run on a machine WITH internet access. Reads today's market prices into
+# internal/market/openrouter.json, builds the application image and the AIPerf
+# image for capacity measurements, pulls the Postgres image, and packs them
+# with the Helm chart into one tarball to carry into the disconnected
 # environment.
 #
 #   deploy/offline/build-bundle.sh [version]
@@ -20,6 +21,11 @@ AIPERF_IMAGE="${AIPERF_REPO:-ghcr.io/roiblum1/aigw-aiperf}:${AIPERF_VERSION}"
 OUT="dist/aigw-ui-offline-${VERSION}"
 
 rm -rf "$OUT" && mkdir -p "$OUT"
+
+# This machine has internet access: the image gets today's market prices.
+echo ">> reading the market snapshot"
+hack/fetch-market.sh
+MARKET_DATE="$(python3 -c 'import json; print(json.load(open("internal/market/openrouter.json"))["snapshot_date"])')"
 
 echo ">> building ${APP_IMAGE} for ${PLATFORM}"
 podman build --platform "$PLATFORM" -t "$APP_IMAGE" -f Containerfile .
@@ -42,6 +48,7 @@ VERSION=${VERSION}
 APP_IMAGE=${APP_IMAGE}
 AIPERF_IMAGE=${AIPERF_IMAGE}
 PG_IMAGE=${PG_IMAGE}
+MARKET_SNAPSHOT=${MARKET_DATE}
 ENV
 
 tar -C dist -czf "${OUT}.tar.gz" "$(basename "$OUT")"

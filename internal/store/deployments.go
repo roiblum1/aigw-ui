@@ -26,15 +26,17 @@ type Deployment struct {
 	// Drained is set when an operator drained the model's site.
 	Drained    bool      `json:"drained"`
 	ObservedAt time.Time `json:"observed_at"`
+	// MarketID is the annotation aigw-ui.io/market-id, "" when absent.
+	MarketID string `json:"market_id"`
 }
 
 func upsertDeployment(ctx context.Context, tx pgx.Tx, clusterID, modelID string, d Deployment) error {
 	_, err := tx.Exec(ctx,
-		`INSERT INTO model_deployments (cluster_id, namespace, name, model_id, topology, gpu, gpus_per_instance, revision, instances, observed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+		`INSERT INTO model_deployments (cluster_id, namespace, name, model_id, topology, gpu, gpus_per_instance, revision, instances, market_id, observed_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
 		 ON CONFLICT (cluster_id, namespace, name) DO UPDATE SET model_id = $4, topology = $5, gpu = $6, gpus_per_instance = $7,
-		     revision = $8, instances = $9, observed_at = now()`,
-		clusterID, d.Namespace, d.Name, modelID, d.Topology, d.GPU, d.GPUsPerInstance, d.Revision, d.Instances)
+		     revision = $8, instances = $9, market_id = $10, observed_at = now()`,
+		clusterID, d.Namespace, d.Name, modelID, d.Topology, d.GPU, d.GPUsPerInstance, d.Revision, d.Instances, d.MarketID)
 	return err
 }
 
@@ -44,10 +46,10 @@ func (s *Store) ListDeployments(ctx context.Context) ([]Deployment, error) {
 	return list(ctx, s, func(r scanner) (Deployment, error) {
 		var d Deployment
 		err := r.Scan(&d.ClusterID, &d.ClusterName, &d.Namespace, &d.Name, &d.ModelID, &d.Topology, &d.GPU, &d.GPUsPerInstance,
-			&d.Revision, &d.Instances, &d.Drained, &d.ObservedAt)
+			&d.Revision, &d.Instances, &d.Drained, &d.ObservedAt, &d.MarketID)
 		return d, err
 	}, `SELECT d.cluster_id, c.name, d.namespace, d.name, d.model_id, d.topology, d.gpu, d.gpus_per_instance, d.revision, d.instances,
-	           COALESCE(e.drained, false), d.observed_at
+	           COALESCE(e.drained, false), d.observed_at, d.market_id
 	    FROM model_deployments d JOIN clusters c ON c.id = d.cluster_id
 	    LEFT JOIN model_endpoints e ON e.model_id = d.model_id AND e.cluster_id = d.cluster_id
 	    ORDER BY d.model_id, c.name, d.namespace, d.name`)

@@ -56,10 +56,56 @@ whether the entry route sends its conversation to a B300 site or an H200
 one. A budget is never tied to a site: a tenant with $50 a day on a model
 can spend it wherever the model is served.
 
+## Market prices
+
+By default a model's price is its price on [OpenRouter](https://openrouter.ai),
+used as it is: no scaling, no GPU costs, no profit. A dollar of a budget then
+means what the same traffic would cost there, the ratios between models are
+the market's, and every budget is in a unit people already understand.
+Nobody is invoiced.
+
+**The snapshot.** The server holds a copy of OpenRouter's public catalog,
+`internal/market/openrouter.json`, embedded in its binary: a hub without a
+network has it, and the build never fetches anything. It keeps, per model,
+the OpenRouter id, the Hugging Face id, the name, the context length, and
+the input, output and cached-input prices for a million tokens. A variable
+price (`-1`) counts as none, and long-context tiers are ignored: the base
+price is kept.
+
+**Which entry is a model's.** In this order:
+
+1. The entry chosen in the Prices dialog, under **Choose the market entry**.
+   **None** there means no market price; **Automatic** goes back to the
+   next two.
+2. The annotation `aigw-ui.io/market-id` on the model's
+   LLMInferenceServices, such as `z-ai/glm-5.3`. Deployments that name
+   different entries are no match, and the dialog says so.
+3. A name the model is served under that is an entry's Hugging Face id, such
+   as `zai-org/GLM-5.3`. OpenRouter lists some models several times, such as
+   `z-ai/glm-5.3` and `z-ai/glm-5.3:batch`; the entry without a `:` variant
+   is taken, and two such entries are no match.
+
+**Use market prices** in the Prices dialog fills in the market's prices: its
+cached price, or a tenth of the input price when it sells none. Saving them
+follows the usual rules below: they start at the next 00:00 UTC, the first
+prices convert the model's limits once and start it in dry-run. A free
+prompt price cannot be used.
+
+**When the market moves**, nothing changes by itself. Prices saved
+unchanged from the market remember the entry and the snapshot; once a newer
+snapshot has other prices, the model shows **market moved** on the Models
+page and the dialog offers the new ones. Prices typed by hand are custom and
+stay as they are.
+
+**A new snapshot** comes as a pull request "Market snapshot YYYY-MM-DD",
+opened every week by the workflow `market`. The offline bundle reads one
+when it is built, and a release refuses a snapshot older than 60 days. See
+[operations](operations.md#the-market-snapshot).
+
 ## Setting prices by hand
 
-This is the usual way. How the models compare matters more than the
-amounts:
+Any price can be set by hand, for a model the market does not have, or to
+change the market's. How the models compare matters more than the amounts:
 
 - **A bigger model costs more.** A token of a large model takes more
   hardware than a token of a small one, so it takes more of a tenant's

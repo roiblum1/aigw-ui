@@ -50,6 +50,9 @@ jobs:
 
       - name: Release note for the chart version
         run: hack/check-release-note.sh ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+      - name: Market snapshot no older than 60 days, for a release
+        if: github.ref_type == 'tag'
+        run: hack/check-market.sh
 
       - uses: actions/setup-go@v5
         with:

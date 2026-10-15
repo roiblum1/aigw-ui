@@ -139,6 +139,7 @@ OpenRouter's catalog is public and needs no key: `GET https://openrouter.ai/api/
 
 - `hack/fetch-market.sh` writes `internal/market/openrouter.json`, which is committed and embedded with `go:embed`. A disconnected hub gets the snapshot inside its binary; the build never depends on a live site.
 - Stored per entry: `snapshot_date`, `id`, `hf_id`, `name`, `context`, and per million tokens `prompt`, `completion`, `cache_read`.
+  - *As built (0.15.0):* `snapshot_date` is stored once for the file. OpenRouter calls the cached price `input_cache_read`; the script stores it as `cache_read`. One entry per line, so that a weekly snapshot reads as a short diff.
 - A scheduled workflow runs the script weekly and opens a pull request titled "Market snapshot YYYY-MM-DD".
 - The release workflow refuses a snapshot older than 60 days. `deploy/offline/build-bundle.sh` refreshes it, since it runs on a connected machine.
 - A price of `-1` means variable and counts as no price. Long-context tiers in `overrides` are ignored; the base price is used.
@@ -151,12 +152,18 @@ Each model gets a `market_id`:
 2. Otherwise taken from the annotation `aigw-ui.io/market-id` on its LLMIs.
 3. Editable in the Prices dialog. A model with no match has no market price and is priced by hand.
 
+*As built (0.15.0):*
+
+- OpenRouter lists one model several times with the same Hugging Face id, such as `z-ai/glm-5.3` and `z-ai/glm-5.3:batch`. The match takes the entry without a `:` variant; more than one such entry is no match.
+- The order is the other way round: an entry chosen in the dialog wins over the annotation, which wins over the automatic match, so that an operator can correct either. The dialog can also set none, or go back to automatic.
+
 ### The Prices dialog
 
 - A **Market** line, for example "OpenRouter, snapshot 2026-10-12: 2.80 in / 8.80 out per million", and **Use market prices**.
 - Cached price = the market's `cache_read` when present, else a tenth of the input price, as today.
 - Any price can be changed afterwards; that is the custom price. The dialog keeps showing the other models as multiples of the cheapest (0.14.2).
 - Prices still start at the next 00:00 UTC, the first prices still convert a model's limits once and start it in dry-run, and later prices change no limit. Nothing changes a price by itself, including a new snapshot: the page shows that the market moved and offers the new price.
+  - *As built (0.15.0):* to know that, prices saved unchanged from the market record `<entry>@<snapshot date>` in `model_prices.market`. The server sets it when the saved prices equal the market's, so prices edited after **Use market prices** are custom.
 
 ### GPU costs
 

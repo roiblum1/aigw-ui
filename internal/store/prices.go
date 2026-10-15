@@ -38,6 +38,9 @@ type Price struct {
 	AppliedAt   *time.Time `json:"applied_at"`
 	Note        string     `json:"note"`
 	CreatedAt   time.Time  `json:"created_at"`
+	// Market is "<entry>@<snapshot date>" when the prices are the market's
+	// as they were on that day, and "" for prices set by hand.
+	Market string `json:"market"`
 }
 
 // Render returns the prices as the renderer takes them.
@@ -62,11 +65,11 @@ var (
 	ErrHasQuotas = errors.New("the model has tenant quotas")
 )
 
-const priceColumns = `version, price_input, price_cached, price_output, effective_at, applied_at, note, created_at`
+const priceColumns = `version, price_input, price_cached, price_output, effective_at, applied_at, note, created_at, market`
 
 func scanPrice(r scanner) (Price, error) {
 	var p Price
-	err := r.Scan(&p.Version, &p.Input, &p.Cached, &p.Output, &p.EffectiveAt, &p.AppliedAt, &p.Note, &p.CreatedAt)
+	err := r.Scan(&p.Version, &p.Input, &p.Cached, &p.Output, &p.EffectiveAt, &p.AppliedAt, &p.Note, &p.CreatedAt, &p.Market)
 	return p, err
 }
 
@@ -95,10 +98,10 @@ func (s *Store) SetPendingPrice(ctx context.Context, modelID string, p Price, no
 			return err
 		}
 		_, err := tx.Exec(ctx,
-			`INSERT INTO model_prices (model_id, version, price_input, price_cached, price_output, effective_at, note)
+			`INSERT INTO model_prices (model_id, version, price_input, price_cached, price_output, effective_at, note, market)
 			 VALUES ($1, (SELECT COALESCE(max(version), 0) + 1 FROM model_prices WHERE model_id = $1), $2, $3, $4,
-			         CASE WHEN $7 THEN now() ELSE $5 END, $6)`,
-			modelID, p.Input, p.Cached, p.Output, p.EffectiveAt, p.Note, now)
+			         CASE WHEN $7 THEN now() ELSE $5 END, $6, $8)`,
+			modelID, p.Input, p.Cached, p.Output, p.EffectiveAt, p.Note, now, p.Market)
 		return err
 	})
 	return name, mapErr(err)
@@ -213,7 +216,7 @@ func (s *Store) modelPrices(ctx context.Context) (modelPrices, error) {
 	for rows.Next() {
 		var id string
 		var p Price
-		if err := rows.Scan(&id, &p.Version, &p.Input, &p.Cached, &p.Output, &p.EffectiveAt, &p.AppliedAt, &p.Note, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&id, &p.Version, &p.Input, &p.Cached, &p.Output, &p.EffectiveAt, &p.AppliedAt, &p.Note, &p.CreatedAt, &p.Market); err != nil {
 			return out, err
 		}
 		if p.AppliedAt == nil {

@@ -1,0 +1,45 @@
+# Once a week, reads the public OpenRouter catalog into
+# internal/market/openrouter.json and opens a pull request with it. Nothing
+# changes a model's price by itself: after the merge the Prices dialog shows
+# where the market moved, and an operator applies it.
+#
+# A pull request opened with GITHUB_TOKEN does not start other workflows, so
+# CI runs on it once someone pushes to it or closes and reopens it.
+name: market
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the catalog
+        run: hack/fetch-market.sh
+      - name: Open or update the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- internal/market/openrouter.json; then
+            echo "the market has not changed"
+            exit 0
+          fi
+          date="$(python3 -c 'import json; print(json.load(open("internal/market/openrouter.json"))["snapshot_date"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c market-snapshot
+          git commit -am "Market snapshot $date"
+          git push --force origin market-snapshot
+          body="The OpenRouter catalog of $date, read by hack/fetch-market.sh. Merging it changes no price: the Prices dialog shows each model whose market price moved."
+          if gh pr view market-snapshot --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit market-snapshot --title "Market snapshot $date" --body "$body"
+          else
+            gh pr create --head market-snapshot --base main --title "Market snapshot $date" --body "$body"
+          fi

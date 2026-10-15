@@ -76,6 +76,26 @@ fails.
   variables: it asks the cluster whether it accepts the upgrade and
   changes nothing.
 
+## The market snapshot
+
+The default prices of models come from `internal/market/openrouter.json`, a
+copy of OpenRouter's public catalog built into the server
+([pricing](pricing.md#market-prices)).
+
+- **Weekly.** The workflow `market` reads the catalog every Monday and
+  opens or updates the pull request "Market snapshot YYYY-MM-DD" on the
+  branch `market-snapshot`. A pull request opened by the workflow's own
+  token starts no other workflow; push to it, or close and reopen it, to
+  run CI. Merging it changes no price.
+- **By hand.** `hack/fetch-market.sh` writes the file on any machine with
+  internet access; `hack/fetch-market.sh FILE` reads a catalog saved
+  earlier.
+- **Offline.** `deploy/offline/build-bundle.sh` runs the script before it
+  builds the image, and writes the snapshot's date to `bundle.env` as
+  `MARKET_SNAPSHOT`.
+- **Releases.** A version tag fails CI when the snapshot is more than 60
+  days old (`hack/check-market.sh`).
+
 ## If the hub is down
 
 The LLM clusters keep serving with the configuration they last received. You

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"aigw-ui/internal/market"
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
 )
@@ -101,10 +102,13 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	snap := market.Current()
+	models := make([]modelOut, len(out))
 	for i := range out {
 		out[i].Warnings = s.modelWarnings(out[i], fleet, peers, len(bestEffort[out[i].ID]))
+		models[i] = withMarket(out[i], snap)
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, models)
 }
 
 func (s *Server) createModel(w http.ResponseWriter, r *http.Request) {
