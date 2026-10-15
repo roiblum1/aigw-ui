@@ -203,6 +203,41 @@ export default function MyUsage() {
         <ErrorBanner message={error} />
         {report && (
           <>
+            {report.budget && (
+              <section className="card">
+                <h2>Your budget across models</h2>
+                <p className="hint">
+                  One amount for every model with prices, counted together: a cheaper model spends it more slowly.
+                </p>
+                <div className="dash-grid">
+                  <div className="panel">
+                    <h3>All models</h3>
+                    <Bar
+                      label={`Budget per ${windowLabel[report.budget.window]}`}
+                      used={report.budget.used}
+                      limit={report.budget.limit}
+                      format={(n) => formatNumber(n, "credits")}
+                    />
+                    <p className="detail">
+                      {formatAmount(Math.max(0, report.budget.limit - report.budget.used), "credits")} left. A new{" "}
+                      {windowLabel[report.budget.window]} starts at {resets(report.budget.resets_at)}.
+                    </p>
+                    {!report.budget.enforced ? (
+                      <p className="detail">
+                        <span className="tag warn">not enforced</span> No gateway holds your team to it yet.
+                      </p>
+                    ) : (
+                      report.budget.used >= report.budget.limit && (
+                        <p className="detail">
+                          <span className="tag warn">spent</span> Your budget is spent. Requests to every priced model are
+                          refused until the new {windowLabel[report.budget.window]}.
+                        </p>
+                      )
+                    )}
+                  </div>
+                </div>
+              </section>
+            )}
             <section className="card">
               <h2>Your budgets</h2>
               {!report.usage_enabled ? (

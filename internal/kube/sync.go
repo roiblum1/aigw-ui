@@ -116,12 +116,15 @@ func objectKey(kind, namespace, name string) string { return kind + "/" + namesp
 // reaches the proxy when the route is built again, and a changed policy
 // alone does not make that happen. This tool's own routes carry the revision
 // already. On a route somebody else renders, the annotation is the one thing
-// this tool writes.
+// this tool writes, and, for a priced model, the cost of a request in
+// credits among the route's request costs, which the tenants' budgets
+// across models are charged with. Any other cost the route has stays.
 func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstructured.Unstructured, res *SyncResult) error {
 	revision := policy.GetAnnotations()[render.QuotaRevisionAnnotation]
 	if policy.GetKind() != "QuotaPolicy" || revision == "" {
 		return nil
 	}
+	credits := policy.GetAnnotations()[render.CreditsAnnotation]
 	if ns := policy.GetNamespace(); ns != "" {
 		namespace = ns
 	}
@@ -141,16 +144,23 @@ func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstr
 		}
 		return fmt.Errorf("list AIGatewayRoute in %s: %w", namespace, describe(err))
 	}
-	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{render.QuotaRevisionAnnotation: revision}}})
-	if err != nil {
-		return err
-	}
 	for _, route := range routes.Items {
-		if route.GetLabels()[render.ManagedLabel] == render.ManagedValue ||
-			route.GetAnnotations()[render.QuotaRevisionAnnotation] == revision || !sendsTo(route, backends) {
+		if route.GetLabels()[render.ManagedLabel] == render.ManagedValue || !sendsTo(route, backends) {
 			continue
 		}
-		_, err := c.dyn.Resource(gvr).Namespace(namespace).Patch(ctx, route.GetName(), types.MergePatchType, patch,
+		costs, costsChanged := withCredits(route, credits)
+		if route.GetAnnotations()[render.QuotaRevisionAnnotation] == revision && !costsChanged {
+			continue
+		}
+		body := map[string]any{"metadata": map[string]any{"annotations": map[string]any{render.QuotaRevisionAnnotation: revision}}}
+		if costsChanged {
+			body["spec"] = map[string]any{"llmRequestCosts": costs}
+		}
+		patch, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		_, err = c.dyn.Resource(gvr).Namespace(namespace).Patch(ctx, route.GetName(), types.MergePatchType, patch,
 			metav1.PatchOptions{FieldManager: fieldManager})
 		if apierrors.IsNotFound(err) {
 			continue
@@ -161,6 +171,37 @@ func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstr
 		res.Changes = append(res.Changes, Change{Kind: "AIGatewayRoute", Namespace: namespace, Name: route.GetName(), Action: "updated"})
 	}
 	return nil
+}
+
+// withCredits returns the route's request costs with the cost in credits
+// set to the expression, or taken out when it is empty, and whether that
+// is a change. The costs are only replaced as a whole, so every other
+// entry is kept as it is.
+func withCredits(route unstructured.Unstructured, credits string) ([]any, bool) {
+	costs, _, _ := unstructured.NestedSlice(route.Object, "spec", "llmRequestCosts")
+	var out []any
+	found := false
+	for _, c := range costs {
+		cost, _ := c.(map[string]any)
+		if key, _ := cost["metadataKey"].(string); key != render.CreditsKey {
+			out = append(out, c)
+			continue
+		}
+		if credits == "" {
+			continue
+		}
+		found = true
+		if cel, _ := cost["cel"].(string); cel == credits && cost["type"] == "CEL" {
+			out = append(out, c)
+			continue
+		}
+		out = append(out, map[string]any{"metadataKey": render.CreditsKey, "type": "CEL", "cel": credits})
+		return out, true
+	}
+	if credits != "" && !found {
+		return append(out, map[string]any{"metadataKey": render.CreditsKey, "type": "CEL", "cel": credits}), true
+	}
+	return out, len(out) != len(costs)
 }
 
 // sendsTo reports whether a rule of the route names one of the backends.

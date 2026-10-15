@@ -58,7 +58,7 @@ func authPolicy(s State) *unstructured.Unstructured {
 			jwt["failOpen"] = true
 		}
 		spec["jwt"] = jwt
-		if a := authorization(s.Identity); a != nil {
+		if a := authorization(s.Identity, s.Restricted); a != nil {
 			spec["authorization"] = a
 		}
 	}

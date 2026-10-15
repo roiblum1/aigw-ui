@@ -236,7 +236,9 @@ budget is kept and reset while the hub is down.
 
 A tenant has one budget per model, so it is one of these and not two. The
 gateway lets a request through when any of a tenant's buckets has room, so
-a daily and an hourly budget together would not both hold.
+a daily and an hourly budget together would not both hold. A tenant can also
+have one [budget across every priced model](user-guide.md#tenants), which
+holds alongside its budgets per model.
 
 There is no period of three hours, and none is planned. The gateway knows a
 second, a minute, an hour and a day. A block of three hours would have to

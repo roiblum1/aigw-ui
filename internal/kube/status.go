@@ -25,7 +25,7 @@ func (c *Client) readGatewayStatus(ctx context.Context, namespace string, desire
 		changed[ch.Kind+"/"+ch.Namespace+"/"+ch.Name] = i
 	}
 	for _, obj := range desired {
-		if obj.GetKind() == "EnvoyPatchPolicy" {
+		if obj.GetKind() == "EnvoyPatchPolicy" || obj.GetKind() == "BackendTrafficPolicy" {
 			c.readPatchStatus(ctx, namespace, obj, changed, res)
 			continue
 		}
@@ -60,11 +60,13 @@ func (c *Client) readGatewayStatus(ctx context.Context, namespace string, desire
 	}
 }
 
-// readPatchStatus reports an EnvoyPatchPolicy the gateway did not put into
-// effect. That happens when patches are not enabled in the Envoy Gateway
-// configuration, or when a patch finds nothing to change. Envoy Gateway
-// carries on without the patch, so nothing else is affected, but what the
-// patch was for is missing.
+// readPatchStatus reports an EnvoyPatchPolicy or BackendTrafficPolicy the
+// gateway did not put into effect. For a patch that happens when patches
+// are not enabled in the Envoy Gateway configuration, or when a patch finds
+// nothing to change; for the tenants' budget policy when global rate
+// limiting is not enabled there. Envoy Gateway carries on without the
+// policy, so nothing else is affected, but what the policy was for is
+// missing.
 func (c *Client) readPatchStatus(ctx context.Context, namespace string, obj *unstructured.Unstructured, changed map[string]int, res *SyncResult) {
 	gvr, _ := gvrFor(obj.GetKind())
 	ns := obj.GetNamespace()
@@ -75,24 +77,31 @@ func (c *Client) readPatchStatus(ctx context.Context, namespace string, obj *uns
 	if err != nil {
 		return
 	}
-	verdict, message := patchVerdict(live)
+	// A patch is in effect once Programmed; a traffic policy reports
+	// Accepted and nothing more.
+	want := "Programmed"
+	if obj.GetKind() == "BackendTrafficPolicy" {
+		want = "Accepted"
+	}
+	verdict, message := patchVerdict(live, want)
 	if verdict == "" {
 		return
 	}
 	if i, ok := changed[obj.GetKind()+"/"+ns+"/"+obj.GetName()]; ok {
 		res.Changes[i].Gateway, res.Changes[i].GatewayMessage = verdict, message
 	}
-	if verdict != "Programmed" {
+	if verdict != want {
 		res.Rejected = append(res.Rejected, Change{Kind: obj.GetKind(), Namespace: ns, Name: obj.GetName(), Gateway: verdict, GatewayMessage: message})
 	}
 }
 
-// patchVerdict returns "Programmed" when every gateway the policy is for has
-// it in effect, and otherwise the first condition that says why not, with
-// its message. It returns "" while the controller has reported nothing.
-func patchVerdict(policy *unstructured.Unstructured) (string, string) {
+// patchVerdict returns want ("Programmed" or "Accepted") when every gateway
+// the policy is for reports that condition true, and otherwise the first
+// condition that says why not, with its message. It returns "" while the
+// controller has reported nothing.
+func patchVerdict(policy *unstructured.Unstructured, want string) (string, string) {
 	ancestors, _, _ := unstructured.NestedSlice(policy.Object, "status", "ancestors")
-	programmed := false
+	found := false
 	for _, a := range ancestors {
 		ancestor, _ := a.(map[string]any)
 		conditions, _, _ := unstructured.NestedSlice(ancestor, "conditions")
@@ -104,13 +113,13 @@ func patchVerdict(policy *unstructured.Unstructured) (string, string) {
 			switch {
 			case (kind == "Accepted" || kind == "Programmed") && status != "True":
 				return "Not" + kind, message
-			case kind == "Programmed":
-				programmed = true
+			case kind == want:
+				found = true
 			}
 		}
 	}
-	if programmed {
-		return "Programmed", ""
+	if found {
+		return want, ""
 	}
 	return "", ""
 }

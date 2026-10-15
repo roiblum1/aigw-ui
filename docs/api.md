@@ -75,7 +75,7 @@ whether its request reached the clusters.
 
 `action` is one of `cluster.add`, `cluster.update`, `model.add`,
 `model.update`, `model.delete`, `tenant.add`, `tenant.update`,
-`tenant.delete`, `key.add`, `key.revoke`, `quota.set`, `quota.delete`,
+`tenant.delete`, `tenant.budget`, `tenant.models`, `key.add`, `key.revoke`, `quota.set`, `quota.delete`,
 `usage.reset`, `sync`, `discovery`, `cluster.delete` and `selftest`.
 
 ## Documents
@@ -126,7 +126,7 @@ Request bodies are never stored.
 
 | Method | Path | Result |
 |---|---|---|
-| GET | `/usage` | Tokens used in the current window, for every tenant quota |
+| GET | `/usage` | Tokens used in the current window, for every tenant quota, and `budgets`: what each tenant used of its budget across models, in credits (`tenant_id`, `tenant_slug`, `limit`, `window`, `used`, `resets_at`, `counters`) |
 | GET | `/usage?tenant_id=<id>` | The same for one tenant |
 | GET | `/usage/history?step=day&days=30` | What every tenant used of every model per day or hour |
 | GET | `/my/usage` | A tenant's own budgets, usage and prices. Takes one of the tenant's API keys as the bearer token, not the admin token |
@@ -300,7 +300,7 @@ A second `POST` while one runs, on any cluster, answers 409.
 The step IDs, in the order they run, are `gateway`, `apply`, `key`,
 `bad-key`, `counter`, `limit`, `overage`, `reset`, `client-id`,
 `tenant-header`, `cached-tokens`, `revoked-token`, `long-prompt`, `sticky`,
-`fleet-revision` and `cleanup`.
+`fleet-revision`, `budget`, `models` and `cleanup`.
 
 On update, any field that is left out keeps its stored value, so a body with
 only `{"site": "site2"}` changes the site and nothing else. An empty
@@ -449,10 +449,12 @@ be given; and what is left to give under its overcommit limit
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| GET | `/tenants` | | List with key and quota counts; `api_key_count` is how many of the keys are API keys rather than tokens |
+| GET | `/tenants` | | List with key and quota counts; `api_key_count` is how many of the keys are API keys rather than tokens; `budget` is the tenant's budget across models (`{"credits", "window"}`) or `null`; `models` the IDs of the models it may call, or `null` for every model |
 | POST | `/tenants` | `{"slug", "display_name"}` | Created tenant |
 | GET | `/tenants/{id}` | | `{"tenant", "keys", "quotas"}` |
 | PUT | `/tenants/{id}` | `{"display_name", "enabled"}` | Updated tenant |
+| PUT | `/tenants/{id}/budget` | `{"credits", "window"}`, or `{"credits": null}` to remove it | The tenant. One budget in credits across every model with prices, enforced by the gateways from the next sync. 409 while the gateways take API keys too |
+| PUT | `/tenants/{id}/models` | `{"models": ["<model id>", ...]}`, or `{"models": null}` for every model | The tenant. Any other model is refused (403) from the next sync; an empty list refuses every model. 409 while the gateways take API keys too |
 | DELETE | `/tenants/{id}` | | 204 |
 | POST | `/tenants/{id}/keys` | `{"name", "kind"}` | `{"key": {...}, "secret": "eyJ..."}`. `kind` is `token`, the default, or `key` for an API key of the kind before 0.18, refused (409) while a model has a standard. A key has `kind` and, a token, `expires_at` |
 | DELETE | `/keys/{id}` | | 204, key revoked; a token is refused by every gateway after its next sync, until it expires |

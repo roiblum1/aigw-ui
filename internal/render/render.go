@@ -82,6 +82,10 @@ type Model struct {
 	// gateway's default, total_tokens. For a priced model it is the
 	// expression of its prices.
 	CostExpression string
+	// Priced is set when CostExpression is the expression of the model's
+	// prices, in credits: its routes then write what a request cost, which
+	// the tenants' budgets across models are charged with.
+	Priced bool
 	// DryRun counts every tenant of the model and refuses nobody. It is how
 	// a model's prices are tried out before its quotas are enforced in money.
 	DryRun bool
@@ -180,6 +184,12 @@ type State struct {
 	// Tenants are the slugs of the enabled tenants: each has a counter of
 	// its own under a model's standard.
 	Tenants []string
+	// Budgets are the enabled tenants' budgets across every priced model,
+	// and Restricted the enabled tenants that may call only some models.
+	// Both are enforced through the tenant header a token sets, so they are
+	// only given while the gateway takes tokens only.
+	Budgets    []TenantBudget
+	Restricted []TenantModels
 }
 
 // Objects returns the desired objects in the order they should be applied.
@@ -220,6 +230,9 @@ func Objects(s State) []*unstructured.Unstructured {
 	}
 	if s.AuthEnabled {
 		out = append(out, authPolicy(s))
+	}
+	if s.hasBudgets() {
+		out = append(out, budgetPolicy(s))
 	}
 	return append(out, objectives(s)...)
 }

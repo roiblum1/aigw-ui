@@ -260,6 +260,12 @@
   .check input {
     margin-top: 3px;
   }
+  .check-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 6px 14px;
+    margin: 10px 0 12px;
+  }
   .check small {
     display: block;
     font-weight: 400;

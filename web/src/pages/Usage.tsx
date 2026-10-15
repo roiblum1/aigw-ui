@@ -164,6 +164,43 @@ export default function Usage() {
           the backends the same namespace and name on every cluster to get a single budget.
         </div>
       )}
+      {data?.enabled && data.budgets.length > 0 && (
+        <>
+          <h2>Budgets across models</h2>
+          <p className="hint">
+            One amount per tenant for every model with prices, counted together by the gateways. In dollars.
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Tenant</th>
+                  <th>Used</th>
+                  <th>Window</th>
+                  <th>Resets in</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.budgets
+                  .filter((b) => !filter.trim() || b.tenant_slug.includes(filter.trim().toLowerCase()))
+                  .map((b) => (
+                    <tr key={b.tenant_id}>
+                      <td className="strong">{b.tenant_slug}</td>
+                      <td>
+                        <UsageMeter
+                          q={{ ...b, overage_used: 0, unit: "credits", shadow: false, model_id: "", model_name: "every model" }}
+                        />
+                      </td>
+                      <td>per {windowLabel[b.window]}</td>
+                      <td className="mono">{resetsIn(b.resets_at, now)}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+          <h2>Quotas per model</h2>
+        </>
+      )}
       {data?.enabled && data.quotas.length === 0 && (
         <Empty icon={Activity}>No tenant has a quota yet. Set one on a tenant to see its usage here.</Empty>
       )}

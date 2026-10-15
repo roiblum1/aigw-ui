@@ -8,11 +8,14 @@ import {
   FormModal,
   Modal,
   PageHeader,
+  formatDollars,
   formatTime,
   useAction,
   useLoad,
   usePolling,
+  windowLabel,
 } from "../components";
+import { TenantBudgetCard, TenantModelsCard } from "./TenantBudget";
 import TenantQuotas from "./TenantQuotas";
 import { REFRESH_MS } from "./Usage";
 
@@ -57,6 +60,7 @@ export default function Tenants() {
                 <th>Status</th>
                 <th>Active keys</th>
                 <th>Quotas</th>
+                <th>Budget across models</th>
                 <th />
               </tr>
             </thead>
@@ -66,6 +70,11 @@ export default function Tenants() {
                   <td>
                     <div className="strong">{t.display_name || t.slug}</div>
                     <div className="detail mono">{t.slug}</div>
+                    {t.models && (
+                      <div className="detail" title="The tenant may call only the models listed on its page.">
+                        {t.models.length === 1 ? "1 model" : `${t.models.length} models`}
+                      </div>
+                    )}
                   </td>
                   <td>
                     <span className={t.enabled ? "badge synced" : "badge pending"}>
@@ -84,6 +93,7 @@ export default function Tenants() {
                     )}
                   </td>
                   <td>{t.quota_count}</td>
+                  <td>{t.budget ? `${formatDollars(t.budget.credits)} per ${windowLabel[t.budget.window]}` : "—"}</td>
                   <td className="row-actions">
                     <button onClick={() => setOpenId(t.id)}>Manage</button>
                   </td>
@@ -197,6 +207,7 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   const { data, error, reload } = useLoad(async () => ({
     detail: await api.tenant(props.id),
     models: await api.models(),
+    signing: await api.signingKeys(),
   }));
   // Usage is loaded on its own so that Redis being down never hides the tenant.
   const usage = useLoad(() => api.usage(props.id));
@@ -337,6 +348,15 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
           action.run(async () => void (await api.resetUsage(tenant.id, modelId), await usage.reload()))
         }
       />
+      <TenantBudgetCard
+        tenant={tenant}
+        models={data.models}
+        usage={usage.data ?? null}
+        identity={data.signing.identity}
+        busy={action.busy}
+        act={act}
+      />
+      <TenantModelsCard tenant={tenant} models={data.models} identity={data.signing.identity} busy={action.busy} act={act} />
 
       {newKey && (
         <Modal title={newKey.key.kind === "token" ? "Token created" : "Key created"} onClose={() => setNewKey(null)}>

@@ -533,6 +533,45 @@ with the keys it should hold and removes any other entry.
   came in through `stringData`, and the gateway trusts every entry: a
   revoked key would keep working.
 
+### Set a budget across models
+
+**What it does.** One amount in dollars per minute, hour or day for every
+model with prices, counted together. The gateway refuses the tenant on
+every priced model once it is spent.
+
+**How.** One rule per tenant in one `BackendTrafficPolicy` on the client
+listener, a global rate limit of Envoy Gateway charged with what each
+answer cost at the model's prices; every route of a priced model writes that
+cost. See [architecture](architecture.md#a-budget-across-models).
+
+**Why.**
+
+- *Enforced by the gateway, counted in one shared Redis.* The hub renders the
+  same policy for every cluster, and every cluster's rate limit service
+  counts in the same key, so a tenant has one budget across clusters and
+  regions and the hub is not in the path of a request: while it is down,
+  every budget holds as it is, and only changes and the Usage page wait. An earlier version
+  (0.20.0) added up the spend in the hub and closed tenants by a rule; that
+  was a minute late and depended on the hub.
+- *Changing a budget starts its count over.* The gateway names the counter
+  after the rule's position; a changed or removed rule moves it. The owner
+  accepted that in place of a more involved rendering.
+- *A tenant's quotas per model stay.* Both hold: the budget is the ceiling
+  across models, a quota the ceiling on one.
+
+### Limit a tenant to some models
+
+**What it does.** A tenant may call only the models on its list; any other
+is refused with 403.
+
+**How.** One `Deny` rule per such tenant in the `SecurityPolicy`, on the
+tenant header and the model header the gateway sets from the request body.
+
+**Why.** Which models a tenant may call and how much it may spend are two
+questions: the first is authorization (403), the second a budget (429). A
+model added later is closed to a tenant with a list until it is added, so
+nothing opens by accident.
+
 ### Why a new quota needs the route to change
 
 **What it does.** Every route the server renders carries the annotation

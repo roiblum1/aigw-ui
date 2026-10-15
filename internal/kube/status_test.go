@@ -27,7 +27,7 @@ func TestPatchVerdict(t *testing.T) {
 		"nothing reported":    {&unstructured.Unstructured{Object: map[string]any{}}, ""},
 		"accepted only":       {policy(cond("Accepted", "True", "")), ""},
 	} {
-		if got, _ := patchVerdict(tc.policy); got != tc.verdict {
+		if got, _ := patchVerdict(tc.policy, "Programmed"); got != tc.verdict {
 			t.Errorf("%s: verdict %q, want %q", name, got, tc.verdict)
 		}
 	}

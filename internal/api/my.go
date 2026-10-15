@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/token"
 )
@@ -135,6 +136,17 @@ type myPrice struct {
 	Output    int64  `json:"price_output"`
 }
 
+// myTenantBudget is a tenant's budget across every priced model, in
+// credits, and what it has used of it.
+type myTenantBudget struct {
+	Limit    int64     `json:"limit"`
+	Window   string    `json:"window"`
+	Used     int64     `json:"used"`
+	ResetsAt time.Time `json:"resets_at"`
+	// Enforced is false while the gateways do not hold the tenant to it.
+	Enforced bool `json:"enforced"`
+}
+
 type myUsage struct {
 	Tenant      string    `json:"tenant"`
 	DisplayName string    `json:"display_name"`
@@ -142,6 +154,8 @@ type myUsage struct {
 	// UsageEnabled is false when the server reads no usage counters.
 	UsageEnabled bool       `json:"usage_enabled"`
 	Budgets      []myBudget `json:"budgets"`
+	// Budget is the tenant's budget across models, nil when it has none.
+	Budget *myTenantBudget `json:"budget"`
 	Prices       []myPrice  `json:"prices"`
 	// Days is the usage of the last 30 days, Hours of the last 2 days.
 	// Steps in which nothing was used are left out.
@@ -160,6 +174,9 @@ func (s *Server) getMyUsage(w http.ResponseWriter, r *http.Request) {
 		DaysFrom: today.AddDate(0, 0, -29), HoursFrom: today.AddDate(0, 0, -1)}
 
 	mine := map[string]bool{}
+	if t.Budget != nil {
+		out.Budget = &myTenantBudget{Limit: t.Budget.Credits, Window: t.Budget.Window, ResetsAt: render.WindowEnd(t.Budget.Window, now)}
+	}
 	if s.usage != nil {
 		rep, err := s.usage.Report(r.Context(), t.ID)
 		if err != nil {
@@ -167,6 +184,12 @@ func (s *Server) getMyUsage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out.UsageEnabled = true
+		for _, b := range rep.Budgets {
+			if out.Budget != nil {
+				// The budget is in the report only where a gateway enforces it.
+				out.Budget.Used, out.Budget.Enforced = b.Used, true
+			}
+		}
 		for _, q := range rep.Quotas {
 			mine[q.ModelID] = true
 			out.Budgets = append(out.Budgets, myBudget{

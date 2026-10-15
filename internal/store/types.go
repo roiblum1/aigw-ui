@@ -209,6 +209,19 @@ type Tenant struct {
 	// tokens: while any tenant has one, the gateways list every key.
 	APIKeyCount int `json:"api_key_count"`
 	QuotaCount  int `json:"quota_count"`
+	// Budget is the tenant's budget across every priced model, in credits
+	// for each window, enforced by the gateways; nil when it has none. Its
+	// quotas per model hold alongside it.
+	Budget *TenantBudget `json:"budget"`
+	// Models is the IDs of the models the tenant may call, or nil when it
+	// may call every model. An empty list closes every model to it.
+	Models []string `json:"models"`
+}
+
+// TenantBudget is a tenant's budget across models: credits for each window.
+type TenantBudget struct {
+	Credits int64  `json:"credits"`
+	Window  string `json:"window"`
 }
 
 type APIKey struct {

@@ -82,7 +82,11 @@ func jwtProvider(i Identity) map[string]any {
 // keys it lists, so two more rules follow: a token that checks out passes,
 // and any other credential shaped like a token, such as an expired token
 // still listed, is refused. An API key never looks like a token.
-func authorization(i Identity) map[string]any {
+//
+// restricted adds one rule per tenant that may call only some models, which
+// refuses its requests for any other (HTTP 403). With API keys still taken
+// a request with one has no tenant header and is not held by it.
+func authorization(i Identity, restricted []TenantModels) map[string]any {
 	var rules []any
 	deny := func(name, claim string, values []string) {
 		values = append([]string(nil), values...)
@@ -102,6 +106,7 @@ func authorization(i Identity) map[string]any {
 	}
 	deny("revoked", "jti", i.Denied)
 	deny("disabled-tenant", "sub", i.Disabled)
+	rules = append(rules, modelRules(restricted)...)
 	if i.Mode == IdentityBoth {
 		rules = append(rules,
 			map[string]any{

@@ -75,6 +75,8 @@ back an object that someone edited or deleted by hand.
 | Model added by hand | `Backend`, `AIServiceBackend`, `AIGatewayRoute` |
 | Tenant quota | one `QuotaPolicy` per model in each namespace that holds one of the model's `AIServiceBackend`s |
 | Tenant API keys, with "Enforce API keys" on | one `Secret` (`aigw-ui-api-keys`) and one `SecurityPolicy` on the gateway |
+| Tenant budgets across models | one `BackendTrafficPolicy` (`aigw-ui-tenant-budgets`) on the gateway, with one rule per tenant |
+| A tenant held to some models | one rule per such tenant in the `SecurityPolicy` |
 
 The Secret holds one entry per active key, the client ID and the key, under
 `data`. It must not be written through `stringData`: server-side apply cannot
@@ -121,6 +123,47 @@ Counters add up across sites when all of these hold:
 
 For models added by hand the tool guarantees the names. For discovered models
 the names are yours.
+
+## A budget across models
+
+A tenant's budget across every priced model is enforced by the gateways, not
+by the hub (`internal/render/budget.go`), since 0.22.0:
+
+1. Every route of a priced model carries `llmRequestCosts` with the key
+   `aigw_ui_credits`: the model's price expression, which the AI gateway
+   evaluates on each answer and writes to the request's dynamic metadata
+   under `io.envoy.ai_gateway`. The hub writes it on the routes it renders;
+   on a route a cluster's own chart renders it is put there by the sync,
+   next to the quota revision, from the annotation
+   `aigw-ui.io/credits-expression` of the model's `QuotaPolicy`. Other
+   costs the route has stay.
+2. One `BackendTrafficPolicy`, `aigw-ui-tenant-budgets`, on the client
+   listener: a global rate limit with one rule per tenant that has a
+   budget, in slug order, matching `x-aigw-tenant` exactly, `shared: true`,
+   the amount in credits for the window, a request cost of 0 and a response
+   cost from that metadata. Shared makes it one bucket across every route of
+   the listener; without it Envoy Gateway keys the bucket by route, which is
+   by model (seen on the lab, 2026-10-16).
+3. Envoy Gateway's global rate limit service charges the bucket when the
+   stream ends and refuses the next request once it is spent (HTTP 429).
+   The counter's key holds the policy's namespace and name and the rule's
+   position, and nothing of the cluster, so every cluster that renders the
+   same policy counts in the same key of the Redis the gateways share (on
+   the lab, the sandbox hub's; in production, one Redis of its own)
+   (`render.BudgetCounters`; the Usage page and the tenants' own page read
+   it).
+
+It needs tokens only, as a standard does: the rule reads the tenant header.
+And it needs global rate limiting enabled in the Envoy Gateway configuration
+of every cluster, with the shared Redis and a timeout that reaches it (the
+default of 20 ms does not across a network: every call is cancelled and the
+request passes). The sync reports the policy's `Accepted` condition; the
+self-test checks the whole path.
+
+A tenant held to some models gets one `Deny` rule in the `SecurityPolicy`,
+a CEL expression on the tenant header and `x-ai-eg-model`, which the AI
+gateway sets from the request body before the authorization filter runs. A
+model not in the list is refused with 403 before any quota is asked.
 
 ## Task log
 
@@ -612,6 +655,10 @@ removed.
   as `v1alpha1`, the only version it has. Up to 0.11.0 it wrote all three as
   `v1alpha1`, which both gateway versions still serve but call deprecated.
 - For quotas: the dedicated quota rate limit service, pointed at the hub Redis. The AI gateway Helm chart does not deploy it.
+- For budgets across models: global rate limiting in the Envoy Gateway
+  configuration (`rateLimit.backend` with the shared Redis and `timeout` of a
+  few seconds); Envoy Gateway then runs its own rate limit service next to
+  the AI gateway's. See [deployment](deployment.md#before-the-first-budget-across-models).
 - A `ClientTrafficPolicy` on the Gateway with `connection.bufferLimit`, for
   example `50Mi`. Without it Envoy Gateway buffers 32 KiB of a request and
   the gateway answers 413 to every longer prompt. This tool does not write
