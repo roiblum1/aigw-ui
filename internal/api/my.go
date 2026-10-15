@@ -156,7 +156,7 @@ type myUsage struct {
 	Budgets      []myBudget `json:"budgets"`
 	// Budget is the tenant's budget across models, nil when it has none.
 	Budget *myTenantBudget `json:"budget"`
-	Prices       []myPrice  `json:"prices"`
+	Prices []myPrice       `json:"prices"`
 	// Days is the usage of the last 30 days, Hours of the last 2 days.
 	// Steps in which nothing was used are left out.
 	DaysFrom  time.Time          `json:"days_from"`

@@ -80,10 +80,12 @@ func TestBudgetPolicy(t *testing.T) {
 // and a model that is not priced writes no credits.
 func TestBudgetPolicyHeld(t *testing.T) {
 	for name, change := range map[string]func(*State){
-		"both":     func(s *State) { s.Identity.Mode = IdentityBoth },
-		"no auth":  func(s *State) { s.AuthEnabled = false },
-		"none":     func(s *State) { s.Budgets = nil },
-		"invalid":  func(s *State) { s.Budgets = []TenantBudget{{TenantSlug: "a", Limit: 0, Window: "1d"}, {TenantSlug: "b", Limit: 1, Window: "2d"}} },
+		"both":    func(s *State) { s.Identity.Mode = IdentityBoth },
+		"no auth": func(s *State) { s.AuthEnabled = false },
+		"none":    func(s *State) { s.Budgets = nil },
+		"invalid": func(s *State) {
+			s.Budgets = []TenantBudget{{TenantSlug: "a", Limit: 0, Window: "1d"}, {TenantSlug: "b", Limit: 1, Window: "2d"}}
+		},
 	} {
 		s := budgetState()
 		change(&s)
