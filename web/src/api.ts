@@ -570,12 +570,47 @@ export interface ModelBudget {
   overcommit_limit: number;
   short_windows: number;
   pool_day: number | null;
+  /** The planner's figures for a priced model: R in credits a second, its busiest hour's share of what it serves, and each LLMI. */
+  value_per_second: number | null;
+  peak_hour_share: number | null;
+  saturated: boolean;
+  llmis: {
+    cluster_id: string;
+    cluster_name: string;
+    namespace: string;
+    name: string;
+    ready: number;
+    /** Credits a second one instance serves at the model's prices; null when not measured. */
+    value_per_second: number | null;
+    measured_at: string | null;
+    profile_version: number | null;
+    mode: "" | "drained" | "live";
+    stale: "" | "profile" | "age";
+  }[];
+}
+
+/** The line the planner shows first, in credits a day. */
+export interface Fleet {
+  /** Every priced model busy all day at the targets. */
+  value_day: number;
+  can_be_given_day: number;
+  ceiling_day: number;
+  given_day: number;
+  wallets_day: number;
+  left_day: number;
+  /** From the busiest of the last 30 days; null with less than two weeks of history. */
+  suggested_overcommit: number | null;
 }
 
 export interface Budgets {
   models: ModelBudget[];
   /** Added up over the measured models counted in dollars. */
   credits: { capacity_day: number; ceiling_day: number; given_day: number; left_day: number };
+  fleet: Fleet;
+  /** The priced models by their busiest hour's share, the highest first. */
+  by_peak: string[];
+  /** Yesterday's spend at the models' prices, and what the GPUs cost a day with GPU costs entered. */
+  market: { yesterday_spend: number; cost_day: number | null; cost_partial: boolean };
 }
 
 export interface CapacityPlan {
@@ -831,6 +866,8 @@ export const api = {
   setOvercommitLimit: (modelId: string, limit: number) =>
     request<void>("PUT", `/models/${modelId}/overcommit-limit`, { limit }),
   budgets: () => request<Budgets>("GET", "/budgets"),
+  split: (body: { amount: number; tenant_ids: string[]; model_id: string }) =>
+    request<{ proposals: { tenant_id: string; amount: number; model_id: string }[] }>("POST", "/budgets/split", body),
   setGPUPrice: (gpu: string, usd_per_hour: number, note: string) =>
     request<void>("PUT", `/gpu-prices/${encodeURIComponent(gpu)}`, { usd_per_hour, note }),
   deleteGPUPrice: (gpu: string) => request<void>("DELETE", `/gpu-prices/${encodeURIComponent(gpu)}`),

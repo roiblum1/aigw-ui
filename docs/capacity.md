@@ -430,6 +430,62 @@ instances are charged busy for an hour, and that divided by their cost.
 tokens a second and time to first token at each step, against its target)
 and a table of every step. **Measurements** lists the earlier ones.
 
+## The budget planner
+
+The planner says how many dollars a day are left to give over the whole
+fleet, and which model runs out first (`internal/budget`). Its first line
+is at the top of the Capacity page and on the Overview:
+
+> The fleet serves V a day at the models' prices. X can be given, up to Y
+> with overcommit. Z is given. L is left.
+
+For one LLMI *i* of a priced model *m*, at the highest load that met the
+targets with the profile its model is counted with:
+
+```
+r_i            = (uncached prompt x input price + cached x cached price + output x output price) / 1,000,000
+R_m            = sum over its LLMIs of: ready instances x r_i
+can be given   = 86,400 x busy share x R_m
+ceiling        = can be given x overcommit limit
+V              = 86,400 x the sum of every priced model's R_m
+given          = what every tenant can spend in a day: its wallet at its daily maximum,
+                 or the sum of its budgets at theirs
+left           = sum of the ceilings - given
+```
+
+Prices are credits for a million tokens, so *r* is credits a second. An
+LLMI without a result counts 0 and is listed. A model in tokens has no
+dollars and is left out.
+
+**Which model runs out first.** For every priced model, its busiest hour in
+the last 30 days, best-effort included, over what it serves in an hour:
+
+```
+peak hour share = busiest hour's spend / (3,600 x R_m)
+```
+
+Above 0.85 the model is marked **saturated**. The models in that order say
+where the next GPU helps most.
+
+**Overcommit, over the fleet.** With two weeks of spend or more, the line
+also says how far the budgets could go: 1 / (busiest day's spend ÷ what is
+given), between 1 and 5. Budgets are not kept by day, so what is given now
+stands for what was given that day. It is applied by hand, per model.
+
+**Split what is left** proposes equal daily budgets on one model for the
+tenants you pick, out of what is left on that model and in the fleet. It
+shows the proposal and changes nothing until you apply it, which sets each
+tenant's daily budget on the model and asks first.
+
+**Yesterday's spend** on the Overview is what the same traffic cost at the
+models' prices: what it would have cost on OpenRouter when the prices are
+the market's. With GPU costs entered, what the measured GPUs cost a day
+stands beside it.
+
+`hack/seed-planner-demo.py` fills a hub with two priced models, their
+measurements, budgets and 20 days of spend; one of them comes out
+saturated.
+
 ## What the figures leave out
 
 - One pod and one kind of traffic. A model whose prompts are short, such as
@@ -457,7 +513,8 @@ and a table of every step. **Measurements** lists the earlier ones.
 | PUT | `/benchmark-profile` | `{"name", "workload", "slo", "sweep", "note"}` | The new version, now active |
 | PUT | `/models/{id}/target-utilization` | `{"utilization"}` | 204. 0.05 to 1 |
 | PUT | `/models/{id}/overcommit-limit` | `{"limit"}` | 204. 1 to 10 |
-| GET | `/budgets` | | `{"models", "credits"}`: for each model `measured`, `capacity_day`, `ceiling_day`, `given_day`, `left_day`, `overcommit`, `overcommit_limit`, `short_windows`, `pool_day`, in its unit; `credits` adds them up over the measured models in dollars |
+| GET | `/budgets` | | `{"models", "credits", "fleet", "by_peak", "market"}`. For each model `measured`, `capacity_day`, `ceiling_day`, `given_day`, `left_day`, `overcommit`, `overcommit_limit`, `short_windows`, `pool_day`, in its unit, and for a priced model `value_per_second` (*R*, credits a second), `peak_hour_share`, `saturated` and `llmis` (each with `ready`, `value_per_second`, `measured_at`, `profile_version`, `mode`, `stale`); `credits` adds them up over the measured models in dollars; `fleet` has `value_day`, `can_be_given_day`, `ceiling_day`, `given_day`, `wallets_day`, `left_day`, `suggested_overcommit`; `by_peak` the priced models by their busiest hour; `market` `yesterday_spend`, `cost_day`, `cost_partial` |
+| POST | `/budgets/split` | `{"amount", "tenant_ids", "model_id"}` | `{"proposals"}`: equal daily budgets in credits. 400 above what is left on the model or in the fleet. Changes nothing |
 | PUT | `/gpu-prices/{gpu}` | `{"usd_per_hour", "note"}` | 204. A GPU cost, shown as **GPU costs** on the page |
 | DELETE | `/gpu-prices/{gpu}` | | 204 |
 | GET | `/clusters/{id}/deployments/{namespace}/{name}/pods` | | The deployment's ready pods, read from the cluster; a prefill/decode deployment lists its decode pods |

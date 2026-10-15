@@ -224,6 +224,8 @@ Left to give is the first line the page shows, in this form:
 
 `The fleet serves V dollars a day at market prices. X can be given, up to Y with overcommit. Z is given. L is left.`
 
+*As built (0.17.0):* the line says "at the models' prices": a price may be set by hand, and only then is "market" true of every model.
+
 Here V = 86,400 × the sum of every model's *R*: the fleet busy all day at the SLO.
 
 ### The overcommit suggestion
@@ -236,6 +238,8 @@ k_suggested = min(5, max(1, 1/s))
 ```
 
 With less than 14 days of history there is no suggestion. A suggestion is applied by hand.
+
+*As built (0.17.0):* budgets are not kept by day, so "given on that day" is what is given now.
 
 ### Which model runs out first
 
@@ -252,6 +256,8 @@ With wallets, tenants choose the model, so demand moves between models. The plan
 ### Splitting what is left
 
 **Split** takes a set of tenants and an amount up to what is left, and proposes equal wallets, or equal budgets on one model. The proposal is shown for review and applied by hand; nothing changes a budget by itself.
+
+*As built (0.17.0):* equal budgets on one model only, up to what is left on that model and in the fleet; equal wallets come with the wallets (step 5).
 
 ### Market value and cost (optional)
 
