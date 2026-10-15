@@ -24,8 +24,8 @@ const (
 )
 
 // Saturated is the share of what a model serves at the targets beyond which
-// its busiest hour is marked saturated.
-const Saturated = 0.85
+// its busiest hour is marked saturated: the campaign's own threshold.
+const Saturated = capacity.Saturated
 
 // LLMI is one LLMInferenceService of a model.
 type LLMI struct {
@@ -54,8 +54,7 @@ type Model struct {
 // the model's prices, in credits. Uncached prompt, cached prompt and output
 // tokens, each at its price per million.
 func ValuePerSecond(t capacity.Throughput, p capacity.Prices) float64 {
-	uncached := t.InputPerSecond - t.CachedPerSecond
-	return (uncached*float64(p.Input) + t.CachedPerSecond*float64(p.Cached) + t.OutputPerSecond*float64(p.Output)) / 1e6
+	return t.Value(&p)
 }
 
 // Plan is what one priced model can be given a day.
