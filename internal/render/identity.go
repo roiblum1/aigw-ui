@@ -43,7 +43,7 @@ type Identity struct {
 	// no gateway calls the hub to check a token.
 	JWKS string
 	// Denied is the jti of every token to refuse although it is signed:
-	// revoked, or of a deleted tenant, until it expires.
+	// revoked, or of a deleted tenant, until a few minutes after it expires.
 	Denied []string
 	// Disabled is the slug of every disabled tenant.
 	Disabled []string
