@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.21.0](v0.21.0.md) | not released yet | Wallets removed: a tenant's budgets are per model only, as before 0.20.0; a wallet bucket stays as the tenant's budget on its model, so no gateway limit changes |
 | [0.20.3](v0.20.3.md) | not released yet | Fixed: the self-test's counter step warned on a correct count, because the revoked-token step before it added refused requests to the counter |
 | [0.20.2](v0.20.2.md) | not released yet | Fixed: a revoked token could work again for up to a minute after it expired; the self-test's expired token was inside the gateway's 60-second allowance |
 | [0.20.1](v0.20.1.md) | not released yet | Fixed: a hub not allowed to list LLMInferenceServiceConfigs now says so; the 0.16 upgrade notes name that permission |

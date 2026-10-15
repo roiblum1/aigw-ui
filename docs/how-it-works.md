@@ -293,7 +293,7 @@ which model runs out first at its busiest hour.
 **How.** What each LLMI serves at the targets, at its model's prices, times
 its ready instances, gives what each model serves a second; the busy share
 and the overcommit limit turn that into what can be given; the tenants'
-budgets and wallets are what is given. Split proposes equal budgets out of
+budgets are what is given. Split proposes equal budgets out of
 what is left.
 
 **Why.**

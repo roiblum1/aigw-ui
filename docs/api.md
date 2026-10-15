@@ -300,7 +300,7 @@ A second `POST` while one runs, on any cluster, answers 409.
 The step IDs, in the order they run, are `gateway`, `apply`, `key`,
 `bad-key`, `counter`, `limit`, `overage`, `reset`, `client-id`,
 `tenant-header`, `cached-tokens`, `revoked-token`, `long-prompt`, `sticky`,
-`fleet-revision`, `wallet` and `cleanup`.
+`fleet-revision` and `cleanup`.
 
 On update, any field that is left out keeps its stored value, so a body with
 only `{"site": "site2"}` changes the site and nothing else. An empty
@@ -449,15 +449,13 @@ be given; and what is left to give under its overcommit limit
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| GET | `/tenants` | | List with key and quota counts; `api_key_count` is how many of the keys are API keys rather than tokens; `wallet` and `wallet_closed_until` |
+| GET | `/tenants` | | List with key and quota counts; `api_key_count` is how many of the keys are API keys rather than tokens |
 | POST | `/tenants` | `{"slug", "display_name"}` | Created tenant |
 | GET | `/tenants/{id}` | | `{"tenant", "keys", "quotas"}` |
 | PUT | `/tenants/{id}` | `{"display_name", "enabled"}` | Updated tenant |
 | DELETE | `/tenants/{id}` | | 204 |
 | POST | `/tenants/{id}/keys` | `{"name", "kind"}` | `{"key": {...}, "secret": "eyJ..."}`. `kind` is `token`, the default, or `key` for an API key of the kind before 0.18, refused (409) while a model has a standard. A key has `kind` and, a token, `expires_at` |
 | DELETE | `/keys/{id}` | | 204, key revoked; a token is refused by every gateway after its next sync, until it expires |
-| PUT | `/tenants/{id}/wallet` | `{"credits", "window"}`, or `{"credits": null}` to remove it | The tenant. `window` is `1h` or `1d`; `credits` from 1. 409 when the hub does not add wallets up (no Redis or no usage history) |
-| GET | `/tenants/{id}/wallet` | | `{"credits", "window", "start", "end", "spent", "by_model", "closed_until", "enforced"}`, or `null` without a wallet |
 | GET | `/signing-keys` | | `{"keys": [{"id", "created_at", "retired_at", "tokens"}], "identity", "issuer", "audience", "lifetime_days", "denied"}`. `identity` is `keys` (API keys only, no token issued), `both` or `tokens`; `tokens` of a key counts the unrevoked tokens it signed that have not expired |
 | POST | `/signing-keys/rotate` | | `{"id"}` of the new signing key |
 | PUT | `/tenants/{id}/quotas` | `{"model_id", "token_limit", "window", "shadow"}` | The tenant's quotas |

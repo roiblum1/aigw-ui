@@ -13,19 +13,12 @@ import (
 const tenantSelect = `SELECT t.id, t.slug, t.display_name, t.enabled, t.created_at,
 	(SELECT count(*) FROM api_keys k WHERE k.tenant_id = t.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())),
 	(SELECT count(*) FROM api_keys k WHERE k.tenant_id = t.id AND k.revoked_at IS NULL AND k.kind = 'key'),
-	(SELECT count(*) FROM quotas q WHERE q.tenant_id = t.id AND NOT q.wallet),
-	t.wallet_credits, t.wallet_window, (SELECT c.until FROM wallet_closures c WHERE c.tenant_id = t.id AND c.until > now())
+	(SELECT count(*) FROM quotas q WHERE q.tenant_id = t.id)
 	FROM tenants t`
 
 func scanTenant(row pgx.Row) (Tenant, error) {
 	var t Tenant
-	var credits *int64
-	var window *string
-	err := row.Scan(&t.ID, &t.Slug, &t.DisplayName, &t.Enabled, &t.CreatedAt, &t.KeyCount, &t.APIKeyCount, &t.QuotaCount,
-		&credits, &window, &t.ClosedUntil)
-	if credits != nil && window != nil {
-		t.Wallet = &Wallet{Credits: *credits, Window: *window}
-	}
+	err := row.Scan(&t.ID, &t.Slug, &t.DisplayName, &t.Enabled, &t.CreatedAt, &t.KeyCount, &t.APIKeyCount, &t.QuotaCount)
 	return t, mapErr(err)
 }
 
@@ -133,11 +126,11 @@ func (s *Store) RevokeKey(ctx context.Context, id string) (APIKey, error) {
 func (s *Store) ListQuotas(ctx context.Context, tenantID string) ([]Quota, error) {
 	return list(ctx, s, func(r scanner) (Quota, error) {
 		var q Quota
-		err := r.Scan(&q.ID, &q.TenantID, &q.ModelID, &q.ModelName, &q.TokenLimit, &q.Window, &q.Shadow, &q.Unit, &q.Wallet)
+		err := r.Scan(&q.ID, &q.TenantID, &q.ModelID, &q.ModelName, &q.TokenLimit, &q.Window, &q.Shadow, &q.Unit)
 		return q, err
 	}, `SELECT q.id, q.tenant_id, q.model_id, m.name, q.token_limit, q.window_size, q.shadow,
 	           CASE WHEN EXISTS (SELECT 1 FROM model_prices p WHERE p.model_id = m.id AND p.applied_at IS NOT NULL)
-	                THEN '`+UnitCredits+`' ELSE '`+UnitTokens+`' END, q.wallet
+	                THEN '`+UnitCredits+`' ELSE '`+UnitTokens+`' END
 	    FROM quotas q JOIN models m ON m.id = q.model_id WHERE q.tenant_id = $1 ORDER BY m.name`, tenantID)
 }
 
@@ -160,7 +153,7 @@ func (s *Store) UpsertQuota(ctx context.Context, tenantID, modelID string, limit
 			         SELECT min(free) FROM generate_series(0, (SELECT count(*) FROM quotas WHERE model_id = $2)::int) free
 			         WHERE NOT EXISTS (SELECT 1 FROM quotas q WHERE q.model_id = $2 AND q.slot = free)))
 			     ON CONFLICT (tenant_id, model_id) DO UPDATE SET token_limit = EXCLUDED.token_limit, window_size = EXCLUDED.window_size,
-			         shadow = COALESCE($5::boolean, quotas.shadow), wallet = false
+			         shadow = COALESCE($5::boolean, quotas.shadow)
 			     RETURNING token_limit, window_size, shadow
 			 )
 			 -- A quota that changed is a new budget: the tenant is judged

@@ -46,7 +46,7 @@ type Model struct {
 	BusyShare       float64
 	OvercommitLimit float64
 	// BusiestHour is the most spent on the model in one hour in the last
-	// 30 days, best-effort and wallet spend included, in credits.
+	// 30 days, best-effort included, in credits.
 	BusiestHour int64
 }
 
@@ -111,21 +111,15 @@ type Budget struct {
 // 24.
 func (b Budget) DayMax() int64 { return b.Limit * capacity.PerDay(b.Window) }
 
-// Tenant is an enabled tenant: its wallet, nil without one, and its budgets
-// on the priced models.
+// Tenant is an enabled tenant and its budgets on the priced models.
 type Tenant struct {
 	ID      string
-	Wallet  *Budget
 	Budgets []Budget
 }
 
-// Given is a_t, what a tenant can spend in a day: its wallet at its daily
-// maximum, or the sum of its budgets when it has none. A wallet tenant's
-// budgets are caps inside its wallet, not added.
+// Given is a_t, what a tenant can spend in a day: the sum of its budgets,
+// each at its daily maximum.
 func (t Tenant) Given() int64 {
-	if t.Wallet != nil {
-		return t.Wallet.DayMax()
-	}
 	var n int64
 	for _, b := range t.Budgets {
 		n += b.DayMax()
@@ -133,13 +127,10 @@ func (t Tenant) Given() int64 {
 	return n
 }
 
-// GivenOn is what the tenants without a wallet are given on one model a day.
+// GivenOn is what the tenants are given on one model a day.
 func GivenOn(tenants []Tenant, modelID string) int64 {
 	var n int64
 	for _, t := range tenants {
-		if t.Wallet != nil {
-			continue
-		}
 		for _, b := range t.Budgets {
 			if b.ModelID == modelID {
 				n += b.DayMax()
@@ -153,7 +144,7 @@ func GivenOn(tenants []Tenant, modelID string) int64 {
 // suggestion.
 type History struct {
 	// Days is how many days have usage recorded, BusiestDay the most spent
-	// in one of them over every priced model, wallets included.
+	// in one of them over every priced model.
 	Days       int
 	BusiestDay int64
 }
@@ -170,11 +161,9 @@ type Fleet struct {
 	ValueDay      int64 `json:"value_day"`
 	CanBeGivenDay int64 `json:"can_be_given_day"`
 	CeilingDay    int64 `json:"ceiling_day"`
-	// GivenDay is what every tenant can spend in a day; WalletsDay the part
-	// of it that is wallets.
-	GivenDay   int64 `json:"given_day"`
-	WalletsDay int64 `json:"wallets_day"`
-	LeftDay    int64 `json:"left_day"`
+	// GivenDay is what every tenant can spend in a day.
+	GivenDay int64 `json:"given_day"`
+	LeftDay  int64 `json:"left_day"`
 	// SuggestedOvercommit is k_suggested, nil with less than two weeks of
 	// history or nothing given.
 	SuggestedOvercommit *float64 `json:"suggested_overcommit"`
@@ -191,11 +180,7 @@ func PlanFleet(plans []Plan, tenants []Tenant, h History) Fleet {
 	}
 	f.ValueDay = round(SecondsPerDay * value)
 	for _, t := range tenants {
-		a := t.Given()
-		f.GivenDay += a
-		if t.Wallet != nil {
-			f.WalletsDay += a
-		}
+		f.GivenDay += t.Given()
 	}
 	f.LeftDay = f.CeilingDay - f.GivenDay
 	// s is the share of what is given that the busiest day used. Budgets
@@ -226,14 +211,13 @@ func ByPeak(plans []Plan) []Plan {
 // Proposal is one tenant's share of a split.
 type Proposal struct {
 	TenantID string `json:"tenant_id"`
-	// Amount is what the tenant gets a day, in credits: a wallet, or a
-	// budget on ModelID.
+	// Amount is what the tenant gets a day on ModelID, in credits.
 	Amount  int64  `json:"amount"`
-	ModelID string `json:"model_id,omitempty"`
+	ModelID string `json:"model_id"`
 }
 
-// Split proposes equal shares of amount among tenants: wallets when modelID
-// is "", budgets on that model otherwise. Each share is rounded down to a
+// Split proposes equal budgets on one model, shares of amount among tenants.
+// Each share is rounded down to a
 // whole credit. It changes nothing: an operator reviews it and applies it.
 func Split(amount int64, tenants []string, modelID string) []Proposal {
 	if len(tenants) == 0 || amount <= 0 {

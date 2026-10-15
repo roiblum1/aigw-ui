@@ -107,11 +107,7 @@ func (s *Server) planner(ctx context.Context, models []capacityModel) (plannerRe
 	for _, p := range budget.ByPeak(plans) {
 		out.byPeak = append(out.byPeak, p.ModelID)
 	}
-	tenants, err := s.st.ListTenants(ctx)
-	if err != nil {
-		return out, err
-	}
-	out.fleet = budget.PlanFleet(plans, tenantsOf(quotas, priced, tenants), budget.History{Days: spend.Days, BusiestDay: spend.BusiestDay})
+	out.fleet = budget.PlanFleet(plans, tenantsOf(quotas, priced), budget.History{Days: spend.Days, BusiestDay: spend.BusiestDay})
 	yesterday := now.Truncate(24 * time.Hour)
 	if out.market.YesterdaySpend, err = s.st.SpentBetween(ctx, yesterday.AddDate(0, 0, -1), yesterday); err != nil {
 		return out, err
@@ -128,30 +124,20 @@ func add(total *int64, n int64) *int64 {
 }
 
 // tenantsOf groups the enforced budgets of enabled tenants on priced models
-// by tenant, with their wallets. A model in tokens has no dollars to add;
-// a wallet bucket is the wallet itself, counted once as the wallet.
-func tenantsOf(quotas []store.Quota, priced map[string]bool, tenants []store.Tenant) []budget.Tenant {
+// by tenant. A model in tokens has no dollars to add.
+func tenantsOf(quotas []store.Quota, priced map[string]bool) []budget.Tenant {
 	byID := map[string]*budget.Tenant{}
 	var order []string
-	get := func(id string) *budget.Tenant {
-		t := byID[id]
-		if t == nil {
-			t = &budget.Tenant{ID: id}
-			byID[id] = t
-			order = append(order, id)
-		}
-		return t
-	}
-	for _, t := range tenants {
-		if t.Enabled && t.Wallet != nil {
-			get(t.ID).Wallet = &budget.Budget{Limit: t.Wallet.Credits, Window: t.Wallet.Window}
-		}
-	}
 	for _, q := range quotas {
-		if q.Shadow || q.Wallet || !priced[q.ModelID] {
+		if q.Shadow || !priced[q.ModelID] {
 			continue
 		}
-		t := get(q.TenantID)
+		t := byID[q.TenantID]
+		if t == nil {
+			t = &budget.Tenant{ID: q.TenantID}
+			byID[q.TenantID] = t
+			order = append(order, q.TenantID)
+		}
 		t.Budgets = append(t.Budgets, budget.Budget{ModelID: q.ModelID, Limit: q.TokenLimit, Window: q.Window})
 	}
 	out := make([]budget.Tenant, 0, len(order))
@@ -165,8 +151,7 @@ func tenantsOf(quotas []store.Quota, priced map[string]bool, tenants []store.Ten
 type splitBody struct {
 	Amount    int64    `json:"amount"`
 	TenantIDs []string `json:"tenant_ids"`
-	// ModelID splits budgets on one model. Wallets, with no model, come with
-	// the wallets themselves.
+	// ModelID is the model the budgets are on.
 	ModelID string `json:"model_id"`
 }
 
@@ -182,7 +167,7 @@ func (s *Server) split(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case b.ModelID == "":
-		fail(w, invalid("model_id is required: splitting into wallets comes with the wallets"))
+		fail(w, invalid("model_id is required: a split is of budgets on one model"))
 		return
 	case len(b.TenantIDs) == 0 || b.Amount <= 0:
 		fail(w, invalid("amount must be more than 0, and tenant_ids must name at least one tenant"))

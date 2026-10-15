@@ -119,9 +119,6 @@ type myBudget struct {
 	ResetsAt time.Time `json:"resets_at"`
 	// Enforced is false while the budget is only counted: nobody is refused.
 	Enforced bool `json:"enforced"`
-	// Wallet marks the bucket that follows the tenant's wallet on a model
-	// it has no cap on: the wallet is what limits it.
-	Wallet bool `json:"wallet"`
 	// BestEffortUsed is what was used after the budget was spent, on a
 	// model that goes on serving at the lowest priority.
 	BestEffortUsed   int64      `json:"best_effort_used"`
@@ -143,12 +140,9 @@ type myUsage struct {
 	DisplayName string    `json:"display_name"`
 	At          time.Time `json:"at"`
 	// UsageEnabled is false when the server reads no usage counters.
-	UsageEnabled bool `json:"usage_enabled"`
-	// Wallet is the tenant's budget across every priced model and what it
-	// spent of it, nil without one.
-	Wallet  *walletOut `json:"wallet"`
-	Budgets []myBudget `json:"budgets"`
-	Prices  []myPrice  `json:"prices"`
+	UsageEnabled bool       `json:"usage_enabled"`
+	Budgets      []myBudget `json:"budgets"`
+	Prices       []myPrice  `json:"prices"`
 	// Days is the usage of the last 30 days, Hours of the last 2 days.
 	// Steps in which nothing was used are left out.
 	DaysFrom  time.Time          `json:"days_from"`
@@ -173,29 +167,16 @@ func (s *Server) getMyUsage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out.UsageEnabled = true
-		quotas, err := s.st.ListQuotas(r.Context(), t.ID)
-		if err != nil {
-			fail(w, err)
-			return
-		}
-		wallet := map[string]bool{}
-		for _, q := range quotas {
-			wallet[q.ModelID] = q.Wallet
-		}
 		for _, q := range rep.Quotas {
 			mine[q.ModelID] = true
 			out.Budgets = append(out.Budgets, myBudget{
-				ModelName: q.ModelName, Unit: q.Unit, Limit: q.Limit, Window: q.Window, Used: q.Used, ResetsAt: q.ResetsAt, Wallet: wallet[q.ModelID],
+				ModelName: q.ModelName, Unit: q.Unit, Limit: q.Limit, Window: q.Window, Used: q.Used, ResetsAt: q.ResetsAt,
 				Enforced: !q.Shadow && !q.DryRun, BestEffortUsed: q.OverageUsed, BestEffortUntil: q.BestEffortUntil,
 				BestEffortLimit: q.BestEffortLimit, BestEffortCapped: q.BestEffortCapped,
 			})
 		}
 	}
 	var err error
-	if out.Wallet, err = s.walletOf(r, t.ID); err != nil {
-		fail(w, err)
-		return
-	}
 	if out.Days, err = s.st.UsageHistory(r.Context(), out.DaysFrom, store.StepDay, t.ID); err != nil {
 		fail(w, err)
 		return
