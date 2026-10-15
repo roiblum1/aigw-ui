@@ -243,6 +243,28 @@ clients and `/anthropic/v1/messages` for Anthropic-style ones.
 
 A quota is one budget for the tenant on that model across all sites.
 
+**A wallet.** **Give a wallet** on a tenant's page sets one budget across
+every model with prices, per hour (from the hour) or per day (from 00:00
+UTC): each request pays its model's price from it.
+
+- The tenant's quotas on priced models become **caps inside the wallet**.
+  On every priced model it has no cap on, it gets a **wallet bucket**, which
+  the hub keeps equal to the wallet; setting a limit on that row makes it a
+  cap. Models without prices are not in the wallet: they need a quota, as
+  before.
+- When the wallet is spent, the tenant is **refused on every priced model**
+  until the window ends, or served as best-effort where a model does that
+  for a spent budget. The tenant's page and its own page say so.
+- The hub enforces it (the gateway cannot yet): it adds up the tenant's
+  spend from the usage history every `OVERAGE_INTERVAL` and closes the
+  tenant at the wallet. The history records spend once a minute, so a
+  tenant can go past its wallet by about a minute of use, plus a sync. The
+  rule that refuses it ends with the window by itself, also while the hub
+  is down. Wallets need Redis and the usage history.
+- While the hub is down, a spent wallet is not noticed: each priced model
+  still stops the tenant at its wallet bucket, so in the worst case the
+  tenant spends its wallet once on each priced model in that window.
+
 **A standard budget.** **Standard budget** in a model's row on the Models
 page gives every tenant the same budget on the model, each with a count of
 its own, through one rule on the gateway in place of a rule per tenant. A

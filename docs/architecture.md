@@ -423,6 +423,23 @@ more requests than it could serve treated `best-effort` and `standard`
 alike: nothing was refused and both waited in one queue. See
 [optimization.md](optimization.md#what-a-site-does-with-the-class).
 
+## Wallets
+
+A wallet is one budget for a tenant across every priced model. The hub
+enforces it (`internal/wallet`): every `OVERAGE_INTERVAL` it reconciles the
+tenants' wallet buckets (a quota row per wallet tenant and priced model
+without a cap, marked `wallet`, equal to the wallet), adds up each wallet
+tenant's spend in its window from `usage_hours`, and closes a tenant at its
+wallet until the window ends (`wallet_closures`). A closure is an
+authorization rule in the SecurityPolicy, first of its rules: deny when
+`request.time` is before the window's end, the client ID starts with the
+tenant's slug and the model (`x-ai-eg-model`, which the AI gateway sets
+before the rules are read) is a priced model that does not serve a spent
+budget as best-effort; on those, the tenant gets a best-effort period until
+the window ends. It works the same with API keys and tokens, and under a
+standard budget, where a 1-credit bucket could not refuse anyone (lab check
+A2).
+
 ## API-key policy and the peer listener
 
 The policy is the API key check, the JWT check, or both during the switch to

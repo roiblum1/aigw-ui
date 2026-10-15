@@ -272,8 +272,8 @@ func (s *Store) HourlyUse(ctx context.Context, from time.Time) ([]HourUse, error
 func (s *Store) AllQuotas(ctx context.Context) ([]Quota, error) {
 	return list(ctx, s, func(r scanner) (Quota, error) {
 		var q Quota
-		err := r.Scan(&q.ID, &q.TenantID, &q.ModelID, &q.ModelName, &q.TokenLimit, &q.Window, &q.Shadow)
+		err := r.Scan(&q.ID, &q.TenantID, &q.ModelID, &q.ModelName, &q.TokenLimit, &q.Window, &q.Shadow, &q.Wallet)
 		return q, err
-	}, `SELECT q.id, q.tenant_id, q.model_id, m.name, q.token_limit, q.window_size, q.shadow
+	}, `SELECT q.id, q.tenant_id, q.model_id, m.name, q.token_limit, q.window_size, q.shadow, q.wallet
 	    FROM quotas q JOIN models m ON m.id = q.model_id JOIN tenants t ON t.id = q.tenant_id WHERE t.enabled`)
 }

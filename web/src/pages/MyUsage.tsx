@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { LogOut } from "lucide-react";
-import { api, Unauthorized, type MyBudget, type MyUsage as Report, type Unit } from "../api";
+import { api, Unauthorized, type MyBudget, type MyUsage as Report, type Unit, type WalletNow } from "../api";
 import BrandMark from "../BrandMark";
 import { Bar } from "../charts";
 import { ErrorBanner, formatAmount, formatNumber, formatPrice, windowLabel } from "../components";
@@ -36,11 +36,46 @@ function resets(iso: string): string {
   return `${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}, in ${left}`;
 }
 
+/** The team's wallet: one budget across every priced model. */
+function WalletCard({ w }: { w: WalletNow }) {
+  const window = w.window === "1h" ? "hour" : "day";
+  const models = Object.entries(w.by_model).sort((a, b) => b[1] - a[1]);
+  return (
+    <section className="card">
+      <h2>Your wallet</h2>
+      <p className="hint">
+        One budget across every model with prices: each request pays its model's price from it. A budget of your own on
+        a model is a cap inside it.
+      </p>
+      <Bar label={`Wallet per ${window}`} used={w.spent} limit={w.credits} format={(n) => formatNumber(n, "credits")} />
+      <p className="detail">
+        {formatAmount(Math.max(0, w.credits - w.spent), "credits")} left. A new {window} starts at {resets(w.end)}.
+      </p>
+      {w.closed_until && (
+        <p className="detail">
+          <span className="tag warn">spent</span> Your wallet is spent. Requests to models with prices are refused, or
+          answered at the lowest priority where a model does that, until {resets(w.closed_until)}.
+        </p>
+      )}
+      {models.length > 0 && (
+        <p className="detail">By model: {models.map(([name, n]) => `${name} ${formatAmount(n, "credits")}`).join(", ")}.</p>
+      )}
+    </section>
+  );
+}
+
 function Budget({ b }: { b: MyBudget }) {
   const left = Math.max(0, b.limit - b.used);
   return (
     <div className="panel">
-      <h3>{b.model_name}</h3>
+      <h3>
+        {b.model_name}
+        {b.wallet && (
+          <span className="tag" title="The wallet limits this model: there is no budget of its own on it.">
+            wallet
+          </span>
+        )}
+      </h3>
       <Bar label={`Budget per ${windowLabel[b.window]}`} used={b.used} limit={b.limit} format={(n) => formatNumber(n, b.unit)} />
       <p className="detail">
         {formatAmount(left, b.unit)} left. A new {windowLabel[b.window]} starts at {resets(b.resets_at)}.
@@ -203,6 +238,7 @@ export default function MyUsage() {
         <ErrorBanner message={error} />
         {report && (
           <>
+            {report.wallet && <WalletCard w={report.wallet} />}
             <section className="card">
               <h2>Your budgets</h2>
               {!report.usage_enabled ? (

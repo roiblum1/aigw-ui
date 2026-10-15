@@ -221,6 +221,8 @@ export interface Tenant {
   /** Of those, the API keys of the kind before tokens. */
   api_key_count: number;
   quota_count: number;
+  wallet: Wallet | null;
+  wallet_closed_until: string | null;
 }
 
 export interface ApiKey {
@@ -266,6 +268,26 @@ export interface Quota {
   /** Counted but never rejects a request. */
   shadow: boolean;
   unit: Unit;
+  /** The bucket the hub keeps equal to the tenant's wallet on a priced model it has no cap on. */
+  wallet: boolean;
+}
+
+/** A tenant's budget across every priced model, in credits. */
+export interface Wallet {
+  credits: number;
+  window: "1h" | "1d";
+}
+
+/** A wallet and what was spent of it in the running window. */
+export interface WalletNow extends Wallet {
+  start: string;
+  end: string;
+  spent: number;
+  by_model: Record<string, number>;
+  /** Set while the wallet is spent: refused on every priced model until then. */
+  closed_until: string | null;
+  /** False when the hub does not add wallets up (no Redis or no usage history). */
+  enforced: boolean;
 }
 
 export interface TenantDetail {
@@ -426,6 +448,8 @@ export interface MyBudget {
   resets_at: string;
   /** False while the budget is only counted and nobody is refused. */
   enforced: boolean;
+  /** The bucket that follows the wallet on a model with no cap: the wallet limits it. */
+  wallet: boolean;
   best_effort_used: number;
   best_effort_until?: string;
   best_effort_limit?: number;
@@ -751,6 +775,7 @@ export interface MyUsage {
   display_name: string;
   at: string;
   usage_enabled: boolean;
+  wallet: WalletNow | null;
   budgets: MyBudget[];
   /** Credits for a million tokens. */
   prices: { model_name: string; price_input: number; price_cached: number; price_output: number }[];
@@ -926,6 +951,9 @@ export const api = {
   createKey: (tenantId: string, name: string) =>
     request<{ key: ApiKey; secret: string }>("POST", `/tenants/${tenantId}/keys`, { name }),
   revokeKey: (id: string) => request<void>("DELETE", `/keys/${id}`),
+  wallet: (tenantId: string) => request<WalletNow | null>("GET", `/tenants/${tenantId}/wallet`),
+  setWallet: (tenantId: string, wallet: Wallet | null) =>
+    request<Tenant>("PUT", `/tenants/${tenantId}/wallet`, wallet ?? { credits: null }),
   signingKeys: () => request<SigningKeys>("GET", "/signing-keys"),
   rotateSigningKey: () => request<{ id: string }>("POST", "/signing-keys/rotate"),
   setQuota: (tenantId: string, model_id: string, token_limit: number, window: Window, shadow: boolean) =>

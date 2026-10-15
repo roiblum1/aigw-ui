@@ -97,3 +97,34 @@ func TestReadyInstances(t *testing.T) {
 		t.Fatal("unknown ready count")
 	}
 }
+
+// A wallet tenant is given its wallet once: its wallet buckets are the
+// wallet, its caps are inside it; a tenant without one, its budgets.
+func TestTenantsOfWallets(t *testing.T) {
+	priced := map[string]bool{"glm": true}
+	quotas := []store.Quota{
+		{TenantID: "a", ModelID: "glm", TokenLimit: 1_000_000, Window: "1d", Wallet: true},
+		{TenantID: "b", ModelID: "glm", TokenLimit: 300_000, Window: "1d"},
+		{TenantID: "c", ModelID: "glm", TokenLimit: 100, Window: "1d"},
+		{TenantID: "c", ModelID: "qwen", TokenLimit: 100, Window: "1d"},
+	}
+	tenants := []store.Tenant{
+		{ID: "a", Enabled: true, Wallet: &store.Wallet{Credits: 1_000_000, Window: "1d"}},
+		{ID: "b", Enabled: true, Wallet: &store.Wallet{Credits: 50_000, Window: "1h"}},
+		{ID: "c", Enabled: true},
+		{ID: "d", Enabled: false, Wallet: &store.Wallet{Credits: 1, Window: "1h"}},
+	}
+	got := tenantsOf(quotas, priced, tenants)
+	if len(got) != 3 {
+		t.Fatalf("%+v", got)
+	}
+	by := map[string]int64{}
+	for _, tn := range got {
+		by[tn.ID] = tn.Given()
+	}
+	// a: 1,000,000 a day; b: 50,000 an hour, 1,200,000 a day, its cap
+	// inside it; c: 100 on the priced model only.
+	if by["a"] != 1_000_000 || by["b"] != 1_200_000 || by["c"] != 100 {
+		t.Fatalf("given %v", by)
+	}
+}

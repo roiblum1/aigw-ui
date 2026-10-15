@@ -354,6 +354,14 @@ A model gets a standard per-tenant budget (amount and window), rendered as one `
 
 As in "Wallets" below, with the tenant header `x-aigw-tenant` from the token, and a Lua filter whose only job is each tenant's wallet amount and window for `limit.fromMetadata`. Check A5 has not run (see above), so the hub-enforced fallback ships first.
 
+*As built (0.20.0), the fallback:*
+
+- **The fallback as designed does not refuse under a standard.** It renders a spent tenant's bucket on every model at 1 credit; check A2 found that `Shared` mode passes a request while *any* matching bucket has room, so the tenant's standard bucket would still let it through. A closure is therefore an authorization rule in the SecurityPolicy instead, first of its rules: deny when the client ID starts with the tenant's slug and the model (`x-ai-eg-model`) is one of the priced models that do not serve a spent budget as best-effort; on those, the tenant gets a best-effort period, as for a spent budget. It needs no rule position and works with API keys and tokens alike.
+- **It ends by itself.** The rule holds `request.time < timestamp(<window end>)`, so a closure ends with the window also while the hub is down; the hub drops it at its next look.
+- **Spend comes from the usage history** (`usage_hours`), in credits, since the window's start, so caps with another window than the wallet's do not matter. The history records once a minute: the overshoot is about a minute of use plus a sync, more than the 15 seconds the design estimated. Wallets therefore need Redis and the usage history, and the API refuses one without them (409).
+- **Wallet buckets** are quota rows the hub keeps (`quotas.wallet`), equal to the wallet, one per wallet tenant on each priced model it has no cap on; a quota set by hand on that model is a cap and stays one. They keep the per-model counters, and bound the tenant on each model while the hub is down.
+- **Not yet checked on a real gateway**: that the authorization rule sees `x-ai-eg-model`. The AI gateway sets it in its filter, which comes before the authorization filter in the lab's filter chain, but the lab login expired before the rule could be applied there. The self-test step "A spent wallet refuses the tenant" checks it for 403 on any gateway.
+
 ## Wallets
 
 A wallet is one budget for a tenant across all priced models, per hour or per day. Per-model budgets stay; for a tenant with a wallet they become caps inside it. The tenant, or later the semantic router, picks the model per request and pays that model's price from the same wallet.
