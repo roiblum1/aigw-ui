@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.19.0](v0.19.0.md) | not released yet | A model's standard budget: every tenant up to it through one rule on the tenant header, a tenant's quota an exception that adds to it; starts at 00:00 UTC; needs tokens only. Fixed: first prices turned an unset best-effort limit into 1 credit |
 | [0.18.0](v0.18.0.md) | not released yet | The hub issues tokens: a new key is a JWT the hub signs, which every gateway checks against the hub's public keys; API keys and tokens are both taken until the last API key is revoked; revoking a token refuses it everywhere until it expires |
 | [0.17.0](v0.17.0.md) | not released yet | The budget planner: what the fleet serves a day at the models' prices, what can be given and what is left, which model is saturated at its busiest hour, an overcommit suggestion, and Split |
 | [0.16.0](v0.16.0.md) | not released yet | Every LLMInferenceService measured on its own with one versioned benchmark profile: spec hash, a sweep that doubles then bisects, drained or live, a check for other traffic, prefill/decode through the peer listener, and a campaign window |

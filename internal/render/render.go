@@ -111,6 +111,18 @@ type Model struct {
 	// cluster, set for a model in best-effort mode. Each gets the request
 	// class the best-effort route names.
 	BestEffortPools []Pool
+	// Standard is the budget every tenant has on the model: one rule on the
+	// tenant header, with one bucket per tenant, in place of a rule per
+	// tenant. Quotas are then exceptions that add to it, matched on the
+	// tenant header too. It is set only while the gateway takes tokens
+	// only: a request with an API key has no tenant header.
+	Standard *Budget
+}
+
+// Budget is a limit for each window.
+type Budget struct {
+	Limit  int64
+	Window string
 }
 
 // Held reports whether the model's objects on the cluster are left alone.
@@ -165,6 +177,9 @@ type State struct {
 	Fleet  FleetConfig
 	Models []Model
 	Keys   []Key
+	// Tenants are the slugs of the enabled tenants: each has a counter of
+	// its own under a model's standard.
+	Tenants []string
 }
 
 // Objects returns the desired objects in the order they should be applied.
@@ -194,7 +209,7 @@ func Objects(s State) []*unstructured.Unstructured {
 		case m.Existing == nil:
 			out = append(out, backend(s, m), aiServiceBackend(s, m), route(s, m))
 		}
-		if len(m.Quotas) > 0 {
+		if len(m.Quotas) > 0 || m.standard() != nil {
 			out = append(out, quotaPolicies(s, m)...)
 		}
 		if t, ok := m.overageTarget(); ok {

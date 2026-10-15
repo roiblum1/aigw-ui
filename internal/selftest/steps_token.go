@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/token"
 )
@@ -91,4 +92,59 @@ func (t *test) until(key string, refused bool) (string, bool) {
 		}
 	}
 	return last, false
+}
+
+// standard reports whether the gateway counts the model by its standard: it
+// has one, and the gateways take tokens only.
+func (t *test) standard() bool {
+	return t.model.Standard != nil && t.mode == render.IdentityTokens && t.cluster.AuthEnabled
+}
+
+// tenantHeader sends a request with the temporary tenant's token and another
+// tenant's slug in the tenant header. It has to be counted for the token's
+// tenant, and nothing for the slug the client sent: under a standard every
+// tenant has a bucket of its own on one rule, so a header the client could
+// set would let it spend under any name, made up or another tenant's.
+func (t *test) tenantHeader() (string, string) {
+	switch {
+	case !t.tokens:
+		return Skipped, "The hub has issued no token yet: the gateway does not set the tenant header."
+	case !t.standard():
+		return Skipped, "Nothing counts by the tenant header on this model: it has no standard budget, or the gateways still take API keys."
+	case t.r.usage == nil:
+		return Skipped, "Usage monitoring is off: the server has no Redis configured."
+	}
+	other := TenantPrefix + "nobody"
+	before, err := t.quota()
+	if err != nil {
+		return Failed, "Redis: " + err.Error()
+	}
+	res, err := t.chatWith(map[string]string{render.TenantHeader: other})
+	switch {
+	case err != nil:
+		return Failed, err.Error()
+	case res.Status != http.StatusOK:
+		return Failed, "The request was not answered (" + answer(res) + "), so nothing can be said."
+	}
+	start := time.Now()
+	for time.Since(start) < counterWait {
+		now, err := t.quota()
+		if err != nil {
+			return Failed, "Redis: " + err.Error()
+		}
+		if now.Used > before.Used {
+			theirs, _, err := t.r.usage.StandardUsed(t.ctx, t.model.Slug, other, time.Now())
+			if err != nil {
+				return Failed, "Redis: " + err.Error()
+			}
+			if theirs > 0 {
+				return Failed, fmt.Sprintf("The request was counted for the tenant of its token, and %d for %q, the tenant the client named: the gateway passes on a tenant header the client sends.", theirs, other)
+			}
+			return Passed, "A request that named " + other + " in " + render.TenantHeader + " was counted for the tenant of its token, and nothing for " + other + ". The gateway replaces the header."
+		}
+		if !t.wait() {
+			break
+		}
+	}
+	return Failed, fmt.Sprintf("The request was answered but not counted for the tenant of its token within %d seconds.", int(counterWait.Seconds()))
 }

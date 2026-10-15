@@ -26,8 +26,26 @@ type Counter struct {
 	// Overage marks a counter of the model's best-effort route: what was
 	// used after the budget was spent. It never refuses a request.
 	Overage bool
-	// stem is the Redis key without the key prefix and the window start.
-	stem string
+	// Standard marks a tenant's counter under the model's standard, for a
+	// tenant without a quota of its own on the model.
+	Standard bool
+	// stem is the Redis key without the key prefix and the window start;
+	// prefix is the part of it every counter of the model's QuotaPolicy on
+	// the backend shares, and std the model's standard, if any.
+	stem, prefix string
+	std          *Budget
+}
+
+// StandardFor returns the counter the model's standard keeps for the tenant
+// slug on the same backend, from any counter of the model there: for a slug
+// that has no quota, such as one a client made up. ok is false when the
+// model has no standard.
+func (c Counter) StandardFor(slug string) (Counter, bool) {
+	if c.std == nil {
+		return Counter{}, false
+	}
+	return Counter{ModelSlug: c.ModelSlug, TenantSlug: slug, Backend: c.Backend, Limit: c.std.Limit, Window: c.std.Window,
+		Overage: c.Overage, Standard: true, stem: c.prefix + "rule-0-" + TenantHeader + "-match-0_" + slug + "_", prefix: c.prefix, std: c.std}, true
 }
 
 // Counters lists the counter of every tenant quota the state renders.
@@ -54,26 +72,53 @@ func Counters(s State) []Counter {
 			}
 			seen[backend+"\x00"+t.Model] = true
 			prefix := quotaDomain + "_backend_name_" + backend + "_model_name_override_" + t.Model + "_"
-			if len(rules) > 0 || overage {
+			st := m.standard()
+			if m.ruleCount() > 0 || overage {
 				// The default bucket is named after the number of rules before it.
 				limit, window := m.defaultBucket(overage)
-				pool := "rule-" + strconv.Itoa(len(rules)) + "-match--1"
+				pool := "rule-" + strconv.Itoa(m.ruleCount()) + "-match--1"
 				out = append(out, Counter{
 					ModelSlug: m.Slug, Backend: backend, Limit: limit, Window: window, Pool: true, Overage: overage,
-					stem: prefix + pool + "_" + pool + "_",
+					stem: prefix + pool + "_" + pool + "_", prefix: prefix, std: st,
 				})
+			}
+			first := 0
+			if st != nil {
+				// The standard's rule is the first. The gateway names a
+				// bucket of it after the rule and the tenant the header
+				// held: one counter per tenant. A tenant with a quota is
+				// counted there too, and is read where its quota counts.
+				first = 1
+				own := map[string]bool{}
+				for _, q := range rules {
+					own[q.TenantSlug] = true
+				}
+				for _, slug := range s.Tenants {
+					if own[slug] {
+						continue
+					}
+					out = append(out, Counter{
+						ModelSlug: m.Slug, TenantSlug: slug, Backend: backend,
+						Limit: st.Limit, Window: st.Window, Shadow: overage || m.DryRun, Overage: overage, Standard: true,
+						stem: prefix + "rule-0-" + TenantHeader + "-match-0_" + slug + "_", prefix: prefix, std: st,
+					})
+				}
 			}
 			for i, q := range rules {
 				if q.TenantSlug == "" {
 					continue // a placeholder, which counts nothing
 				}
 				// The gateway names the descriptor of a rule after its position,
-				// header and pattern, and sends the same string as its value.
-				rule := "rule-" + strconv.Itoa(i) + "-" + ClientIDHeader + "|" + TenantClientIDPattern(q.TenantSlug) + "-match-0"
+				// header and pattern or value, and sends the same string as its
+				// value.
+				rule := "rule-" + strconv.Itoa(first+i) + "-" + ClientIDHeader + "|" + TenantClientIDPattern(q.TenantSlug) + "-match-0"
+				if st != nil {
+					rule = "rule-" + strconv.Itoa(first+i) + "-" + TenantHeader + "|" + q.TenantSlug + "-match-0"
+				}
 				out = append(out, Counter{
 					ModelSlug: m.Slug, TenantSlug: q.TenantSlug, Backend: backend,
 					Limit: q.Limit, Window: q.Window, Shadow: q.Shadow || overage || m.DryRun, Overage: overage,
-					stem: prefix + rule + "_" + rule + "_",
+					stem: prefix + rule + "_" + rule + "_", prefix: prefix, std: st,
 				})
 			}
 		}

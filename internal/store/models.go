@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -20,13 +21,22 @@ type ModelInput struct {
 }
 
 func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet, spent_mode, best_effort_unlimited, best_effort_limit, price_dry_run, market_id FROM models ORDER BY name`)
+	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet, spent_mode, best_effort_unlimited, best_effort_limit, price_dry_run, market_id,
+	        standard_limit, standard_window, standard_next_limit, standard_next_window, standard_next_at FROM models ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	models, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Model, error) {
 		m := Model{Endpoints: []Endpoint{}, Warnings: []string{}, MarketAnnotations: []string{}}
-		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet, &m.SpentMode, &m.BestEffortUnlimited, &m.BestEffortLimit, &m.PriceDryRun, &m.MarketIDSet)
+		var limit, nextLimit *int64
+		var window, nextWindow *string
+		var nextAt *time.Time
+		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet, &m.SpentMode, &m.BestEffortUnlimited, &m.BestEffortLimit, &m.PriceDryRun, &m.MarketIDSet,
+			&limit, &window, &nextLimit, &nextWindow, &nextAt)
+		m.Standard = standardOf(limit, window)
+		if nextAt != nil {
+			m.StandardNext = &StandardChange{Standard: standardOf(nextLimit, nextWindow), At: *nextAt}
+		}
 		return m, err
 	})
 	if err != nil {
@@ -42,6 +52,24 @@ func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
 		// A fleet model's quota attaches to the entry backend rendered for it.
 		models[i].QuotaCapable = models[i].Fleet
 		byID[models[i].ID] = &models[i]
+	}
+	rows, err = s.db.Query(ctx, `SELECT q.model_id, max(q.slot) + 1 FROM quotas q JOIN tenants t ON t.id = q.tenant_id WHERE t.enabled GROUP BY q.model_id`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if m := byID[id]; m != nil {
+			m.QuotaRules = n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	annotations, err := s.marketAnnotations(ctx)
 	if err != nil {
@@ -140,10 +168,19 @@ func replaceEndpoints(ctx context.Context, tx pgx.Tx, modelID string, in ModelIn
 // GetModel returns a model's own settings, without its endpoints.
 func (s *Store) GetModel(ctx context.Context, id string) (Model, error) {
 	var m Model
-	err := s.db.QueryRow(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, price_dry_run FROM models WHERE id = $1`, id).
-		Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.PriceDryRun)
+	var limit, nextLimit *int64
+	var window, nextWindow *string
+	var nextAt *time.Time
+	err := s.db.QueryRow(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, price_dry_run, best_effort_limit,
+	                                  standard_limit, standard_window, standard_next_limit, standard_next_window, standard_next_at FROM models WHERE id = $1`, id).
+		Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.PriceDryRun, &m.BestEffortLimit,
+			&limit, &window, &nextLimit, &nextWindow, &nextAt)
 	if err != nil {
 		return m, mapErr(err)
+	}
+	m.Standard = standardOf(limit, window)
+	if nextAt != nil {
+		m.StandardNext = &StandardChange{Standard: standardOf(nextLimit, nextWindow), At: *nextAt}
 	}
 	prices, err := s.modelPrices(ctx)
 	prices.priced(&m)

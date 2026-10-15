@@ -185,6 +185,7 @@ export default function TenantQuotas(props: {
           </button>
         </form>
       )}
+      {added.model_id && <StandardNote model={props.models.find((m) => m.id === added.model_id)} />}
       {added.model_id && <BudgetLine b={budgetOf(added.model_id)} before={0} after={addedAfter} />}
       {quotas.length === 0 ? (
         <p className="hint">No quotas yet.</p>
@@ -204,7 +205,10 @@ export default function TenantQuotas(props: {
               const editing = edit?.id === q.id ? edit : null;
               return (
                 <tr key={q.id}>
-                  <td className="strong">{q.model_name}</td>
+                  <td className="strong">
+                    {q.model_name}
+                    <StandardNote model={props.models.find((m) => m.id === q.model_id)} short />
+                  </td>
                   <td>
                     {editing ? (
                       <form id={`quota-${q.id}`} className="inline-form quota-edit" onSubmit={(e) => save(e, q)}>
@@ -286,6 +290,7 @@ export default function TenantQuotas(props: {
           </tbody>
         </table>
       )}
+      <OnStandard models={props.models} quotas={quotas} usage={usage} />
       {edit &&
         quotas
           .filter((q) => q.id === edit.id)
@@ -297,5 +302,50 @@ export default function TenantQuotas(props: {
         </p>
       )}
     </section>
+  );
+}
+
+/** Under a model's standard, a quota is an exception that only adds to it. */
+function StandardNote(props: { model: Model | undefined; short?: boolean }) {
+  const m = props.model;
+  if (!m?.standard || m.standard_held) return null;
+  const standard = `${formatAmount(m.standard.limit, m.unit)} per ${windowLabel[m.standard.window]}`;
+  return props.short ? (
+    <div className="detail" title="A request passes while the standard or this quota has room.">
+      adds to the standard of {standard}
+    </div>
+  ) : (
+    <p className="hint">
+      Every tenant has {standard} on {m.name} already. This quota adds to it, as an exception: a request passes while
+      either has room, so it cannot hold the tenant below the standard.
+    </p>
+  );
+}
+
+/** The models the tenant uses on their standard alone, with no quota of its own. */
+function OnStandard(props: { models: Model[]; quotas: Quota[]; usage: UsageReport | null }) {
+  const own = new Set(props.quotas.map((q) => q.model_id));
+  const models = props.models.filter((m) => m.standard && !m.standard_held && !own.has(m.id));
+  if (models.length === 0) return null;
+  return (
+    <>
+      <h3>On the standard budget</h3>
+      <table className="plain">
+        <tbody>
+          {models.map((m) => {
+            const used = props.usage?.quotas.find((u) => u.model_id === m.id);
+            return (
+              <tr key={m.id}>
+                <td className="strong">{m.name}</td>
+                <td>
+                  {formatAmount(m.standard!.limit, m.unit)} per {windowLabel[m.standard!.window]}
+                </td>
+                {props.usage?.enabled && <td>{used ? <UsageMeter q={used} /> : "—"}</td>}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </>
   );
 }

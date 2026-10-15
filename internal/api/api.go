@@ -68,6 +68,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("PUT /api/v1/models/{id}/sites/{cluster_id}/drain", s.drainSite)
 	api.HandleFunc("PUT /api/v1/models/{id}/fleet", s.setModelFleet)
 	api.HandleFunc("PUT /api/v1/models/{id}/spent", s.setModelSpentMode)
+	api.HandleFunc("PUT /api/v1/models/{id}/standard", s.setStandard)
+	api.HandleFunc("DELETE /api/v1/models/{id}/standard/pending", s.cancelStandard)
 	api.HandleFunc("GET /api/v1/models/{id}/prices", s.listPrices)
 	api.HandleFunc("PUT /api/v1/models/{id}/prices", s.setPrices)
 	api.HandleFunc("DELETE /api/v1/models/{id}/prices/pending", s.deletePendingPrices)

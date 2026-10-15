@@ -78,6 +78,21 @@ func (s *Server) updateTenant(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	if b.Enabled {
+		// Enabling a tenant with API keys would make the gateways take API
+		// keys again.
+		cur, err := s.st.GetTenant(r.Context(), r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if !cur.Enabled && cur.APIKeyCount > 0 {
+			if err := s.keepsTokensOnly(r.Context()); err != nil {
+				writeError(w, http.StatusConflict, err.Error()+". Revoke the tenant's API keys before enabling it.")
+				return
+			}
+		}
+	}
 	t, err := s.st.UpdateTenant(r.Context(), r.PathValue("id"), b.DisplayName, b.Enabled)
 	if err != nil {
 		fail(w, err)
@@ -126,6 +141,10 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	case "", store.KindToken:
 		k, plain, err = s.st.CreateToken(r.Context(), r.PathValue("id"), b.Name, s.st.Tokens(), time.Now())
 	case store.KindKey:
+		if err = s.keepsTokensOnly(r.Context()); err != nil {
+			writeError(w, http.StatusConflict, err.Error()+".")
+			return
+		}
 		k, plain, err = s.st.CreateKey(r.Context(), r.PathValue("id"), b.Name)
 	default:
 		err = invalid("kind must be %q or %q", store.KindToken, store.KindKey)

@@ -3,7 +3,7 @@ import BackendList from "./BackendList";
 import ModelForm from "./ModelForm";
 import ModelPrices from "./ModelPrices";
 import { Boxes, Plus, Radar } from "lucide-react";
-import { api, type Endpoint, type Model } from "../api";
+import { api, type Endpoint, type Model, type Window } from "../api";
 import {
   Empty,
   ErrorBanner,
@@ -32,6 +32,7 @@ export default function Models() {
   // The ID, so the dialog shows the model as it is after a change.
   const [pricing, setPricing] = useState<string | null>(null);
   const [limiting, setLimiting] = useState<Model | null>(null);
+  const [standardOf, setStandardOf] = useState<Model | null>(null);
   const priced = data?.models.find((m) => m.id === pricing);
 
   const remove = (m: Model) => {
@@ -217,6 +218,7 @@ export default function Models() {
                     {m.pending_prices && (
                       <div className="detail">New prices from {formatTime(m.pending_prices.effective_at)}</div>
                     )}
+                    <StandardLine model={m} />
                   </td>
                   <td className="row-actions">
                     {(m.fleet || m.site_weights.length > 0) && (
@@ -260,6 +262,12 @@ export default function Models() {
                     >
                       Prices
                     </button>
+                    <button
+                      title="The budget every tenant has on the model, through one rule in place of a rule per tenant. A tenant's own quota adds to it."
+                      onClick={() => setStandardOf(m)}
+                    >
+                      Standard budget
+                    </button>
                     <button onClick={() => setEditing(m)}>Edit</button>
                     <button className="danger" disabled={action.busy} onClick={() => remove(m)}>
                       Delete
@@ -273,6 +281,7 @@ export default function Models() {
       )}
 
       {limiting && <BestEffortLimit model={limiting} onClose={() => setLimiting(null)} onChanged={reload} />}
+      {standardOf && <StandardBudget model={standardOf} onClose={() => setStandardOf(null)} onChanged={reload} />}
       {priced && <ModelPrices key={priced.id} model={priced} onClose={() => setPricing(null)} onChanged={reload} />}
       {editing && data && (
         <ModelForm
@@ -331,6 +340,103 @@ function SiteWeight({ model, endpoint }: { model: Model; endpoint: Endpoint }) {
 /** The backends a discovered endpoint's quota attaches to, with what limits it. */
 
 /** Sets the most a tenant may use of a model as best-effort in one period. */
+/** A model's standard budget, its waiting change and the rules it saves. */
+function StandardLine({ model: m }: { model: Model }) {
+  const next = m.standard_next;
+  return (
+    <>
+      {m.standard && (
+        <div className="detail">
+          Standard: {formatAmount(m.standard.limit, m.unit)} per {windowLabel[m.standard.window]} for every tenant
+        </div>
+      )}
+      {next && (
+        <div className="detail">
+          {next.standard
+            ? `From ${formatTime(next.at)}: ${formatAmount(next.standard.limit, m.unit)} per ${windowLabel[next.standard.window]} for every tenant`
+            : `From ${formatTime(next.at)}: no standard`}
+        </div>
+      )}
+      {m.standard_held && <div className="detail warn-text">Standard not in effect: {m.standard_held}.</div>}
+      {(m.rules > 0 || m.rules_per_tenant > 0) && (
+        <div
+          className="detail"
+          title="Bucket rules in the model's QuotaPolicy on each gateway. Every rule is checked for every request."
+        >
+          {m.rules} {m.rules === 1 ? "rule" : "rules"}
+          {m.rules_per_tenant > m.rules && `, ${m.rules_per_tenant} with a rule per tenant`}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Sets the budget every tenant has on a model, from the next 00:00 UTC. */
+function StandardBudget(props: { model: Model; onClose: () => void; onChanged: () => Promise<void> }) {
+  const m = props.model;
+  const current = m.standard_next ? m.standard_next.standard : m.standard;
+  const [on, setOn] = useState(current !== null);
+  const [text, setText] = useState(current ? limitText(current.limit, m.unit) : "");
+  const [window, setWindow] = useState<Window>(current?.window ?? "1d");
+  return (
+    <FormModal
+      title={`Standard budget of ${m.name}`}
+      submitLabel="Save"
+      onClose={props.onClose}
+      onSubmit={async () => {
+        await api.setStandard(m.id, on ? { limit: limitValue(text, m.unit), window } : null);
+        await props.onChanged();
+      }}
+    >
+      <p className="hint">
+        Every tenant may use the model up to the standard, each with a count of its own, through one rule on the
+        gateway in place of a rule per tenant. A tenant's own quota on the model is an exception that adds to the
+        standard: a request passes while either has room, so no tenant can be held below it. To give a tenant less,
+        lower the standard and give the others exceptions. A standard of the smallest amount closes the model to
+        everyone without an exception.
+      </p>
+      <p className="hint">
+        It starts at the next 00:00 UTC, when every count starts anew, so nobody's count is lost. It needs every tenant
+        on tokens: the gateway reads the tenant from the token.
+      </p>
+      <label className="check">
+        <input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} />
+        <span>Give every tenant a standard budget</span>
+      </label>
+      {on && (
+        <>
+          <Field label={m.unit === "credits" ? "Each tenant, in dollars" : "Each tenant, in tokens"}>
+            <LimitInput unit={m.unit} value={text} onChange={setText} label="Standard budget" autoFocus />
+          </Field>
+          <Field label="Per">
+            <select value={window} onChange={(e) => setWindow(e.target.value as Window)}>
+              <option value="1m">minute</option>
+              <option value="1h">hour</option>
+              <option value="1d">day</option>
+            </select>
+          </Field>
+        </>
+      )}
+      {m.standard_next && (
+        <p className="hint">
+          A change waits for {formatTime(m.standard_next.at)}; saving replaces it.{" "}
+          <button
+            type="button"
+            className="ghost"
+            onClick={async () => {
+              await api.cancelStandard(m.id);
+              await props.onChanged();
+              props.onClose();
+            }}
+          >
+            Cancel the change
+          </button>
+        </p>
+      )}
+    </FormModal>
+  );
+}
+
 function BestEffortLimit(props: { model: Model; onClose: () => void; onChanged: () => Promise<void> }) {
   const m = props.model;
   const [limited, setLimited] = useState(m.best_effort_limit !== null);
