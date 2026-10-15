@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"aigw-ui/internal/store"
+	"aigw-ui/internal/token"
 )
 
-// The tenants' own page: a tenant signs in with one of its API keys and
-// sees its budgets and its usage, and nothing of another tenant. The key is
-// only compared here. No request to a model passes through the server.
+// The tenants' own page: a tenant signs in with one of its API keys or
+// tokens and sees its budgets and its usage, and nothing of another tenant.
+// The key is only compared, and a token checked, here. No request to a
+// model passes through the server.
 
 type tenantKey struct{}
 
@@ -57,8 +59,28 @@ func clientAddr(r *http.Request) string {
 	return host
 }
 
-// tenantAuth lets a request through that carries an API key of an enabled
-// tenant, and hands the tenant on.
+// tenantOf returns the enabled tenant an API key or a token belongs to. A
+// token is checked on the hub, against its own public keys: its signature,
+// issuer, audience and expiry, then that it is one of the tenant's keys and
+// not revoked. store.ErrNotFound for anything else.
+func (s *Server) tenantOf(ctx context.Context, key string, now time.Time) (store.Tenant, error) {
+	if !token.LooksLike(key) {
+		return s.st.TenantOfKey(ctx, key)
+	}
+	keys, err := s.st.ListSigningKeys(ctx)
+	if err != nil {
+		return store.Tenant{}, err
+	}
+	set := s.st.Tokens()
+	c, err := token.Verify(key, store.PublicKeys(keys), set.Issuer, set.Audience, now)
+	if err != nil {
+		return store.Tenant{}, store.ErrNotFound
+	}
+	return s.st.TenantOfToken(ctx, c)
+}
+
+// tenantAuth lets a request through that carries an API key or a token of
+// an enabled tenant, and hands the tenant on.
 func (s *Server) tenantAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.tenantPage {
@@ -71,7 +93,7 @@ func (s *Server) tenantAuth(next http.Handler) http.Handler {
 			return
 		}
 		key, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		t, err := s.st.TenantOfKey(r.Context(), key)
+		t, err := s.tenantOf(r.Context(), key, now)
 		if errors.Is(err, store.ErrNotFound) {
 			s.keyFailures.add(addr, now)
 			slog.Warn("tenant page: wrong key", "remote_addr", addr)

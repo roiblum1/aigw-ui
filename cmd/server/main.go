@@ -48,6 +48,7 @@ func run() error {
 	}
 	defer st.Close()
 	st.SetFleet(cfg.Fleet)
+	st.SetTokens(store.TokenSettings{Issuer: cfg.TokenIssuer, Audience: cfg.TokenAudience, Lifetime: cfg.TokenLifetime})
 	if names, err := st.FleetModels(ctx); err == nil && len(names) > 0 && !st.FleetConfigured() {
 		// Not fatal: keys and quotas must still reach the clusters. The
 		// entry routes stay on the clusters as they are until this is fixed.

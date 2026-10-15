@@ -33,7 +33,16 @@ type Store struct {
 	box *secretbox.Box
 	// fleet is what every site's entry route has in common.
 	fleet render.FleetConfig
+	// tokens is what the hub writes into the tokens it signs.
+	tokens TokenSettings
 }
+
+// SetTokens sets what the tokens the hub signs say and how long they last.
+// Call it before the store is used.
+func (s *Store) SetTokens(t TokenSettings) { s.tokens = t }
+
+// Tokens returns what SetTokens set.
+func (s *Store) Tokens() TokenSettings { return s.tokens }
 
 // SetFleet sets the shared settings of the entry routes. Call it before the
 // store is used.

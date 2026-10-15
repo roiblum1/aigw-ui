@@ -135,8 +135,8 @@ func fleetBackend(s State, m Model) *unstructured.Unstructured {
 func fleetServiceBackend(s State, m Model, name, objective string) *unstructured.Unstructured {
 	u := object(aigwAPI, "AIServiceBackend", s.Namespace, name)
 	spec := serviceBackendSpec(FleetName(m.Slug))
-	if objective != "" {
-		spec["headerMutation"] = objectiveHeader(objective)
+	if h := backendHeaders(s, objective); h != nil {
+		spec["headerMutation"] = h
 	}
 	u.Object["spec"] = spec
 	return u

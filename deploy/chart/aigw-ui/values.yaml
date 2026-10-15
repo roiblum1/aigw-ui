@@ -56,6 +56,17 @@ capacity:
   # Secret of that namespace. See docs/security.md before turning it on.
   peerMeasurements: false
 
+# The tokens the hub signs, which tenants paste as their API keys. The
+# gateways check them against the hub's public keys, which every sync writes
+# into their SecurityPolicy. Changing issuer or audience refuses every token
+# issued before; set them once.
+tokens:
+  issuer: aigw-ui
+  audience: aigw-fleet
+  # How long a new token lasts. A token holds no budget, so a long life costs
+  # nothing but the time a leaked one works if nobody revokes it.
+  lifetimeDays: 180
+
 # What every site's entry route has in common. Leave domain and peerSNI empty
 # if the hub should not render entry routes.
 fleet:

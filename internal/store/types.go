@@ -182,17 +182,25 @@ type Tenant struct {
 	Enabled     bool      `json:"enabled"`
 	CreatedAt   time.Time `json:"created_at"`
 	KeyCount    int       `json:"key_count"`
-	QuotaCount  int       `json:"quota_count"`
+	// APIKeyCount is how many of those keys are API keys rather than
+	// tokens: while any tenant has one, the gateways list every key.
+	APIKeyCount int `json:"api_key_count"`
+	QuotaCount  int `json:"quota_count"`
 }
 
 type APIKey struct {
-	ID        string     `json:"id"`
-	TenantID  string     `json:"tenant_id"`
-	Name      string     `json:"name"`
-	ClientID  string     `json:"client_id"`
+	ID       string `json:"id"`
+	TenantID string `json:"tenant_id"`
+	Name     string `json:"name"`
+	ClientID string `json:"client_id"`
+	// KeyPrefix is the start of an API key, or the end of a token, whose
+	// start is the same for every token: enough to tell keys apart.
 	KeyPrefix string     `json:"key_prefix"`
 	RevokedAt *time.Time `json:"revoked_at"`
 	CreatedAt time.Time  `json:"created_at"`
+	// Kind is KindKey or KindToken; a token expires at ExpiresAt.
+	Kind      string     `json:"kind"`
+	ExpiresAt *time.Time `json:"expires_at"`
 }
 
 type Quota struct {

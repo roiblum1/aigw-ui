@@ -28,6 +28,9 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 		return render.State{}, err
 	}
 	st := render.State{Namespace: c.Namespace, GatewayName: c.GatewayName, ClientListener: c.ClientListener, AuthEnabled: c.AuthEnabled, Fleet: s.fleet}
+	if st.Identity, err = s.Identity(ctx); err != nil {
+		return st, err
+	}
 
 	rows, err := s.db.Query(ctx,
 		`SELECT m.id, m.name, m.slug, e.host, e.port, e.upstream_model, m.default_limit, m.default_window, m.cost_expression, e.source, e.backends,
@@ -104,7 +107,7 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 
 	rows, err = s.db.Query(ctx,
 		`SELECT k.client_id, k.key_enc FROM api_keys k JOIN tenants t ON t.id = k.tenant_id
-		 WHERE k.revoked_at IS NULL AND t.enabled ORDER BY k.client_id`)
+		 WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now()) AND t.enabled ORDER BY k.client_id`)
 	if err != nil {
 		return st, err
 	}

@@ -11,13 +11,14 @@ import (
 )
 
 const tenantSelect = `SELECT t.id, t.slug, t.display_name, t.enabled, t.created_at,
-	(SELECT count(*) FROM api_keys k WHERE k.tenant_id = t.id AND k.revoked_at IS NULL),
+	(SELECT count(*) FROM api_keys k WHERE k.tenant_id = t.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())),
+	(SELECT count(*) FROM api_keys k WHERE k.tenant_id = t.id AND k.revoked_at IS NULL AND k.kind = 'key'),
 	(SELECT count(*) FROM quotas q WHERE q.tenant_id = t.id)
 	FROM tenants t`
 
 func scanTenant(row pgx.Row) (Tenant, error) {
 	var t Tenant
-	err := row.Scan(&t.ID, &t.Slug, &t.DisplayName, &t.Enabled, &t.CreatedAt, &t.KeyCount, &t.QuotaCount)
+	err := row.Scan(&t.ID, &t.Slug, &t.DisplayName, &t.Enabled, &t.CreatedAt, &t.KeyCount, &t.APIKeyCount, &t.QuotaCount)
 	return t, mapErr(err)
 }
 
@@ -81,11 +82,11 @@ func (s *Store) ListKeys(ctx context.Context, tenantID string) ([]APIKey, error)
 const keyPrefixLen = 9
 
 // keyColumns is what scanKey reads. The key itself is never among them.
-const keyColumns = `id, tenant_id, name, client_id, key_prefix, revoked_at, created_at`
+const keyColumns = `id, tenant_id, name, client_id, key_prefix, revoked_at, created_at, kind, expires_at`
 
 func scanKey(r scanner) (APIKey, error) {
 	var k APIKey
-	err := r.Scan(&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt)
+	err := r.Scan(&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt, &k.Kind, &k.ExpiresAt)
 	return k, err
 }
 
@@ -112,11 +113,11 @@ func (s *Store) CreateKey(ctx context.Context, tenantID, name string) (APIKey, s
 	return k, plain, mapErr(err)
 }
 
-// RevokeKey returns the client ID of the key it revoked.
-func (s *Store) RevokeKey(ctx context.Context, id string) (string, error) {
-	var clientID string
-	err := s.db.QueryRow(ctx, `UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL RETURNING client_id`, id).Scan(&clientID)
-	return clientID, mapErr(err)
+// RevokeKey returns the key it revoked. A token is also denied by the
+// gateways until it expires (token_denials), whatever becomes of its tenant.
+func (s *Store) RevokeKey(ctx context.Context, id string) (APIKey, error) {
+	k, err := scanKey(s.db.QueryRow(ctx, `UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL RETURNING `+keyColumns, id))
+	return k, mapErr(err)
 }
 
 // ---- quotas ----

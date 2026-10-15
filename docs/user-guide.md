@@ -221,25 +221,42 @@ different revisions of the model, or take different request lengths.
 A tenant is a team.
 
 1. **Add tenant**. The ID cannot be changed later.
-2. **Create key**. The key is shown once. Copy it then.
+2. **Create token**. The token is shown once. Copy it then. It lasts 180
+   days (`tokens.lifetimeDays`); create a new one before it expires.
 3. **Add quota**. Pick a model, a number of tokens and a window (minute, hour or day).
    Tick **Dry run** to count usage against the quota without rejecting
    requests, and press **Enforce** on the quota when you are ready. The
    list only offers models the tenant has no quota on yet.
 
-Clients send the key as `Authorization: Bearer sk-...`, or in the header
-`x-api-key`, which is what Anthropic's clients do by default. The address
+Clients send the token where they send an API key: `Authorization: Bearer
+eyJ...`, or the header `x-api-key`, which is what Anthropic's clients do by
+default. The address
 stays the same for every model: `/v1/chat/completions` for OpenAI-style
 clients and `/anthropic/v1/messages` for Anthropic-style ones.
 
 | Action | Effect |
 |---|---|
 | Edit a quota | Change the tokens or the window in the quota's own row, then **Save**. What the tenant has used in the current window stays counted against the new limit; a new window starts a new count |
-| Revoke a key | The key stops working after the next sync |
-| Disable a tenant | All its keys and quotas are removed from the clusters until it is enabled again |
+| Revoke a key | The key or token stops working after the next sync |
+| Disable a tenant | Its keys and quotas are removed from the clusters, and its tokens refused, until it is enabled again |
 | Delete a tenant | Removes the tenant, its keys and its quotas |
 
 A quota is one budget for the tenant on that model across all sites.
+
+**Tokens and API keys.** Before 0.18 a key was an API key (`sk-...`) that
+every gateway had to list. Now a new key is a token the hub signs, which the
+gateways check against the hub's public keys without listing it. **Keys and
+tokens** at the top of the Tenants page says what the gateways take now:
+
+1. Until the first token, API keys only, as before.
+2. Then both, while any tenant still has an API key. Tenants marked **API
+   keys** in the list still have one: give each a token, let it switch its
+   clients, then revoke its API keys.
+3. Once the last API key is revoked, tokens only: the gateways list no key.
+
+**Rotate signing key** makes a new key that signs every new token; the old
+one keeps working for the tokens it signed until they expire or are revoked.
+See [security](security.md#tokens).
 
 **How much is left to give.** For a measured model, choosing it in **Add
 quota** or editing its budget shows what the model's GPUs serve a day, the

@@ -62,6 +62,12 @@ type Config struct {
 	// in the gateway's namespace with the peer client certificate.
 	CapacityPeer bool
 
+	// TokenIssuer and TokenAudience are the iss and aud of every token the
+	// hub signs, and what the gateways require of one. TokenLifetime is how
+	// long a new token lasts.
+	TokenIssuer, TokenAudience string
+	TokenLifetime              time.Duration
+
 	// Fleet is what every site's entry route has in common. PeerSNI is
 	// empty when neither FLEET_PEER_SNI nor FLEET_DOMAIN is set, and no
 	// entry route can be turned on then.
@@ -138,6 +144,12 @@ func Load() (*Config, error) {
 	if c.CapacityWindow, err = capacity.ParseWindow(os.Getenv("CAPACITY_WINDOW")); err != nil {
 		return nil, fmt.Errorf("CAPACITY_WINDOW: %w", err)
 	}
+	c.TokenIssuer, c.TokenAudience = envOr("TOKEN_ISSUER", "aigw-ui"), envOr("TOKEN_AUDIENCE", "aigw-fleet")
+	days, err := strconv.Atoi(envOr("TOKEN_LIFETIME_DAYS", "180"))
+	if err != nil || days < 1 || days > 3650 {
+		return nil, errors.New("TOKEN_LIFETIME_DAYS must be a whole number of days from 1 to 3650 such as 180")
+	}
+	c.TokenLifetime = time.Duration(days) * 24 * time.Hour
 	c.Fleet.BestEffortPriority, err = strconv.ParseInt(envOr("BEST_EFFORT_PRIORITY", strconv.Itoa(render.DefaultBestEffortPriority)), 10, 32)
 	if err != nil || c.Fleet.BestEffortPriority >= 0 {
 		return nil, errors.New("BEST_EFFORT_PRIORITY must be a whole number below 0 such as -1")

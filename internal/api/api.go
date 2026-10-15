@@ -98,6 +98,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("DELETE /api/v1/tenants/{id}", s.deleteTenant)
 	api.HandleFunc("POST /api/v1/tenants/{id}/keys", s.createKey)
 	api.HandleFunc("DELETE /api/v1/keys/{id}", s.revokeKey)
+	api.HandleFunc("GET /api/v1/signing-keys", s.signingKeys)
+	api.HandleFunc("POST /api/v1/signing-keys/rotate", s.rotateSigningKey)
 	api.HandleFunc("PUT /api/v1/tenants/{id}/quotas", s.upsertQuota)
 	api.HandleFunc("DELETE /api/v1/quotas/{id}", s.deleteQuota)
 

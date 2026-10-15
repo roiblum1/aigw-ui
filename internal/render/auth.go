@@ -34,9 +34,9 @@ func authPolicy(s State) *unstructured.Unstructured {
 		target["sectionName"] = s.ClientListener
 	}
 	u := object(egAPI, "SecurityPolicy", s.Namespace, AuthPolicyName)
-	u.Object["spec"] = map[string]any{
-		"targetRefs": []any{target},
-		"apiKeyAuth": map[string]any{
+	spec := map[string]any{"targetRefs": []any{target}}
+	if s.Identity.Mode != IdentityTokens {
+		spec["apiKeyAuth"] = map[string]any{
 			"credentialRefs": []any{
 				map[string]any{"group": "", "kind": "Secret", "name": KeysSecretName},
 			},
@@ -44,9 +44,25 @@ func authPolicy(s State) *unstructured.Unstructured {
 			// Anthropic clients send unless told otherwise.
 			"extractFrom":           []any{map[string]any{"headers": []any{"Authorization", APIKeyHeader}}},
 			"forwardClientIDHeader": ClientIDHeader,
-			"sanitize":              true,
-		},
+			// The API key check runs before the JWT check, and would take
+			// a token away before it is read; the backends remove both.
+			"sanitize": !s.Identity.tokens(),
+		}
 	}
+	if s.Identity.tokens() {
+		jwt := map[string]any{"providers": []any{jwtProvider(s.Identity)}}
+		if s.Identity.Mode == IdentityBoth {
+			// A request with an API key has no token. The API key check
+			// still has to pass, and the rules below refuse a token that
+			// did not check out.
+			jwt["failOpen"] = true
+		}
+		spec["jwt"] = jwt
+		if a := authorization(s.Identity); a != nil {
+			spec["authorization"] = a
+		}
+	}
+	u.Object["spec"] = spec
 	return u
 }
 

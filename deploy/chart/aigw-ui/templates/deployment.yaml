@@ -70,6 +70,12 @@ spec:
               value: {{ .Values.capacity.window | quote }}
             - name: CAPACITY_PEER_MEASUREMENTS
               value: {{ .Values.capacity.peerMeasurements | quote }}
+            - name: TOKEN_ISSUER
+              value: {{ .Values.tokens.issuer | quote }}
+            - name: TOKEN_AUDIENCE
+              value: {{ .Values.tokens.audience | quote }}
+            - name: TOKEN_LIFETIME_DAYS
+              value: {{ .Values.tokens.lifetimeDays | quote }}
             {{- if or .Values.redis.url .Values.redis.existingSecret }}
             - name: REDIS_URL
               valueFrom:

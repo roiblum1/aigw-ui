@@ -23,8 +23,31 @@ func backend(s State, m Model) *unstructured.Unstructured {
 
 func aiServiceBackend(s State, m Model) *unstructured.Unstructured {
 	u := object(aigwAPI, "AIServiceBackend", s.Namespace, m.Slug)
-	u.Object["spec"] = serviceBackendSpec(m.Slug)
+	spec := serviceBackendSpec(m.Slug)
+	if h := backendHeaders(s, ""); h != nil {
+		spec["headerMutation"] = h
+	}
+	u.Object["spec"] = spec
 	return u
+}
+
+// backendHeaders is the header mutation of a backend this tool renders: the
+// request class it sets, when objective is not empty, and the credentials it
+// removes while the gateway takes tokens. Nil when there is neither.
+func backendHeaders(s State, objective string) map[string]any {
+	var h map[string]any
+	if objective != "" {
+		h = objectiveHeader(objective)
+	}
+	if s.AuthEnabled && s.Identity.tokens() {
+		if h == nil {
+			h = map[string]any{}
+		}
+		for k, v := range credentialsRemoved() {
+			h[k] = v
+		}
+	}
+	return h
 }
 
 // serviceBackendSpec is the spec of an AIServiceBackend in front of the

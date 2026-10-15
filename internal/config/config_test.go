@@ -16,7 +16,7 @@ func valid(t *testing.T) {
 		"REDIS_URL", "REDIS_CA_FILE", "REDIS_TLS_INSECURE", "REDIS_KEY_PREFIX", "REDIS_ALLOW_RESET",
 		"OVERAGE_INTERVAL", "OVERAGE_THRESHOLD", "BEST_EFFORT_PRIORITY",
 		"FLEET_PEER_SNI", "FLEET_DOMAIN", "FLEET_PEER_CA_CONFIGMAP", "FLEET_PEER_CLIENT_SECRET", "FLEET_SESSION_HEADER",
-		"CAPACITY_PEER_MEASUREMENTS",
+		"CAPACITY_PEER_MEASUREMENTS", "TOKEN_ISSUER", "TOKEN_AUDIENCE", "TOKEN_LIFETIME_DAYS",
 	} {
 		t.Setenv(name, "")
 	}
@@ -39,6 +39,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if c.CapacityPeer {
 		t.Error("prefill/decode measurements on by default")
+	}
+	if c.TokenIssuer != "aigw-ui" || c.TokenAudience != "aigw-fleet" || c.TokenLifetime != 180*24*time.Hour {
+		t.Errorf("tokens = %q %q %v", c.TokenIssuer, c.TokenAudience, c.TokenLifetime)
 	}
 	if c.Fleet.BestEffortPriority != -1 {
 		t.Errorf("best-effort priority = %d, want -1", c.Fleet.BestEffortPriority)
@@ -92,6 +95,9 @@ func TestLoadRefuses(t *testing.T) {
 		{"BEST_EFFORT_PRIORITY", "0", "BEST_EFFORT_PRIORITY"},
 		{"BEST_EFFORT_PRIORITY", "3", "BEST_EFFORT_PRIORITY"},
 		{"BEST_EFFORT_PRIORITY", "low", "BEST_EFFORT_PRIORITY"},
+		{"TOKEN_LIFETIME_DAYS", "0", "TOKEN_LIFETIME_DAYS"},
+		{"TOKEN_LIFETIME_DAYS", "180d", "TOKEN_LIFETIME_DAYS"},
+		{"TOKEN_LIFETIME_DAYS", "4000", "TOKEN_LIFETIME_DAYS"},
 	} {
 		t.Run(tc.name+"="+tc.value, func(t *testing.T) {
 			valid(t)
