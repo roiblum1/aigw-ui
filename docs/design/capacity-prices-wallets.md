@@ -272,6 +272,80 @@ An Overview card: yesterday's spend is what the same traffic would have cost on 
 
 A portal, and later the semantic router, reads these instead of computing them.
 
+## Identity and quota rules
+
+*Added after steps 1–4 were built; it replaces step 5, "Wallets", with three steps: 5a, 5b, 5c.*
+
+### Why
+
+Two lists grow with the users, and both get large:
+
+- **QuotaPolicy bucket rules:** one rule per tenant per model (`internal/render/quota.go`, a regular expression on the client-ID header). 200 tenants × 5 models is 1,000 rules.
+- **SecurityPolicy API keys:** one entry per key.
+
+Wallets also need a trusted header that holds the tenant and nothing else. The client-ID header names a key, not a tenant, and a tenant can have several keys.
+
+| Piece | Before | After step 5 |
+| --- | --- | --- |
+| Authentication | `apiKeyAuth`, one entry per key | One JWT provider, the hub is the issuer; a short deny list of revoked tokens |
+| Tenant header | none (client ID per key) | `x-aigw-tenant`, set by the gateway from the token's `sub` claim; a client cannot set it |
+| Per-model quotas | one rule per tenant per model | per model: one `Distinct` rule on `x-aigw-tenant` (the standard per-tenant budget) + one `Exact` rule per tenant above the standard |
+| Wallets | — | one rule per gateway, `Distinct` on `x-aigw-tenant`, amount per tenant from metadata |
+
+The rule count goes from keys + tenants × models to about one provider + revoked keys + one rule per model + exceptions.
+
+### Lab check C (JWT), and check A extended
+
+Run on the lab (Envoy Gateway 1.9.2, AI Gateway 1.2.0) on the `walletcheck` listener, with a mock model server that echoes the identity headers it receives. Envoy Gateway 1.9.1 and AI Gateway 1.1.0, which production runs, have every field used (`jwt.failOpen`, authorization `cel`, `AIServiceBackend.headerMutation`, QuotaPolicy `Distinct`), by their CRDs.
+
+| Check | Result |
+| --- | --- |
+| C1. A `jwt` provider with inline `localJWKS` accepts a token the hub signed (ES256) | Passed |
+| C2. From `Authorization: Bearer …` and from `x-api-key` with no prefix | Passed, both |
+| C3. `claimToHeaders` sets `x-aigw-tenant` from `sub`, `x-aigw-key` from `jti`; a client's own `x-aigw-tenant` is replaced | Passed. One value reaches the model, also with the header sent twice in two cases. The JWT filter removes its claim headers before it reads a token, so a client's `x-aigw-tenant` is gone even when the token does not check out (`failOpen`) or there is none |
+| C4. Another key's token, an expired token, a revoked `jti` (authorization rule on the claim) are refused | Passed: 401, 401, 403. A JWT principal needs at least one claim |
+| C5. One SecurityPolicy that takes an API key *or* a JWT | Yes, with conditions: see below |
+| A1. `Distinct` on `x-aigw-tenant`: two tenants, two buckets, one limit | Passed, and a third tenant named in no rule got its own bucket. A request without the header (an API key) matches no `Distinct` bucket, only the default one |
+| A2. `Exact` and `Distinct` in one selector | Works: `Exact` tenant + `Distinct` key gave each of the tenant's keys its own bucket. An `Exact` exception beside the `Distinct` rule: a tenant whose standard bucket was spent went on to its exception's limit (`Shared` mode passes when any bucket has room) |
+| A3. Redis counter names under `Distinct` | `ai-gateway-quota_backend_name_<ns>/<backend>_model_name_override_<model>_rule-<n>-x-aigw-tenant-match-0_<tenant>_<window start>`: the tenant's slug is in the key; the rule's position too |
+| A4. Shadow mode and the best-effort route with `Distinct` rules | Passed: a shadow `Distinct` rule passes and counts a spent tenant; a per-tenant shadow `Exact` rule beside an enforced `Distinct` rule does too, and leaves the others enforced; a best-effort AIGatewayRoute that matches `x-aigw-tenant` by a regular expression takes the listed tenants and counts them per tenant, and a client's `x-aigw-tenant` cannot route itself there |
+| A5. The wallet items of "Lab check A" | **Not run.** Envoy Gateway's own global rate limiting is not enabled on the lab, and turning it on (its config map and a restart of Envoy Gateway) was refused in this session as a change to a shared resource. It needs the owner's go-ahead |
+
+Also found: a token is **not** removed by the JWT check; `AIServiceBackend.headerMutation.remove: [authorization, x-api-key]` removes it before the model server (checked). A QuotaPolicy without `serviceQuota` is never applied (the controller cannot add its finalizer); the hub always renders one.
+
+**C5, the switch.** One policy takes both when:
+
+1. `apiKeyAuth` lists every API key **and every token** (an unlisted valid token gets 401 from it), with `sanitize: false`: the API key check runs before the JWT check and would take the token away;
+2. `jwt.failOpen: true`, so a request with an API key, which holds no token, passes the JWT check;
+3. authorization rules, first match wins: deny a revoked `jti`; allow a token that checked out (any `iss` claim of the hub); deny any credential shaped like a token (`Bearer eyJ…` or `x-api-key: eyJ…`), such as an expired token still listed; default allow. An API key starts with `sk-`.
+
+Checked: old key in either header 200; listed token in either header 200, with `x-aigw-tenant`; an expired listed token 403; a revoked one 403; another key's token 401; nothing 401. A second listener or hostname would also work, but needs a gateway-chart change on every site and every client to change its address; the one policy needs neither, and costs only that the key list does not shrink until the switch ends.
+
+### 5a — The hub issues JWTs
+
+As specified in the task: an ES256 signing key stored encrypted with `ENCRYPTION_KEY`, with a `kid`, rotated by adding a new key; the token is what the client pastes as its API key, with `iss`, `aud`, `sub`, `jti`, `iat`, `exp` and no budget; the gateway gets one SecurityPolicy with inline `localJWKS`, `extractFrom` both headers and `claimToHeaders`; revocation is a deny rule on the `jti` until `exp`; the tenant page accepts a token, checked on the hub; the self-test checks a forged, an expired and a revoked token.
+
+*As built (0.18.0):*
+
+- **Three modes, chosen from the data on every sync** (`internal/render/identity.go`): API keys only until the hub signs its first token; both, as C5 found, while any enabled tenant has an API key; tokens only once none has, when the Secret and the API key check go. The Tenants page says which tenants still have API keys.
+- **A token's client ID has the API key's form**, `<tenant>.<16 hex digits>` (its `jti`), and is also in the token as `cid`: the per-tenant rules of today (`^<tenant>\.[a-f0-9]+$`) count token requests unchanged, so no counter moves before 5b. With tokens only, the JWT provider writes `x-aigw-client-id` from `cid`; during the switch the API key check writes it, because the JWT filter would remove a claim header it writes itself before reading a token, also from a request with an API key.
+- **The "expired token" rule looks at the credential, not the client ID**, so token client IDs need no marker.
+- **Deny lists:** a revoked token's `jti`, and every token of a deleted tenant, go to `token_denials` (a trigger on `api_keys`), kept until the token expires; a disabled tenant is refused by its `sub`. At most 128 values per rule; more are split.
+- **The backends the hub renders remove `Authorization` and `x-api-key`** while tokens are taken, since the JWT check passes a token on. A cluster's own routes pass it on.
+- **The self-test's tenant gets a token only once the hub issues them**, so a self-test does not move a hub to tokens; its tokens last one hour, so their denials go soon. The client's `x-aigw-tenant` is replaced (C3), but nothing counts by that header before 5b, so the self-test checks it from 5b on, where the counter shows it.
+- New keys are tokens; `"kind": "key"` in the API still makes an API key.
+- Settings: `tokens.issuer` (`aigw-ui`), `tokens.audience` (`aigw-fleet`), `tokens.lifetimeDays` (180).
+
+### 5b — `Distinct` per-model rules
+
+A model gets a standard per-tenant budget (amount and window), rendered as one `Distinct` rule on `x-aigw-tenant`; a tenant above it gets an `Exact` rule. A tenant cannot be put below the standard (`Shared` mode passes if any bucket has room): use a smaller standard with exceptions, or a wallet cap. Every authenticated tenant can use every model at the standard; a model closed to some tenants has a standard of 1 credit and exceptions. The Redis keys hold the tenant's slug; the usage reader, the best-effort mover, usage reset and the hourly history move to them. Moving a tenant between the standard and an exception starts its spend in the window again: applied at the next window start. The first sync loses the current window's spend once: do it at 00:00 UTC. The Models page shows the rule count per model.
+
+From check A1: a request with an API key has no `x-aigw-tenant` and matches no `Distinct` rule. During the switch, a tenant that still has an API key keeps its rule on the client ID as well.
+
+### 5c — Wallets
+
+As in "Wallets" below, with the tenant header `x-aigw-tenant` from the token, and a Lua filter whose only job is each tenant's wallet amount and window for `limit.fromMetadata`. Check A5 has not run (see above), so the hub-enforced fallback ships first.
+
 ## Wallets
 
 A wallet is one budget for a tenant across all priced models, per hour or per day. Per-model budgets stay; for a tenant with a wallet they become caps inside it. The tenant, or later the semantic router, picks the model per request and pays that model's price from the same wallet.
@@ -344,7 +418,7 @@ Five steps, one pull request each after the lab checks; step 3 can run beside st
 4. **Budget planner.** `internal/budget`, the fleet line, the peak-hour check, the fleet suggestion, Split, the API fields. Done when:
    - every formula has a unit test with figures worked out by hand;
    - the demo data shows the fleet line and marks a saturated model above 0.85.
-5. **Wallets.** Database, tenant UI, rendering (in the gateway or in the hub, as check A decided), usage and the tenant's own page, wallets counted in the planner. Done when:
+5. **Wallets.** *Replaced by 5a, 5b and 5c in "Identity and quota rules": hub-issued tokens, `Distinct` per-model rules, then wallets.* Database, tenant UI, rendering (in the gateway or in the hub, as check A decided), usage and the tenant's own page, wallets counted in the planner. Done when:
    - each row of the table in Wallets is tested on a real gateway;
    - the self-test gains "a spent wallet refuses on every model".
 

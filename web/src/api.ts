@@ -204,6 +204,8 @@ export interface Tenant {
   display_name: string;
   enabled: boolean;
   key_count: number;
+  /** Of those, the API keys of the kind before tokens. */
+  api_key_count: number;
   quota_count: number;
 }
 
@@ -211,9 +213,33 @@ export interface ApiKey {
   id: string;
   name: string;
   client_id: string;
+  /** The start of an API key, the end of a token. */
   key_prefix: string;
   revoked_at: string | null;
   created_at: string;
+  kind: "key" | "token";
+  expires_at: string | null;
+}
+
+/** How the gateways tell tenants apart. */
+export type IdentityMode = "keys" | "both" | "tokens";
+
+export interface SigningKey {
+  id: string;
+  created_at: string;
+  retired_at: string | null;
+  /** Unrevoked tokens it signed that have not expired. */
+  tokens: number;
+}
+
+export interface SigningKeys {
+  keys: SigningKey[];
+  identity: IdentityMode;
+  issuer: string;
+  audience: string;
+  lifetime_days: number;
+  /** Signed tokens the gateways refuse: revoked, or of a deleted tenant. */
+  denied: number;
 }
 
 export interface Quota {
@@ -883,6 +909,8 @@ export const api = {
   createKey: (tenantId: string, name: string) =>
     request<{ key: ApiKey; secret: string }>("POST", `/tenants/${tenantId}/keys`, { name }),
   revokeKey: (id: string) => request<void>("DELETE", `/keys/${id}`),
+  signingKeys: () => request<SigningKeys>("GET", "/signing-keys"),
+  rotateSigningKey: () => request<{ id: string }>("POST", "/signing-keys/rotate"),
   setQuota: (tenantId: string, model_id: string, token_limit: number, window: Window, shadow: boolean) =>
     request<Quota[]>("PUT", `/tenants/${tenantId}/quotas`, { model_id, token_limit, window, shadow }),
   deleteQuota: (id: string) => request<void>("DELETE", `/quotas/${id}`),

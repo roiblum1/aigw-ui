@@ -445,13 +445,15 @@ be given; and what is left to give under its overcommit limit
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| GET | `/tenants` | | List with key and quota counts |
+| GET | `/tenants` | | List with key and quota counts; `api_key_count` is how many of the keys are API keys rather than tokens |
 | POST | `/tenants` | `{"slug", "display_name"}` | Created tenant |
 | GET | `/tenants/{id}` | | `{"tenant", "keys", "quotas"}` |
 | PUT | `/tenants/{id}` | `{"display_name", "enabled"}` | Updated tenant |
 | DELETE | `/tenants/{id}` | | 204 |
-| POST | `/tenants/{id}/keys` | `{"name"}` | `{"key": {...}, "secret": "sk-..."}` |
-| DELETE | `/keys/{id}` | | 204, key revoked |
+| POST | `/tenants/{id}/keys` | `{"name", "kind"}` | `{"key": {...}, "secret": "eyJ..."}`. `kind` is `token`, the default, or `key` for an API key of the kind before 0.18. A key has `kind` and, a token, `expires_at` |
+| DELETE | `/keys/{id}` | | 204, key revoked; a token is refused by every gateway after its next sync, until it expires |
+| GET | `/signing-keys` | | `{"keys": [{"id", "created_at", "retired_at", "tokens"}], "identity", "issuer", "audience", "lifetime_days", "denied"}`. `identity` is `keys` (API keys only, no token issued), `both` or `tokens`; `tokens` of a key counts the unrevoked tokens it signed that have not expired |
+| POST | `/signing-keys/rotate` | | `{"id"}` of the new signing key |
 | PUT | `/tenants/{id}/quotas` | `{"model_id", "token_limit", "window", "shadow"}` | The tenant's quotas |
 | DELETE | `/quotas/{id}` | | 204 |
 

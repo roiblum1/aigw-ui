@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/selftest"
@@ -105,30 +106,53 @@ func (s *Server) deleteTenant(w http.ResponseWriter, r *http.Request) {
 }
 
 // createKey is the only response that ever contains the key itself.
+// createKey issues a token, the key a tenant pastes as its API key. With
+// "kind": "key" it makes an API key of the kind there was before tokens,
+// which every gateway lists; the first token moves every gateway to take
+// both, until no tenant has an API key left.
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		Name string `json:"name"`
+		Kind string `json:"kind"`
 	}
 	if err := decode(r, &b); err != nil {
 		fail(w, err)
 		return
 	}
-	k, plain, err := s.st.CreateKey(r.Context(), r.PathValue("id"), b.Name)
+	var k store.APIKey
+	var plain string
+	var err error
+	switch b.Kind {
+	case "", store.KindToken:
+		k, plain, err = s.st.CreateToken(r.Context(), r.PathValue("id"), b.Name, s.st.Tokens(), time.Now())
+	case store.KindKey:
+		k, plain, err = s.st.CreateKey(r.Context(), r.PathValue("id"), b.Name)
+	default:
+		err = invalid("kind must be %q or %q", store.KindToken, store.KindKey)
+	}
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	s.changed(r, "key.add", "Created API key "+k.ClientID)
+	s.changed(r, "key.add", "Created "+keyKind(k.Kind)+" "+k.ClientID)
 	writeJSON(w, http.StatusCreated, map[string]any{"key": k, "secret": plain})
 }
 
+// keyKind names a kind of key in the activity log.
+func keyKind(kind string) string {
+	if kind == store.KindToken {
+		return "token"
+	}
+	return "API key"
+}
+
 func (s *Server) revokeKey(w http.ResponseWriter, r *http.Request) {
-	clientID, err := s.st.RevokeKey(r.Context(), r.PathValue("id"))
+	k, err := s.st.RevokeKey(r.Context(), r.PathValue("id"))
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	s.changed(r, "key.revoke", "Revoked API key "+clientID)
+	s.changed(r, "key.revoke", "Revoked "+keyKind(k.Kind)+" "+k.ClientID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

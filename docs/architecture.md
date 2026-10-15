@@ -92,8 +92,8 @@ cluster's own routes cannot be removed by a sync.
 
 ## How a tenant quota is enforced
 
-1. A key has the client ID `<tenant>.<random>`, for example `team-search.5018d00f`.
-2. The gateway's API key auth validates the key and forwards the client ID in the `x-aigw-client-id` header.
+1. A key has the client ID `<tenant>.<random>`, for example `team-search.5018d00f`. A token's is `<tenant>.<jti>`, 16 hex digits, and is in the token as `cid`.
+2. The gateway's API key auth validates the key and forwards the client ID in the `x-aigw-client-id` header. A token is checked by the gateway's JWT provider against the hub's public keys: while any tenant has an API key, every token is listed as one too and the API key auth writes its client ID; once none has, the JWT provider writes it from `cid`. Either way it also writes `x-aigw-tenant` (`sub`) and `x-aigw-key` (`jti`). See [security](security.md#tokens).
 3. The model's `QuotaPolicy` has one bucket rule per tenant that matches `^<tenant>\.[a-f0-9]+$`, so all keys of a tenant share one bucket.
 4. The gateway's quota rate limit service counts tokens in Redis.
 
@@ -424,7 +424,8 @@ alike: nothing was refused and both waited in one queue. See
 
 ## API-key policy and the peer listener
 
-A fleet cluster must have a *Client listener* set. The `SecurityPolicy`
+The policy is the API key check, the JWT check, or both during the switch to
+tokens (`internal/render/identity.go`). A fleet cluster must have a *Client listener* set. The `SecurityPolicy`
 attaches to the whole Gateway unless the cluster has one; then it attaches to that listener alone
 (`sectionName`). A gateway that also has a listener for requests forwarded by
 other sites needs this: the entry gateway removes the key before forwarding,

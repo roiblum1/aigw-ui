@@ -19,6 +19,7 @@ const (
 	stepApply   = "apply"
 	stepKey     = "key"
 	stepBadKey  = "bad-key"
+	stepRevoked = "revoked-token"
 	stepCounter = "counter"
 	stepLimit   = "limit"
 	stepOverage = "overage"
@@ -36,7 +37,8 @@ func plan() []Step {
 		{ID: stepGateway, Title: "The gateway lists the model", Status: Pending},
 		{ID: stepApply, Title: "A temporary tenant, key and quota are applied", Status: Pending},
 		{ID: stepKey, Title: "A request with the new key is answered", Status: Pending},
-		{ID: stepBadKey, Title: "A request with an unknown key is refused", Status: Pending},
+		{ID: stepBadKey, Title: "A request with an unknown key, a forged token or an expired one is refused", Status: Pending},
+		{ID: stepRevoked, Title: "A revoked token is refused", Status: Pending},
 		{ID: stepCounter, Title: "The tokens are counted where the Usage page reads them", Status: Pending},
 		{ID: stepLimit, Title: "A request over the quota is refused", Status: Pending},
 		{ID: stepOverage, Title: "A tenant past its budget is served as best-effort", Status: Pending},
@@ -78,7 +80,9 @@ type test struct {
 	model   store.Model
 
 	tenant *store.Tenant // set once the temporary tenant exists
-	key    string        // its API key; empty when the cluster does not enforce keys
+	key    string        // its API key or token; empty when the cluster does not enforce keys
+	// tokens is set when the hub issues tokens: the tenant's key is one.
+	tokens bool
 	// counted and refused remember what earlier steps found out.
 	counted, refused bool
 	// first is the first answered request, the one the counter step looks for.
@@ -104,6 +108,7 @@ func (t *test) steps() {
 		{stepApply, t.apply, true},
 		{stepKey, t.firstRequest, true},
 		{stepBadKey, t.unknownKey, false},
+		{stepRevoked, t.revokedToken, false},
 		{stepCounter, t.counter, false},
 		{stepLimit, t.limit, false},
 		{stepOverage, t.overage, false},
@@ -183,7 +188,19 @@ func (t *test) apply() (string, string) {
 		return Failed, err.Error()
 	}
 	t.tenant = &tenant
-	_, key, err := t.r.st.CreateKey(t.ctx, tenant.ID, "self-test")
+	// A token once the hub issues them, else an API key: a self-test does
+	// not move the gateways to tokens by itself.
+	id, err := t.r.st.Identity(t.ctx)
+	if err != nil {
+		return Failed, err.Error()
+	}
+	t.tokens = id.Mode != render.IdentityKeys
+	var key string
+	if t.tokens {
+		_, key, err = t.r.st.CreateToken(t.ctx, tenant.ID, "self-test", t.tokenSettings(), time.Now())
+	} else {
+		_, key, err = t.r.st.CreateKey(t.ctx, tenant.ID, "self-test")
+	}
 	if err != nil {
 		return Failed, err.Error()
 	}
@@ -278,16 +295,30 @@ func (t *test) unknownKey() (string, string) {
 	if t.key == "" {
 		return Skipped, "\"Enforce API keys\" is off for this cluster, so the gateway takes requests without a key."
 	}
-	res, err := t.chat("sk-selftest-not-a-real-key")
-	switch {
-	case err != nil:
-		return Failed, err.Error()
-	case res.Status == http.StatusUnauthorized || res.Status == http.StatusForbidden:
-		return Passed, fmt.Sprintf("Refused with HTTP %d.", res.Status)
-	case res.Status == http.StatusOK:
-		return Failed, "The gateway answered a request with a key it was never given: API key auth is not in effect."
+	probes := []struct{ what, key string }{{"an unknown key", "sk-selftest-not-a-real-key"}}
+	if t.tokens {
+		forged, expired, err := t.badTokens()
+		if err != nil {
+			return Failed, err.Error()
+		}
+		probes = append(probes, struct{ what, key string }{"a token signed by another key", forged},
+			struct{ what, key string }{"an expired token", expired})
 	}
-	return Warning, "Expected HTTP 401 and got " + answer(res) + "."
+	var refused []string
+	for _, p := range probes {
+		res, err := t.chat(p.key)
+		switch {
+		case err != nil:
+			return Failed, p.what + ": " + err.Error()
+		case res.Status == http.StatusUnauthorized || res.Status == http.StatusForbidden:
+			refused = append(refused, fmt.Sprintf("%s with HTTP %d", p.what, res.Status))
+		case res.Status == http.StatusOK || res.Status == http.StatusTooManyRequests:
+			return Failed, "The gateway took " + p.what + " (" + answer(res) + "): the key or token check is not in effect."
+		default:
+			return Warning, "For " + p.what + ", expected HTTP 401 or 403 and got " + answer(res) + "."
+		}
+	}
+	return Passed, "Refused " + strings.Join(refused, ", ") + "."
 }
 
 // cleanup removes the temporary tenant from the hub and from the cluster. It

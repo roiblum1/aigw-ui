@@ -135,7 +135,7 @@ func (s *Store) TenantOfKey(ctx context.Context, key string) (Tenant, error) {
 	}
 	rows, err := s.db.Query(ctx,
 		`SELECT k.tenant_id, k.key_enc FROM api_keys k JOIN tenants t ON t.id = k.tenant_id
-		 WHERE k.key_prefix = $1 AND k.revoked_at IS NULL AND t.enabled`, key[:keyPrefixLen])
+		 WHERE k.kind = 'key' AND k.key_prefix = $1 AND k.revoked_at IS NULL AND t.enabled`, key[:keyPrefixLen])
 	if err != nil {
 		return Tenant{}, mapErr(err)
 	}

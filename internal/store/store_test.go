@@ -142,8 +142,8 @@ func TestTenantKeysAndQuotas(t *testing.T) {
 	if keys, _ = s.ListKeys(ctx, team.ID); len(keys) != 1 || keys[0].ID != key.ID {
 		t.Errorf("keys = %+v", keys)
 	}
-	if id, err := s.RevokeKey(ctx, key.ID); err != nil || id != key.ClientID {
-		t.Errorf("revoke = %q, %v", id, err)
+	if k, err := s.RevokeKey(ctx, key.ID); err != nil || k.ClientID != key.ClientID || k.Kind != KindKey {
+		t.Errorf("revoke = %+v, %v", k, err)
 	}
 	if _, err := s.RevokeKey(ctx, key.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("revoking a revoked key: %v, want ErrNotFound", err)

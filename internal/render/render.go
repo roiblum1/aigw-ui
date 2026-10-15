@@ -159,6 +159,8 @@ type State struct {
 	// to. Empty attaches it to the whole Gateway.
 	ClientListener string
 	AuthEnabled    bool
+	// Identity is how the gateway tells tenants apart when AuthEnabled.
+	Identity Identity
 	// Fleet is used by the models that have Fleet sites.
 	Fleet  FleetConfig
 	Models []Model
@@ -176,7 +178,8 @@ func Objects(s State) []*unstructured.Unstructured {
 	sort.Slice(models, func(i, j int) bool { return models[i].Slug < models[j].Slug })
 
 	var out []*unstructured.Unstructured
-	if s.AuthEnabled {
+	// With tokens only, nothing is listed.
+	if s.AuthEnabled && s.Identity.Mode != IdentityTokens {
 		out = append(out, keysSecret(s))
 	}
 	for _, m := range models {

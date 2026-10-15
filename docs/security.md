@@ -5,13 +5,14 @@
 | Secret | Stored in | Protection |
 |---|---|---|
 | Cluster kubeconfigs | Postgres, `clusters.kubeconfig_enc` | AES-256-GCM |
-| Tenant API keys | Postgres, `api_keys.key_enc` | AES-256-GCM |
+| Tenant API keys and tokens | Postgres, `api_keys.key_enc` | AES-256-GCM |
+| Token signing keys (EC P-256) | Postgres, `signing_keys.private_enc` | AES-256-GCM; only the public halves leave the hub |
 | Gateway key for `/v1/models` | Postgres, `clusters.discovery_token_enc` | AES-256-GCM |
 | Encryption key | Kubernetes Secret `<release>-auth` on the hub | Kubernetes RBAC, etcd encryption if enabled |
 | Admin token | Kubernetes Secret `<release>-auth` on the hub | same |
 | Postgres password | Kubernetes Secret `<release>-postgresql` | same |
 | Redis URL with its password | Kubernetes Secret `<release>-redis`, or the one named in `redis.existingSecret` | same. The server only reads from Redis, unless `redis.allowReset` is on: then it can also delete quota counters |
-| Tenant API keys on the LLM clusters | Kubernetes Secret `aigw-ui-api-keys` in the gateway namespace | Kubernetes RBAC on that cluster |
+| Tenant API keys on the LLM clusters | Kubernetes Secret `aigw-ui-api-keys` in the gateway namespace, while any tenant has an API key; tokens are listed there too until then | Kubernetes RBAC on that cluster |
 
 Kubeconfigs are not stored as Kubernetes Secrets. They are encrypted rows in
 Postgres, and the key that decrypts them is the Kubernetes Secret.
@@ -77,8 +78,9 @@ Keys are stored encrypted rather than hashed, because every sync has to write
 them to the clusters. The UI and API show a key only once, when it is created.
 Afterwards only the first characters are shown.
 
-**Revoking.** A revoked key, and every key of a disabled or deleted tenant,
-is removed from the Secret by the next sync of each cluster. Until a cluster
+**Revoking.** A revoked API key, and every API key of a disabled or deleted
+tenant, is removed from the Secret by the next sync of each cluster. For
+tokens, see [below](#tokens). Until a cluster
 has synced, the key still works there: check the cluster's status on the
 Clusters page, or the task in Activity. Versions before 0.6.1 did not remove
 the key at all; see the [0.6.1 release notes](release-notes/v0.6.1.md).
@@ -94,10 +96,76 @@ use, or use up, any tenant's quota. With enforcement on, the gateway sets the
 header itself from the key and overwrites what the client sent. Turn it on for
 every cluster where quotas are meant to hold.
 
+## Tokens
+
+Since 0.18, a new key is a **token**: a JSON Web Token the hub signs with
+ES256, which the client pastes where it takes an API key. It says who the
+tenant is (`sub`, its slug) and which key it is (`jti`), for whom
+(`iss` `tokens.issuer`, `aud` `tokens.audience`), and until when (`exp`,
+`tokens.lifetimeDays` after it was made, 180 by default). It holds no budget
+or limit: those change daily, and a token lives for months.
+
+**The gateways check tokens themselves.** Every sync writes the hub's public
+keys into the SecurityPolicy `aigw-ui-api-key-auth` inline, so no cluster
+calls the hub at runtime, and tokens keep working while the hub is down. The
+gateway then sets `x-aigw-tenant` from `sub` and `x-aigw-key` from `jti`,
+replacing what a client sent (lab check C, Envoy Gateway 1.9.2: a client's
+own `x-aigw-tenant` never reaches the model server, even with a key that is
+not a token).
+
+**The signing key** is an EC P-256 key the hub makes when it signs its first
+token. Its private half is stored in Postgres, encrypted with the encryption
+key, like the kubeconfigs: **whoever can read both the `<release>-auth`
+Secret and the database can sign a token for any tenant.** Nothing else
+reads it; the API never returns it. Its public half is published to every
+gateway.
+
+**Rotating it.** **Rotate signing key** on the Tenants page (or `POST
+/api/v1/signing-keys/rotate`) makes a new key, which signs every token from
+then on. The old key stays published, and the tokens it signed keep working,
+until the last of them expires or is revoked; the Tenants page lists such
+keys with their token count. To retire it sooner, give each tenant a new
+token and revoke the old ones. If a signing key leaked, rotate, then revoke
+every token the old key signed: the old key is unpublished at the next sync
+after its last token is revoked.
+
+**Revoking a token** adds a rule to the SecurityPolicy that refuses its
+`jti` until it expires, after which the gateway refuses it anyway and the
+rule is dropped. Deleting a tenant does the same for each of its tokens, and
+the rules outlive the tenant. A disabled tenant's tokens are refused by its
+slug until it is enabled. Until a cluster has synced, a revoked token still
+works there, as an API key does.
+
+**What reaches the model server.** A token is not removed by the JWT check.
+The backends the hub renders (the entry routes, the best-effort routes, and
+the models added by address) remove `Authorization` and `x-api-key` before
+the model server; a route of the cluster's own passes them on, as an API key
+was passed before 0.18 only when it was not removed there either. vLLM does
+not log request headers.
+
+**The switch from API keys.** While any enabled tenant still has an API key,
+the gateways take both: the API key check lists every API key and every
+token, does not remove the credential, and lets the JWT check run after it,
+which passes a request that holds no token (`failOpen`). Rules then refuse a
+revoked or disabled tenant's token, let a token that checked out through,
+and refuse any other credential shaped like a token (`eyJ…`), such as an
+expired token still listed. An API key starts with `sk-` and is never taken
+for one. Once the last API key is revoked, the next sync drops the API key
+check and the Secret: the gateways list nothing, and a token writes the
+client ID too. The Tenants page says which tenants still have API keys.
+
+**Defense in depth.** The gateway chart's ClientTrafficPolicy already
+removes a client's `x-aigw-client-id` before any check; add `x-aigw-tenant`
+and `x-aigw-key` to that list, so that a listener without the hub's policy
+cannot be handed them either.
+
 ## The tenants' own page
 
-At `/my-usage` a tenant signs in with one of its API keys and sees its own
-budgets, usage and prices. `config.tenantPage: false` turns it off.
+At `/my-usage` a tenant signs in with one of its API keys or tokens and sees
+its own budgets, usage and prices. `config.tenantPage: false` turns it off.
+A token is checked on the hub against its own public keys: signature,
+issuer, audience and expiry, then that it is one of the tenant's keys and
+not revoked.
 
 - **What a key opens.** `GET /api/v1/my/usage` and nothing else. The admin
   API answers 401 to a tenant's key, and the page's endpoint answers 401 to
@@ -158,9 +226,9 @@ back it up.
 
 ## What a client cannot do
 
-- **Name another tenant.** The gateway checks the API key and then writes
-  the tenant into the header `x-aigw-client-id`, replacing whatever the
-  client sent. Quotas and usage follow that header. The self-test step "A
+- **Name another tenant.** The gateway checks the API key or token and then
+  writes the tenant into the header `x-aigw-client-id`, and from a token into
+  `x-aigw-tenant`, replacing whatever the client sent. Quotas and usage follow that header. The self-test step "A
   client cannot choose its tenant" checks it on a real gateway. A cluster
   in the fleet must enforce API keys for this reason.
 - **Set the cached token count of its own answer.** A priced model charges

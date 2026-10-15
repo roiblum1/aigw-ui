@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { ArrowLeft, Copy, Plus, Users } from "lucide-react";
-import { api, type Tenant } from "../api";
+import { api, type ApiKey, type SigningKeys, type Tenant } from "../api";
 import {
   Empty,
   ErrorBanner,
@@ -18,6 +18,7 @@ import { REFRESH_MS } from "./Usage";
 
 export default function Tenants() {
   const { data: tenants, error, reload } = useLoad(api.tenants);
+  const signing = useLoad(api.signingKeys);
   const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -35,13 +36,16 @@ export default function Tenants() {
 
   return (
     <>
-      <PageHeader title="Tenants" subtitle="Teams that hold API keys and token quotas.">
+      <PageHeader title="Tenants" subtitle="Teams that hold keys and budgets.">
         <button className="primary" onClick={() => setCreating(true)}>
           <Plus />
           Add tenant
         </button>
       </PageHeader>
       <ErrorBanner message={error} />
+      {signing.data && tenants && (
+        <IdentityPanel signing={signing.data} tenants={tenants} onChanged={signing.reload} />
+      )}
 
       {tenants && tenants.length === 0 && <Empty icon={Users}>No tenants yet.</Empty>}
       {tenants && tenants.length > 0 && (
@@ -68,7 +72,17 @@ export default function Tenants() {
                       {t.enabled ? "Enabled" : "Disabled"}
                     </span>
                   </td>
-                  <td>{t.key_count}</td>
+                  <td>
+                    {t.key_count}
+                    {t.api_key_count > 0 && (
+                      <span
+                        className="tag warn"
+                        title="Still on API keys: while any tenant has one, every gateway lists every key and token. Give it a token and revoke the API keys."
+                      >
+                        {t.api_key_count} API {t.api_key_count === 1 ? "key" : "keys"}
+                      </span>
+                    )}
+                  </td>
                   <td>{t.quota_count}</td>
                   <td className="row-actions">
                     <button onClick={() => setOpenId(t.id)}>Manage</button>
@@ -83,6 +97,74 @@ export default function Tenants() {
       {creating && <TenantForm onClose={() => setCreating(false)} onCreated={(t) => setOpenId(t.id)} />}
     </>
   );
+}
+
+const identityText: Record<SigningKeys["identity"], string> = {
+  keys: "The gateways take API keys only. The first token you create moves every gateway to take tokens too.",
+  both: "The gateways take API keys and tokens, and list every key and token, until the last API key is revoked.",
+  tokens: "The gateways take tokens only, checked against the hub's public keys; they list no key.",
+};
+
+/** How the gateways tell tenants apart, and the hub's signing keys. */
+function IdentityPanel(props: { signing: SigningKeys; tenants: Tenant[]; onChanged: () => void }) {
+  const { signing, tenants } = props;
+  const action = useAction();
+  const onKeys = tenants.filter((t) => t.api_key_count > 0);
+  const active = signing.keys.find((k) => !k.retired_at);
+  const retired = signing.keys.filter((k) => k.retired_at && k.tokens > 0);
+  const rotate = () => {
+    if (
+      !confirm(
+        "Make a new signing key? It signs every token from now on. Tokens the current key signed keep working until they expire or are revoked; " +
+          "the gateways keep its public key until then.",
+      )
+    )
+      return;
+    action.run(async () => void (await api.rotateSigningKey(), props.onChanged()));
+  };
+  return (
+    <section className="card">
+      <h2>Keys and tokens</h2>
+      <p>{identityText[signing.identity]}</p>
+      {onKeys.length > 0 && signing.identity !== "keys" && (
+        <p className="warn-text">
+          Still on API keys: {onKeys.map((t) => t.slug).join(", ")}. Give each a token, then revoke its API keys.
+        </p>
+      )}
+      <p className="detail">
+        {active ? (
+          <>
+            Tokens are signed by key <span className="mono">{active.id}</span> since {formatTime(active.created_at)}, last{" "}
+            {signing.lifetime_days} days, and name <span className="mono">{signing.issuer}</span> for{" "}
+            <span className="mono">{signing.audience}</span>.
+          </>
+        ) : (
+          <>No token was issued yet; the first one makes the signing key.</>
+        )}
+        {retired.length > 0 &&
+          ` Retired keys still published for their tokens: ${retired.map((k) => `${k.id} (${k.tokens})`).join(", ")}.`}
+        {signing.denied > 0 &&
+          (signing.denied === 1
+            ? " 1 revoked token is refused until it expires."
+            : ` ${signing.denied} revoked tokens are refused until they expire.`)}
+      </p>
+      <ErrorBanner message={action.error} />
+      {active && (
+        <button disabled={action.busy} onClick={rotate}>
+          Rotate signing key
+        </button>
+      )}
+    </section>
+  );
+}
+
+/** Which key a row is: an API key's start, a token's end. */
+function keyText(k: ApiKey): string {
+  return k.kind === "token" ? `…${k.key_prefix}` : `${k.key_prefix}…`;
+}
+
+function expired(k: ApiKey): boolean {
+  return k.expires_at != null && new Date(k.expires_at).getTime() <= Date.now();
 }
 
 function TenantForm(props: { onClose: () => void; onCreated: (t: Tenant) => void }) {
@@ -120,7 +202,7 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   const usage = useLoad(() => api.usage(props.id));
   usePolling(usage.reload, REFRESH_MS);
   const action = useAction();
-  const [newKey, setNewKey] = useState<string | null>(null);
+  const [newKey, setNewKey] = useState<{ secret: string; key: ApiKey } | null>(null);
   const [keyName, setKeyName] = useState("");
 
   if (!data) {
@@ -140,7 +222,7 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   const createKey = (e: FormEvent) => {
     e.preventDefault();
     act(async () => {
-      setNewKey((await api.createKey(tenant.id, keyName)).secret);
+      setNewKey(await api.createKey(tenant.id, keyName));
       setKeyName("");
     });
   };
@@ -172,15 +254,21 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
       </PageHeader>
       <ErrorBanner message={error || action.error} />
       {!tenant.enabled && (
-        <div className="banner warn">This tenant is disabled. Its keys are removed from the clusters until it is enabled.</div>
+        <div className="banner warn">
+          This tenant is disabled. The gateways refuse its keys and tokens until it is enabled.
+        </div>
       )}
 
       <section className="card">
-        <h2>API keys</h2>
+        <h2>Keys</h2>
+        <p className="hint">
+          A new key is a token: the client pastes it where it takes an API key. Revoking one refuses it on every gateway
+          after the next sync.
+        </p>
         <form className="inline-form" onSubmit={createKey}>
           <input value={keyName} placeholder="Key name, e.g. ci-pipeline" onChange={(e) => setKeyName(e.target.value)} />
           <button type="submit" className="primary" disabled={action.busy}>
-            Create key
+            Create token
           </button>
         </form>
         {keys.length === 0 ? (
@@ -190,6 +278,7 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
             <thead>
               <tr>
                 <th>Name</th>
+                <th>Kind</th>
                 <th>Key</th>
                 <th>Client ID</th>
                 <th>Created</th>
@@ -198,14 +287,28 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
             </thead>
             <tbody>
               {keys.map((k) => (
-                <tr key={k.id} className={k.revoked_at ? "muted" : ""}>
+                <tr key={k.id} className={k.revoked_at || expired(k) ? "muted" : ""}>
                   <td>{k.name || "—"}</td>
-                  <td className="mono">{k.key_prefix}…</td>
+                  <td>
+                    {k.kind === "token" ? (
+                      <>
+                        Token
+                        <div className="detail">expires {formatTime(k.expires_at)}</div>
+                      </>
+                    ) : (
+                      <span className="tag warn" title="An API key of the kind before tokens">
+                        API key
+                      </span>
+                    )}
+                  </td>
+                  <td className="mono">{keyText(k)}</td>
                   <td className="mono">{k.client_id}</td>
                   <td>{formatTime(k.created_at)}</td>
                   <td className="row-actions">
                     {k.revoked_at ? (
                       <span className="badge pending">Revoked</span>
+                    ) : expired(k) ? (
+                      <span className="badge pending">Expired</span>
                     ) : (
                       <button
                         className="danger"
@@ -236,11 +339,19 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
       />
 
       {newKey && (
-        <Modal title="Key created" onClose={() => setNewKey(null)}>
-          <p>Copy this key now. It is not shown again.</p>
-          <pre className="code">{newKey}</pre>
+        <Modal title={newKey.key.kind === "token" ? "Token created" : "Key created"} onClose={() => setNewKey(null)}>
+          <p>
+            Copy it now. It is not shown again.{" "}
+            {newKey.key.kind === "token" && (
+              <>
+                The client pastes it as its API key: <span className="mono">Authorization: Bearer …</span> or{" "}
+                <span className="mono">x-api-key</span>. It expires {formatTime(newKey.key.expires_at)}.
+              </>
+            )}
+          </p>
+          <pre className="code">{newKey.secret}</pre>
           <footer>
-            <button className="primary" onClick={() => navigator.clipboard?.writeText(newKey)}>
+            <button className="primary" onClick={() => navigator.clipboard?.writeText(newKey.secret)}>
               <Copy />
               Copy
             </button>
