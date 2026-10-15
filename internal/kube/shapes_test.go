@@ -61,3 +61,29 @@ func TestMarketIDAnnotation(t *testing.T) {
 		t.Fatalf("capacity = %+v, %v", got, err)
 	}
 }
+
+// A hub whose account may not list the LLMInferenceServiceConfigs says so:
+// its spec hash holds their names only.
+func TestConfigsRefused(t *testing.T) {
+	lists := map[schema.GroupVersionResource]string{podsGVR: "PodList", nodesGVR: "NodeList"}
+	for _, gvr := range llmServiceGVRs {
+		lists[gvr] = "LLMInferenceServiceList"
+	}
+	for _, gvr := range llmConfigGVRs {
+		lists[gvr] = "LLMInferenceServiceConfigList"
+	}
+	svc := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": llmServiceGVRs[0].Group + "/" + llmServiceGVRs[0].Version,
+		"kind":       "LLMInferenceService",
+		"metadata":   map[string]any{"name": "glm-b300", "namespace": "llm"},
+		"spec":       map[string]any{"model": map[string]any{"name": "glm"}},
+	}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), lists, svc)
+	dyn.PrependReactor("list", "llminferenceserviceconfigs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "llminferenceserviceconfigs"}, "", nil)
+	})
+	got, err := (&Client{dyn: dyn}).Capacity(context.Background())
+	if err != nil || len(got) != 1 || !got[0].ConfigsDenied {
+		t.Fatalf("capacity = %+v, %v", got, err)
+	}
+}
