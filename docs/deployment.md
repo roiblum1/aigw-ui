@@ -157,7 +157,8 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
 ## Before the first budget across models
 
 1. In the cluster's Envoy Gateway configuration (`envoy-gateway-config`),
-   enable global rate limiting with the hub's Redis:
+   enable global rate limiting with the Redis every gateway shares (the
+   same one the AI gateway's quota rate limit service counts in):
    `rateLimit.backend.type: Redis`, `rateLimit.backend.redis.url` the hub's
    Redis, and `rateLimit.timeout: 5s`. The default timeout of 20 ms is
    cancelled on every call to a Redis across a network, and every request

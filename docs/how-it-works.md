@@ -546,10 +546,11 @@ cost. See [architecture](architecture.md#a-budget-across-models).
 
 **Why.**
 
-- *Enforced by the gateway, counted in the hub's Redis.* The hub renders the
+- *Enforced by the gateway, counted in one shared Redis.* The hub renders the
   same policy for every cluster, and every cluster's rate limit service
   counts in the same key, so a tenant has one budget across clusters and
-  regions and the hub is not in the path of a request. An earlier version
+  regions and the hub is not in the path of a request: while it is down,
+  every budget holds as it is, and only changes and the Usage page wait. An earlier version
   (0.20.0) added up the spend in the hub and closed tenants by a rule; that
   was a minute late and depended on the hub.
 - *Changing a budget starts its count over.* The gateway names the counter

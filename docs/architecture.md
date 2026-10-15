@@ -148,13 +148,14 @@ by the hub (`internal/render/budget.go`), since 0.22.0:
    stream ends and refuses the next request once it is spent (HTTP 429).
    The counter's key holds the policy's namespace and name and the rule's
    position, and nothing of the cluster, so every cluster that renders the
-   same policy counts in the same key of the hub's Redis
+   same policy counts in the same key of the Redis the gateways share (on
+   the lab, the sandbox hub's; in production, one Redis of its own)
    (`render.BudgetCounters`; the Usage page and the tenants' own page read
    it).
 
 It needs tokens only, as a standard does: the rule reads the tenant header.
 And it needs global rate limiting enabled in the Envoy Gateway configuration
-of every cluster, with the hub's Redis and a timeout that reaches it (the
+of every cluster, with the shared Redis and a timeout that reaches it (the
 default of 20 ms does not across a network: every call is cancelled and the
 request passes). The sync reports the policy's `Accepted` condition; the
 self-test checks the whole path.
@@ -655,7 +656,7 @@ removed.
   `v1alpha1`, which both gateway versions still serve but call deprecated.
 - For quotas: the dedicated quota rate limit service, pointed at the hub Redis. The AI gateway Helm chart does not deploy it.
 - For budgets across models: global rate limiting in the Envoy Gateway
-  configuration (`rateLimit.backend` with the hub's Redis and `timeout` of a
+  configuration (`rateLimit.backend` with the shared Redis and `timeout` of a
   few seconds); Envoy Gateway then runs its own rate limit service next to
   the AI gateway's. See [deployment](deployment.md#before-the-first-budget-across-models).
 - A `ClientTrafficPolicy` on the Gateway with `connection.bufferLimit`, for

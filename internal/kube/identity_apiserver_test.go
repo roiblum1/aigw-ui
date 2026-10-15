@@ -75,4 +75,44 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	if len(rules) != 2 || fmt.Sprint(rules[0]) != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1h limit:100]]" {
 		t.Fatalf("standard rules: %v", rules)
 	}
+
+	// Budgets across models and a tenant held to one model: the budget
+	// policy and the route's cost as the Envoy Gateway and AI Gateway CRDs
+	// take them, and the CEL rule in the policy.
+	s.Models[0].Priced, s.Models[0].CostExpression = true, "input_tokens * 15u"
+	s.Budgets = []render.TenantBudget{{TenantSlug: "team-b", Limit: 300_000, Window: "1d"}, {TenantSlug: "team-a", Limit: 100_000, Window: "1h"}}
+	s.Restricted = []render.TenantModels{{TenantSlug: "team-a", Models: []string{"GLM5.3"}}}
+	if _, err := c.Sync(ctx, ns, render.Objects(s), nil); err != nil {
+		t.Fatalf("budgets: the API server refused a rendered object: %v", err)
+	}
+	btp, _ := gvrFor("BackendTrafficPolicy")
+	bp, err := c.dyn.Resource(btp).Namespace(ns).Get(ctx, render.BudgetPolicyName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rl, _, _ := unstructured.NestedSlice(bp.Object, "spec", "rateLimit", "global", "rules"); len(rl) != 2 || fmt.Sprint(rl[0].(map[string]any)["limit"]) != "map[requests:100000 unit:Hour]" {
+		t.Fatalf("budget rules: %v", rl)
+	}
+	route, _ := gvrFor("AIGatewayRoute")
+	r, err := c.dyn.Resource(route).Namespace(ns).Get(ctx, render.FleetName("glm-5-3"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if costs, _, _ := unstructured.NestedSlice(r.Object, "spec", "llmRequestCosts"); len(costs) != 1 || costs[0].(map[string]any)["metadataKey"] != render.CreditsKey {
+		t.Fatalf("route costs: %v", costs)
+	}
+	if live, err = c.dyn.Resource(pol).Namespace(ns).Get(ctx, render.AuthPolicyName, metav1.GetOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if rules, _, _ := unstructured.NestedSlice(live.Object, "spec", "authorization", "rules"); len(rules) != 4 || rules[3].(map[string]any)["name"] != "models-team-a" {
+		t.Fatalf("tokens: %d rules, want 2 revoked, 1 disabled, 1 models: %v", len(rules), rules)
+	}
+	// Without budgets the policy goes.
+	s.Budgets = nil
+	if _, err := c.Sync(ctx, ns, render.Objects(s), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.dyn.Resource(btp).Namespace(ns).Get(ctx, render.BudgetPolicyName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("no budgets, yet the policy is there: %v", err)
+	}
 }

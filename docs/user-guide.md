@@ -77,7 +77,7 @@ about a minute. Every request has the same prompt of about 300 tokens.
 | A long prompt is accepted | A request of 64 KB is not refused for its size. It names a model that does not exist, so no model is asked. A failure means the gateway has Envoy Gateway's default limit of 32 KiB, and every longer prompt gets 413: set `connection.bufferLimit` in a `ClientTrafficPolicy` on the Gateway |
 | A conversation stays on one site | Three requests with one session ID are served by the same site, as named in the `x-llm-served-by` response header. It also lists where ten other session IDs landed. Skipped unless the model has an entry route on this cluster. It raises the temporary quota and sends 13 small requests |
 | The cluster has the fleet's current entry routes | The cluster's fleet revision is the fleet's. Skipped outside the fleet |
-| A budget across models is counted and refuses | The tenant gets a budget of 1 credit across models and a quota on the model that cannot run out; a long request is answered and its cost in credits counted where the Usage page reads it, and the next request is refused with 429. A failure names what is missing: global rate limiting in Envoy Gateway, the cost on the route, or the way to the hub's Redis. Skipped on a model without prices, or when the gateways still take API keys |
+| A budget across models is counted and refuses | The tenant gets a budget of 1 credit across models and a quota on the model that cannot run out; a long request is answered and its cost in credits counted where the Usage page reads it, and the next request is refused with 429. A failure names what is missing: global rate limiting in Envoy Gateway, the cost on the route, or the way to the shared Redis. Skipped on a model without prices, or when the gateways still take API keys |
 | A tenant held to its models is refused for any other | The tenant is held to no model at all, and its next request is refused with 403. Skipped when the gateways still take API keys |
 
 | The temporary tenant is removed | Nothing is left behind |
@@ -272,11 +272,11 @@ prices, counted together: a cheaper model spends it more slowly. Its quotas
 per model hold alongside it. The gateway refuses the tenant (HTTP 429) once
 it is spent, on every priced model, until the next period. It is enforced by
 the gateways themselves, through one rule per tenant in one policy that
-every cluster gets, and counted in the hub's Redis, so a tenant has one
+every cluster gets, and counted in the one Redis the gateways share, so a tenant has one
 budget wherever its requests land. Models without prices are not in it.
 
 - It needs every tenant on tokens, like a standard budget, and global rate
-  limiting enabled in each cluster's Envoy Gateway with the hub's Redis
+  limiting enabled in each cluster's Envoy Gateway with the Redis the gateways share
   (see [deployment](deployment.md#before-the-first-budget-across-models)).
   Until then the tenant's page says it is not enforced.
 - Changing a tenant's budget starts its count over for the running
@@ -287,7 +287,9 @@ budget wherever its requests land. Models without prices are not in it.
   past its budget by the requests in flight when it is reached, and an
   answer that has started is never cut off.
 - A request passes while the budget's counter cannot be read: if a cluster
-  cannot reach the hub's Redis, the budget does not hold there.
+  cannot reach the shared Redis, the budget does not hold there. The hub is
+  not in the path: it only renders the policy, and while it is down every
+  budget holds as it is.
 
 **Which models.** **Models** on a tenant's page limits it to some of the
 models. Any other is refused by the gateway (HTTP 403) before a model or a

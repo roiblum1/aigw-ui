@@ -49,7 +49,7 @@ func (t *test) budget() (string, string) {
 	}
 	for _, r := range res.Rejected {
 		if r.Kind == "BackendTrafficPolicy" {
-			return Failed, "The gateway's controller does not accept the budget policy: " + describe(res.Rejected) + ". Global rate limiting must be enabled in the Envoy Gateway configuration of this cluster (rateLimit.backend), with the hub's Redis."
+			return Failed, "The gateway's controller does not accept the budget policy: " + describe(res.Rejected) + ". Global rate limiting must be enabled in the Envoy Gateway configuration of this cluster (rateLimit.backend), with the Redis the gateways share."
 		}
 	}
 
@@ -105,7 +105,7 @@ func (t *test) budget() (string, string) {
 		}
 	}
 	if used == 0 {
-		return Failed, "The request was answered but nothing was counted under the tenant's budget where the Usage page reads it: the route does not write the cost in credits, or the rate limit service does not reach the hub's Redis."
+		return Failed, "The request was answered but nothing was counted under the tenant's budget where the Usage page reads it: the route does not write the cost in credits, or the rate limit service does not reach the shared Redis."
 	}
 	counted := fmt.Sprintf("%d credits counted for one request", used)
 	if known {

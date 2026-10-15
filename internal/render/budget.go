@@ -14,7 +14,7 @@ import (
 // global rate limit rule per tenant, charged after each response with the
 // credits the model's prices make of it, which the routes write into the
 // request's metadata. Every cluster renders the same policy, and the rate
-// limit services count in the hub's Redis, so a tenant has one counter
+// limit services count in one shared Redis, so a tenant has one counter
 // wherever its requests land (lab budget check, 2026-10-16).
 const (
 	// BudgetPolicyName is the one policy that holds every tenant's budget.
@@ -115,7 +115,7 @@ func creditsCost(m Model) []any {
 // tenant used of its budget. The name follows what Envoy Gateway makes of a
 // shared rule with an Exact header match: the policy's domain, its generic
 // key (the policy and the rule's position) twice, the rule's descriptor
-// twice, and the window start (seen in the hub's Redis, 2026-10-16).
+// twice, and the window start (seen in the lab's shared Redis, 2026-10-16).
 type BudgetCounter struct {
 	TenantSlug string
 	Limit      int64
