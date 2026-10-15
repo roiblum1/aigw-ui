@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.20.2](v0.20.2.md) | not released yet | Fixed: a revoked token could work again for up to a minute after it expired; the self-test's expired token was inside the gateway's 60-second allowance |
 | [0.20.1](v0.20.1.md) | not released yet | Fixed: a hub not allowed to list LLMInferenceServiceConfigs now says so; the 0.16 upgrade notes name that permission |
 | [0.20.0](v0.20.0.md) | not released yet | Wallets: one budget across every priced model, per hour or per day, enforced by the hub; a spent wallet refuses the tenant on every priced model until the window ends, or serves it as best-effort |
 | [0.19.0](v0.19.0.md) | not released yet | A model's standard budget: every tenant up to it through one rule on the tenant header, a tenant's quota an exception that adds to it; starts at 00:00 UTC; needs tokens only. Fixed: first prices turned an unset best-effort limit into 1 credit |

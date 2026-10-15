@@ -121,7 +121,8 @@ func (s *Store) CreateKey(ctx context.Context, tenantID, name string) (APIKey, s
 }
 
 // RevokeKey returns the key it revoked. A token is also denied by the
-// gateways until it expires (token_denials), whatever becomes of its tenant.
+// gateways until DenialMargin after it expires (token_denials), whatever
+// becomes of its tenant.
 func (s *Store) RevokeKey(ctx context.Context, id string) (APIKey, error) {
 	k, err := scanKey(s.db.QueryRow(ctx, `UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL RETURNING `+keyColumns, id))
 	return k, mapErr(err)

@@ -20,8 +20,15 @@ func (t *test) tokenSettings() store.TokenSettings {
 	return set
 }
 
+// expiredAgo is how long ago the self-test's expired token expired. A gateway
+// takes a token up to 60 seconds past its expiry, Envoy's allowance for the
+// clocks of the hub and the gateway to differ, which Envoy Gateway does not
+// let a policy change; a token that expired a minute ago is still taken when
+// it is checked in the second it was signed.
+const expiredAgo = 10 * time.Minute
+
 // badTokens returns a token for the temporary tenant signed by a key the hub
-// does not have, and one signed by the hub that expired a minute ago.
+// does not have, and one signed by the hub that expired expiredAgo ago.
 func (t *test) badTokens() (forged, expired string, err error) {
 	set, now := t.r.st.Tokens(), time.Now()
 	claims := token.Claims{Issuer: set.Issuer, Audience: set.Audience, Subject: t.tenant.Slug, ID: "00000000selftest",
@@ -33,7 +40,7 @@ func (t *test) badTokens() (forged, expired string, err error) {
 	if forged, err = token.Sign(other, claims); err != nil {
 		return "", "", err
 	}
-	claims.ExpiresAt = now.Add(-time.Minute).Unix()
+	claims.ExpiresAt = now.Add(-expiredAgo).Unix()
 	expired, err = t.r.st.SignUnstored(t.ctx, claims)
 	return forged, expired, err
 }

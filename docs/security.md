@@ -130,8 +130,11 @@ every token the old key signed: the old key is unpublished at the next sync
 after its last token is revoked.
 
 **Revoking a token** adds a rule to the SecurityPolicy that refuses its
-`jti` until it expires, after which the gateway refuses it anyway and the
-rule is dropped. Deleting a tenant does the same for each of its tokens, and
+`jti` until five minutes after it expires, after which the gateway refuses it
+anyway and the rule is dropped. The five minutes are there because a gateway
+takes a token up to 60 seconds past its expiry: Envoy allows that much for
+the clocks of the hub and the gateway to differ, and Envoy Gateway has no
+setting for it. Deleting a tenant does the same for each of its tokens, and
 the rules outlive the tenant. A disabled tenant's tokens are refused by its
 slug until it is enabled. Until a cluster has synced, a revoked token still
 works there, as an API key does.

@@ -120,9 +120,16 @@ func TestIdentityModes(t *testing.T) {
 	if id, _ = s.Identity(ctx); len(id.Disabled) != 1 || id.Disabled[0] != "team-a" {
 		t.Fatalf("disabled: %+v", id)
 	}
-	// A denial is dropped once its token has expired: the gateway refuses
-	// the token anyway.
+	// A denial outlives its token by DenialMargin, since a gateway takes a
+	// token for a while past its expiry; then it is dropped, since the
+	// gateway refuses the token anyway.
 	if _, err := s.db.Exec(ctx, `UPDATE token_denials SET expires_at = now() - interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	if id, _ = s.Identity(ctx); len(id.Denied) != 2 {
+		t.Fatalf("just expired denials: %+v", id)
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE token_denials SET expires_at = $1`, time.Now().Add(-DenialMargin-time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if id, _ = s.Identity(ctx); len(id.Denied) != 0 {

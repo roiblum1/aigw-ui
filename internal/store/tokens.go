@@ -193,11 +193,17 @@ func (s *Store) TenantOfToken(ctx context.Context, c token.Claims) (Tenant, erro
 	return s.GetTenant(ctx, tenantID)
 }
 
+// DenialMargin is how long a denial outlives its token. A gateway takes a
+// token up to 60 seconds past its expiry, Envoy's allowance for the clocks of
+// the hub and the gateway to differ, so a denial dropped at the expiry would
+// let a revoked token through again for that long.
+const DenialMargin = 5 * time.Minute
+
 // DeniedTokens returns the jti of every token the gateways must refuse
-// although it is signed: revoked, or of a deleted tenant, until it expires.
-// Rows of tokens that have expired are removed on the way.
+// although it is signed: revoked, or of a deleted tenant, until DenialMargin
+// after it expires. Rows past that are removed on the way.
 func (s *Store) DeniedTokens(ctx context.Context) ([]string, error) {
-	if _, err := s.db.Exec(ctx, `DELETE FROM token_denials WHERE expires_at <= now()`); err != nil {
+	if _, err := s.db.Exec(ctx, `DELETE FROM token_denials WHERE expires_at <= $1`, time.Now().Add(-DenialMargin)); err != nil {
 		return nil, err
 	}
 	return list(ctx, s, func(r scanner) (string, error) {
