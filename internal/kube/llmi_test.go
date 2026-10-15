@@ -119,6 +119,32 @@ func TestSpecHashBasesAndImages(t *testing.T) {
 	if got, ok := (baseConfigs{failed: true}).of(llmi(t)); !ok || got != nil {
 		t.Fatalf("no baseRefs: %+v %v", got, ok)
 	}
+
+	// KServe lists the configs it applied, its presets among them, with
+	// their namespaces: a scheduler upgrade made in KServe's preset changes
+	// the hash of a service that names no config at all.
+	preset := func(name, arg string) unstructured.Unstructured {
+		return unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": name, "namespace": "kserve"},
+			"spec": map[string]any{"arg": arg}}}
+	}
+	plain := llmi(t)
+	unstructured.SetNestedSlice(plain.Object, []any{
+		map[string]any{"name": "kserve-config-llm-scheduler", "namespace": "kserve", "source": "Preset"},
+		map[string]any{"name": "kserve-config-llm-template", "namespace": "kserve", "source": "Preset"}}, "status", "appliedConfigs")
+	b = baseConfigs{items: []unstructured.Unstructured{preset("kserve-config-llm-template", "vllm"), preset("kserve-config-llm-scheduler", "epp:v1"),
+		cfg(plain.GetNamespace(), "own")}}
+	got, ok := b.of(plain)
+	if !ok || len(got) != 2 || got[0].Name != "kserve/kserve-config-llm-scheduler" || got[0].Spec["arg"] != "epp:v1" || got[1].Spec["arg"] != "vllm" {
+		t.Fatalf("applied: %+v %v", got, ok)
+	}
+	before := SpecHash(plain, got, images)
+	b.items[1] = preset("kserve-config-llm-scheduler", "epp:v2")
+	if after, _ := b.of(plain); SpecHash(plain, after, images) == before {
+		t.Fatal("a preset's change kept the hash")
+	}
+	if _, ok := (baseConfigs{failed: true}).of(plain); ok {
+		t.Fatal("a failed listing gave a hash with applied configs")
+	}
 }
 
 // The images of a service's ready model servers, by role. During a rollout

@@ -94,7 +94,8 @@ func (s *Server) capacityPlans(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"image": s.bench.Image(), "gpus": gpus, "models": models, "profile": profile, "campaign": campaign})
+	writeJSON(w, http.StatusOK, map[string]any{"image": s.bench.Image(), "peer_measurements": s.bench.PeerMeasurements(),
+		"gpus": gpus, "models": models, "profile": profile, "campaign": campaign})
 }
 
 func (s *Server) campaign(ctx context.Context, active int) (capacityCampaign, error) {
@@ -532,6 +533,10 @@ func (s *Server) startCapacityRun(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, benchmark.ErrNoOtherSite):
 		writeError(w, http.StatusConflict, "No other site serves "+model.Name+", so its site cannot be drained. Measure it live.")
+		return
+	case errors.Is(err, benchmark.ErrPeerOff):
+		writeError(w, http.StatusConflict, "Measuring a prefill/decode LLMInferenceService is off on this hub. Its Job would run in the gateway's namespace with the site's peer client certificate, "+
+			"which reaches every model on the peer listener with no key and no quota. See capacity.peerMeasurements in the security guide.")
 		return
 	case errors.Is(err, benchmark.ErrUnknownSpec):
 		writeError(w, http.StatusConflict, "What "+b.Namespace+"/"+b.Deployment+" runs is not known yet: none of its pods is ready, or they run different images, as during a rollout. Measure it once its pods agree.")

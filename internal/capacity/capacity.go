@@ -204,28 +204,45 @@ func (s Step) CachedShare() *float64 {
 
 // ForeignShare is the part of the prompt tokens the instance counted in a
 // step that something other than the measurement sent, or nil when the
-// instance does not publish its counter. It is the larger of two estimates:
+// instance does not publish its counter. A drained step is judged by it.
 //
-//   - During the step, what the instance counted beyond what the measurement
-//     sent. The prompts of the measurement's own failed requests are counted
-//     there too, and AIPerf does not report them, so the longest prompt is
-//     taken off for each failed request: a step near its limit, where
-//     requests start to fail, is not taken for one that other traffic
-//     reached.
-//   - Before a drained step, what the instance counted in the quiet spell
-//     while the measurement sent nothing, at the same rate over the step.
-//     This sees steady traffic however many requests failed.
+// It is the quiet spell's figure when there is one (QuietShare): the quiet
+// spell sees nothing but other traffic, however many of the measurement's
+// own requests failed or were cut off at the end of the step. Otherwise,
+// live, it is what the instance counted beyond what was sent
+// (CountedBeyondSent).
 func (s Step) ForeignShare(set Settings) *float64 {
+	if q := s.QuietShare(); q != nil {
+		return q
+	}
+	return s.CountedBeyondSent(set)
+}
+
+// QuietShare is, for a drained step, what the instance counted in the quiet
+// spell before it, while the measurement sent nothing, at the same rate over
+// the step, as a part of what it counted in the step. Nil without a quiet
+// spell.
+func (s Step) QuietShare() *float64 {
+	if s.ServerPromptTokens == nil || *s.ServerPromptTokens <= 0 || s.QuietPromptTokens == nil || s.QuietSeconds <= 0 || s.ServerSeconds <= 0 {
+		return nil
+	}
+	share := math.Min(math.Max(*s.QuietPromptTokens/s.QuietSeconds*s.ServerSeconds / *s.ServerPromptTokens, 0), 1)
+	return &share
+}
+
+// CountedBeyondSent is the part of the prompt tokens the instance counted in
+// the step beyond what the measurement sent. The prompts of the
+// measurement's own failed requests are counted there too, and AIPerf does
+// not report them, so the longest prompt is taken off for each failed
+// request. A request cut off at the end of the step is not taken off: a
+// drained step shows this figure and is not judged by it.
+func (s Step) CountedBeyondSent(set Settings) *float64 {
 	if s.ServerPromptTokens == nil || *s.ServerPromptTokens <= 0 {
 		return nil
 	}
 	counted := *s.ServerPromptTokens
 	own := float64(s.InputTokens) + float64(s.Errors)*float64(set.MaxPromptTokens)
-	share := (counted - own) / counted
-	if s.QuietPromptTokens != nil && s.QuietSeconds > 0 && s.ServerSeconds > 0 {
-		share = math.Max(share, *s.QuietPromptTokens/s.QuietSeconds*s.ServerSeconds/counted)
-	}
-	share = math.Min(math.Max(share, 0), 1)
+	share := math.Min(math.Max((counted-own)/counted, 0), 1)
 	return &share
 }
 
@@ -283,8 +300,10 @@ type StepView struct {
 	OutputPerSecond float64  `json:"output_per_s"`
 	CachedShare     *float64 `json:"cached_share"`
 	// ForeignShare is the part of the instance's prompt tokens that other
-	// traffic sent: a failure when drained, shown when live.
+	// traffic sent: a failure when drained, shown when live. BeyondSent is
+	// what the instance counted beyond what was sent, shown only.
 	ForeignShare *float64 `json:"foreign_share"`
+	BeyondSent   *float64 `json:"beyond_sent"`
 }
 
 // Analyze finds the highest load the instance serves at the promised
@@ -303,7 +322,7 @@ func Analyze(set Settings, steps []Step) Result {
 		r.Steps = append(r.Steps, StepView{Concurrency: s.Concurrency, Met: ok, Reason: reason,
 			FewSamples:     s.Error == "" && s.Requests < set.MinRequests,
 			InputPerSecond: s.InputPerSecond(), OutputPerSecond: s.OutputPerSecond(), CachedShare: s.CachedShare(),
-			ForeignShare: s.ForeignShare(set)})
+			ForeignShare: s.ForeignShare(set), BeyondSent: s.CountedBeyondSent(set)})
 		if !ok && (lowestMiss == 0 || s.Concurrency < lowestMiss) {
 			lowestMiss, why = s.Concurrency, reason
 		}

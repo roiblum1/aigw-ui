@@ -123,6 +123,7 @@ export default function Capacity() {
           key={m.model_id}
           m={m}
           canMeasure={!!data.image && !action.busy}
+          peerMeasurements={data.peer_measurements}
           onMeasure={(llmi) => setMeasuring({ m, llmi })}
           onHistory={() => setHistory(m)}
           onStop={stop}
@@ -171,6 +172,7 @@ export default function Capacity() {
 function ModelCard(props: {
   m: CapacityModel;
   canMeasure: boolean;
+  peerMeasurements: boolean;
   onMeasure: (llmi: CapacityLLMI) => void;
   onHistory: () => void;
   onStop: (run: CapacityRun) => void;
@@ -272,6 +274,7 @@ function ModelCard(props: {
                         unit={m.unit}
                         version={m.profile_version}
                         canMeasure={props.canMeasure && !m.running}
+                        peerMeasurements={props.peerMeasurements}
                         open={open === key}
                         onToggle={() => setOpen(open === key ? "" : key)}
                         onMeasure={() => props.onMeasure(l)}
@@ -304,6 +307,7 @@ function ModelCard(props: {
 
 /** Why a result should be measured again. */
 const staleText: Record<string, string> = {
+  spec: "its spec, a config it is built on or its image changed since",
   profile: "measured with an earlier version of the profile",
   age: "older than 30 days",
 };
@@ -314,6 +318,7 @@ function LLMIRow(props: {
   unit: Unit;
   version: number;
   canMeasure: boolean;
+  peerMeasurements: boolean;
   open: boolean;
   onToggle: () => void;
   onMeasure: () => void;
@@ -356,14 +361,23 @@ function LLMIRow(props: {
       <td className="text-right tabular-nums">{s.cost_per_million == null ? "–" : formatPrice(s.cost_per_million)}</td>
       <td className="row-actions">
         {run && <button onClick={props.onToggle}>{props.open ? "Hide steps" : "Steps"}</button>}
-        <button
-          className={s.measured && !l.stale ? undefined : "primary"}
-          disabled={!props.canMeasure}
-          title="Measure it with the benchmark profile: AIPerf in a Job on its cluster."
-          onClick={props.onMeasure}
-        >
-          Measure
-        </button>
+        {l.topology === "prefill-decode" && !props.peerMeasurements ? (
+          <span
+            className="detail"
+            title="Its Job would run in the gateway's namespace with the site's peer client certificate, which reaches every model on the peer listener with no key and no quota. Turn on capacity.peerMeasurements to measure it; see the security guide."
+          >
+            Measuring prefill/decode is off
+          </span>
+        ) : (
+          <button
+            className={s.measured && !l.stale ? undefined : "primary"}
+            disabled={!props.canMeasure}
+            title="Measure it with the benchmark profile: AIPerf in a Job on its cluster."
+            onClick={props.onMeasure}
+          >
+            Measure
+          </button>
+        )}
       </td>
     </tr>
   );
@@ -588,7 +602,10 @@ function Steps({ run }: { run: CapacityRun }) {
                   {v.foreign_share != null && v.foreign_share > 0.01 && (
                     <span
                       className={v.met ? "tag" : "tag warn"}
-                      title="The part of the prompt tokens the instance counted that the measurement did not send"
+                      title={
+                        "The part of the prompt tokens the instance counted that the measurement did not send" +
+                        (v.beyond_sent != null ? `; counted beyond what was sent: ${percent(v.beyond_sent)}` : "")
+                      }
                     >
                       {percent(v.foreign_share)} other traffic
                     </span>

@@ -24,9 +24,11 @@ import (
 //
 // What it runs is also set outside its spec, so the hash adds:
 //
-//   - the specs of the LLMInferenceServiceConfigs its baseRefs name, in
-//     their order: a shared config can change vLLM's arguments or image
-//     for every service built on it;
+//   - the specs of the LLMInferenceServiceConfigs it is built on, in the
+//     order KServe applied them: KServe's own presets (the template, the
+//     scheduler) and those its baseRefs name. A shared config can change
+//     vLLM's arguments or image, or the scheduler, for every service built
+//     on it;
 //   - the image digests its ready model servers run, by role: a vLLM
 //     upgrade in KServe's own config, or an image pushed again under the
 //     same tag, changes only these.
@@ -63,8 +65,8 @@ func SpecHash(svc *unstructured.Unstructured, bases []Base, images []string) str
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Base is an LLMInferenceServiceConfig a service names in spec.baseRefs, with
-// its spec; nil when the hub may not read it or it is not there.
+// Base is an LLMInferenceServiceConfig a service is built on, with its spec;
+// nil when the hub may not read it or it is not there.
 type Base struct {
 	Name string
 	Spec map[string]any
@@ -101,18 +103,42 @@ func (c *Client) baseConfigs(ctx context.Context) baseConfigs {
 	return baseConfigs{}
 }
 
-// of returns the configs a service is built on, in the order it names them.
-// KServe looks for each in the service's namespace, then in its own; the
-// hub does not know KServe's namespace, so it takes the first other
-// namespace that has one by that name. ok is false when they could not be
-// listed this time: the hash is then not worked out.
+// of returns the configs a service is built on. KServe lists those it
+// applied in status.appliedConfigs, its presets among them, with their
+// namespaces; they are taken in that order. A service without that list, from
+// an older KServe, has the configs its spec.baseRefs name: KServe looks for
+// each in the service's namespace, then in its own, which the hub does not
+// know, so the first other namespace that has one by that name is taken. ok
+// is false when the configs could not be listed this time: the hash is then
+// not worked out.
 func (b baseConfigs) of(svc *unstructured.Unstructured) ([]Base, bool) {
+	applied, _, _ := unstructured.NestedSlice(svc.Object, "status", "appliedConfigs")
 	refs, _, _ := unstructured.NestedSlice(svc.Object, "spec", "baseRefs")
-	if len(refs) == 0 {
+	if len(applied) == 0 && len(refs) == 0 {
 		return nil, true
 	}
 	if b.failed {
 		return nil, false
+	}
+	if len(applied) > 0 {
+		out := make([]Base, 0, len(applied))
+		for _, a := range applied {
+			m, _ := a.(map[string]any)
+			name, _ := m["name"].(string)
+			ns, _ := m["namespace"].(string)
+			if ns == "" {
+				ns = svc.GetNamespace()
+			}
+			base := Base{Name: ns + "/" + name}
+			for i := range b.items {
+				if c := &b.items[i]; c.GetName() == name && c.GetNamespace() == ns {
+					base.Spec, _, _ = unstructured.NestedMap(c.Object, "spec")
+					break
+				}
+			}
+			out = append(out, base)
+		}
+		return out, true
 	}
 	out := make([]Base, 0, len(refs))
 	for _, r := range refs {

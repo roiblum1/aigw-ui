@@ -58,6 +58,9 @@ type Config struct {
 	// CapacityWindow is when the hub measures what is not measured or
 	// stale by itself; nil never.
 	CapacityWindow *capacity.Window
+	// CapacityPeer turns on measuring prefill/decode LLMIs: their Jobs run
+	// in the gateway's namespace with the peer client certificate.
+	CapacityPeer bool
 
 	// Fleet is what every site's entry route has in common. PeerSNI is
 	// empty when neither FLEET_PEER_SNI nor FLEET_DOMAIN is set, and no
@@ -131,6 +134,7 @@ func Load() (*Config, error) {
 	if err != nil || c.CapacityEvery < 5*time.Second {
 		return nil, errors.New("CAPACITY_INTERVAL must be a duration of at least 5s such as 20s")
 	}
+	c.CapacityPeer = os.Getenv("CAPACITY_PEER_MEASUREMENTS") == "true"
 	if c.CapacityWindow, err = capacity.ParseWindow(os.Getenv("CAPACITY_WINDOW")); err != nil {
 		return nil, fmt.Errorf("CAPACITY_WINDOW: %w", err)
 	}

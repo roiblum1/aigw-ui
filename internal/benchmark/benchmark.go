@@ -41,6 +41,10 @@ var (
 	// ErrUnknownSpec is returned for an LLMI whose spec hash is not known
 	// yet: a result would count for nothing.
 	ErrUnknownSpec = errors.New("what the LLMInferenceService runs is not known yet: none of its pods is ready, or they run different images, as during a rollout")
+	// ErrPeerOff is returned for a prefill/decode LLMI when the hub does
+	// not measure them.
+	ErrPeerOff = errors.New("measuring a prefill/decode LLMInferenceService is off on this hub: its Job would run in the gateway's namespace with the site's peer client certificate, " +
+		"which reaches every model on the peer listener with no key and no quota; see capacity.peerMeasurements in the security guide")
 )
 
 // Store is what the service reads and writes in Postgres.
@@ -90,6 +94,9 @@ type Options struct {
 	// Every is how often a running measurement is read.
 	Every time.Duration
 	Peer  Peer
+	// PeerMeasurements turns on measuring prefill/decode LLMIs, whose Jobs
+	// mount the peer client certificate in the gateway's namespace.
+	PeerMeasurements bool
 	// Window is when the service measures by itself; nil never.
 	Window *capacity.Window
 }
@@ -108,6 +115,9 @@ func New(st Store, client func(ctx context.Context, clusterID string) (Cluster, 
 
 // Image is the AIPerf image the Jobs run, or "" when there is none.
 func (s *Service) Image() string { return s.opt.Image }
+
+// PeerMeasurements is true when prefill/decode LLMIs are measured.
+func (s *Service) PeerMeasurements() bool { return s.opt.PeerMeasurements }
 
 // Window is when the service measures by itself, nil when never.
 func (s *Service) Window() *capacity.Window { return s.opt.Window }
@@ -145,6 +155,9 @@ func (s *Service) Start(ctx context.Context, req Request) (store.CapacityRun, er
 	}
 	if d.SpecHash == "" {
 		return store.CapacityRun{}, ErrUnknownSpec
+	}
+	if d.Topology == kube.TopologyPrefillDecode && !s.opt.PeerMeasurements {
+		return store.CapacityRun{}, ErrPeerOff
 	}
 	cl, err := s.client(ctx, req.ClusterID)
 	if err != nil {
@@ -473,7 +486,7 @@ func (s *Service) Queue(ctx context.Context, now time.Time) ([]llmi.QueueItem, e
 	if err != nil {
 		return nil, err
 	}
-	return llmi.Queue(deployments, latest, running, profile.Version, now, load), nil
+	return llmi.Queue(deployments, latest, running, profile.Version, now, load, s.opt.PeerMeasurements), nil
 }
 
 // load is each model's busiest hour in the window over the last loadDays,
@@ -498,10 +511,13 @@ func (s *Service) load(ctx context.Context, now time.Time) (map[string]llmi.Load
 	}
 	for _, h := range hours {
 		l, ok := out[h.ModelID]
-		if !ok || h.Unit != unitOf(l) || (s.opt.Window != nil && !s.opt.Window.Overlaps(h.Hour, h.Hour.Add(time.Hour))) {
+		if !ok || h.Unit != unitOf(l) {
 			continue
 		}
-		l.BusiestHour = max(l.BusiestHour, float64(h.Used))
+		l.History = true
+		if s.opt.Window == nil || s.opt.Window.Overlaps(h.Hour, h.Hour.Add(time.Hour)) {
+			l.BusiestHour = max(l.BusiestHour, float64(h.Used))
+		}
 		out[h.ModelID] = l
 	}
 	return out, nil

@@ -89,7 +89,7 @@ func run() error {
 			return nil, err
 		}
 		return kube.New(kubeconfig)
-	}, benchmark.Options{Image: cfg.CapacityImage, Every: cfg.CapacityEvery, Window: cfg.CapacityWindow,
+	}, benchmark.Options{Image: cfg.CapacityImage, Every: cfg.CapacityEvery, Window: cfg.CapacityWindow, PeerMeasurements: cfg.CapacityPeer,
 		Peer: benchmark.Peer{SNI: cfg.Fleet.PeerSNI, ClientSecret: cfg.Fleet.ClientSecret, CAConfigMap: cfg.Fleet.CAConfigMap}})
 	go bench.Run(ctx)
 

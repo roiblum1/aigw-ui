@@ -64,10 +64,17 @@ func measureCapacity(clusterID string, reported []store.Capacity, models []store
 			continue
 		}
 		// This cluster's deployments as just read, every other site's as
-		// last read.
+		// last read. One whose hash cannot be told now, as during a
+		// rollout, keeps the hash stored, as the store does: its weight
+		// does not switch for the length of the rollout.
 		var all []store.Deployment
 		for _, d := range c.Deployments {
 			d.ClusterID, d.ModelID = clusterID, m.ID
+			for _, old := range deployments {
+				if d.SpecHash == "" && old.ClusterID == clusterID && old.Namespace == d.Namespace && old.Name == d.Name {
+					d.SpecHash = old.SpecHash
+				}
+			}
 			all = append(all, d)
 		}
 		for _, d := range deployments {

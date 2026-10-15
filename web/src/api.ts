@@ -458,6 +458,7 @@ export interface CapacityStepView {
   cached_share: number | null;
   /** The part of the instance's prompt tokens other traffic sent: a failure when drained. */
   foreign_share: number | null;
+  beyond_sent: number | null;
 }
 
 export interface CapacityRun {
@@ -515,7 +516,7 @@ export interface CampaignItem {
   namespace: string;
   name: string;
   topology: string;
-  /** Why it is in the queue: not measured, its spec changed, "profile" or "age". */
+  /** Why it is in the queue: not measured, "spec", "profile" or "age". */
   reason: string;
   /** "next", "running", or what it waits for. */
   state: string;
@@ -631,8 +632,8 @@ export interface CapacityLLMI {
   max_model_len: number;
   /** The measurement that counts, null when none does; why then says why. */
   run: CapacityRun | null;
-  /** Why the result should be measured again: "profile" or "age". */
-  stale: "" | "profile" | "age";
+  /** Why the result should be measured again: "spec", "profile" or "age". */
+  stale: "" | "spec" | "profile" | "age";
   why: string;
 }
 
@@ -662,6 +663,8 @@ export interface CapacityGPU {
 export interface CapacityOverview {
   /** The AIPerf image the server runs, or "" when none is set. */
   image: string;
+  /** Whether prefill/decode LLMIs are measured (capacity.peerMeasurements). */
+  peer_measurements: boolean;
   gpus: CapacityGPU[];
   models: CapacityModel[];
   profile: BenchmarkProfile;

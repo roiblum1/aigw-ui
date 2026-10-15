@@ -21,7 +21,8 @@ type Result struct {
 	Run         *store.CapacityRun
 	PerInstance *capacity.Throughput
 	// Stale says why the counted result should be measured again:
-	// capacity.StaleProfile or capacity.StaleAge, "" when it is fresh.
+	// capacity.StaleSpec, capacity.StaleProfile or capacity.StaleAge, ""
+	// when it is fresh.
 	Stale string
 	// Why says why no result counts.
 	Why string
@@ -41,12 +42,18 @@ func (r Result) Ready() float64 {
 // Model works out, for the deployments of one model, which measurement counts
 // for each, and the version of the profile the model is counted with.
 //
-// A result counts only for the spec it was measured on. Figures of different
-// profile versions are never added: the model counts the version whose
-// results cover the most of its ready instances, the active one on a tie.
-// After the profile changes, the old results therefore keep counting, marked
-// stale, until the new version covers more, and capacity does not fall to
-// zero at once.
+// A result on the deployment's current spec comes first. When its spec hash
+// changed since (an argument, a config it is built on, its image), the newest
+// result on an earlier spec keeps counting, marked stale
+// (capacity.StaleSpec), until it is measured again: a model tuned often
+// would otherwise switch between measured and declared site weights with
+// each change, and each switch moves sessions between sites.
+//
+// Figures of different profile versions are never added: the model counts
+// the version whose results cover the most of its ready instances, the
+// active one on a tie. After the profile changes, the old results therefore
+// keep counting, marked stale, until the new version covers more, and
+// capacity does not fall to zero at once.
 func Model(deployments []store.Deployment, runs []store.CapacityRun, active int, now time.Time) (int, []Result) {
 	type key struct{ cluster, namespace, name string }
 	byLLMI := map[key][]store.CapacityRun{}
@@ -55,17 +62,20 @@ func Model(deployments []store.Deployment, runs []store.CapacityRun, active int,
 		byLLMI[k] = append(byLLMI[k], r)
 	}
 
-	// The newest result of each version on each deployment's current spec.
+	// The newest result of each version on each deployment, one on its
+	// current spec before one on an earlier spec.
 	current := make([]map[int]store.CapacityRun, len(deployments))
 	coverage := map[int]float64{}
 	for i, d := range deployments {
 		current[i] = map[int]store.CapacityRun{}
 		for _, r := range byLLMI[key{d.ClusterID, d.Namespace, d.Name}] {
-			if d.SpecHash == "" || r.SpecHash != d.SpecHash || r.ProfileVersion == nil || r.PerInstance() == nil {
+			if d.SpecHash == "" || r.SpecHash == "" || r.ProfileVersion == nil || r.PerInstance() == nil {
 				continue
 			}
 			v := *r.ProfileVersion
-			if old, ok := current[i][v]; !ok || r.CreatedAt.After(old.CreatedAt) {
+			old, ok := current[i][v]
+			onSpec, oldOnSpec := r.SpecHash == d.SpecHash, ok && old.SpecHash == d.SpecHash
+			if !ok || (onSpec && !oldOnSpec) || (onSpec == oldOnSpec && r.CreatedAt.After(old.CreatedAt)) {
 				current[i][v] = r
 			}
 		}
@@ -97,6 +107,9 @@ func Model(deployments []store.Deployment, runs []store.CapacityRun, active int,
 				at = *r.FinishedAt
 			}
 			res.Stale = capacity.Staleness(version, active, at, now)
+			if r.SpecHash != d.SpecHash {
+				res.Stale = capacity.StaleSpec
+			}
 		} else {
 			res.Why = why(d, byLLMI[key{d.ClusterID, d.Namespace, d.Name}], current[i], version)
 		}
@@ -105,14 +118,12 @@ func Model(deployments []store.Deployment, runs []store.CapacityRun, active int,
 	return version, out
 }
 
-func why(d store.Deployment, runs []store.CapacityRun, onSpec map[int]store.CapacityRun, version int) string {
-	for v := range onSpec {
+func why(d store.Deployment, runs []store.CapacityRun, others map[int]store.CapacityRun, version int) string {
+	for v := range others {
 		return fmt.Sprintf("measured with version %d of the profile; the model is counted with version %d", v, version)
 	}
-	for _, r := range runs {
-		if r.SpecHash != "" && r.SpecHash != d.SpecHash {
-			return "its spec changed since it was measured"
-		}
+	if d.SpecHash == "" && len(runs) > 0 {
+		return "what it runs cannot be told now (a rollout, or its pods or configs could not be read)"
 	}
 	return "not measured"
 }
@@ -136,14 +147,27 @@ const (
 	// by their measurements, cannot take its busiest hour in the window.
 	// An operator measures it live, or drained at a quieter time.
 	WaitsCover = "waits for an operator: the other sites cannot take the model's busiest hour"
+	// WaitsHistory is not drained by the campaign: the model has no
+	// recorded use in the last days, so whether the other sites can take
+	// its load cannot be told. A model without quotas records none.
+	WaitsHistory = "waits for an operator: the model has no recorded use yet, so the hub cannot tell whether the other sites can take its load"
+	// PeerOff is a prefill/decode LLMI on a hub where measuring one is off
+	// (capacity.peerMeasurements): its Job would hold the site's peer
+	// client certificate.
+	PeerOff = "not measured: measuring prefill/decode is off on this hub (capacity.peerMeasurements)"
 )
+
+// TopologyPrefillDecode is kube.TopologyPrefillDecode.
+const TopologyPrefillDecode = "prefill-decode"
 
 // Load is what the campaign knows of a model's traffic: its busiest hour
 // in the campaign window over the last days, in its unit, and its prices
-// (nil for a model in tokens).
+// (nil for a model in tokens). History is set when any use of it was
+// recorded over those days, in or out of the window.
 type Load struct {
 	BusiestHour float64
 	Prices      *capacity.Prices
+	History     bool
 }
 
 // QueueItem is one deployment the campaign has to measure.
@@ -169,8 +193,9 @@ type QueueItem struct {
 // or stale, those without a result first, and says what each waits for. A
 // model served on one site only can be measured live only, so it waits for
 // an operator; so does one whose other sites cannot take its busiest hour in
-// the window, by load (by model ID).
-func Queue(deployments []store.Deployment, latest, running []store.CapacityRun, active int, now time.Time, load map[string]Load) []QueueItem {
+// the window, by load (by model ID). Without peer, a prefill/decode LLMI is
+// not measured.
+func Queue(deployments []store.Deployment, latest, running []store.CapacityRun, active int, now time.Time, load map[string]Load, peer bool) []QueueItem {
 	busyModel, busySite := map[string]bool{}, map[string]bool{}
 	runningLLMI := map[string]bool{}
 	for _, r := range running {
@@ -219,8 +244,12 @@ func Queue(deployments []store.Deployment, latest, running []store.CapacityRun, 
 		switch {
 		case runningLLMI[item.ClusterID+"/"+item.Namespace+"/"+item.Name]:
 			item.State = Running
+		case !peer && item.Topology == TopologyPrefillDecode:
+			item.State = PeerOff
 		case !servedElsewhere(c.model, item.ClusterID):
 			item.State = WaitsOperator
+		case !load[item.ModelID].History:
+			item.State = WaitsHistory
 		case !covered(&item, c.results, load[item.ModelID]):
 			item.State = WaitsCover
 		case busyModel[item.ModelID]:
@@ -240,7 +269,8 @@ func Queue(deployments []store.Deployment, latest, running []store.CapacityRun, 
 // covered says whether the model's other sites can take its busiest hour in
 // the window while item's site is drained: what their ready, undrained,
 // measured instances serve in an hour, up to capacity.Saturated of it. It
-// sets item.Cover. A model with no traffic in the window is covered.
+// sets item.Cover. A model with use recorded, none of it in the window, is
+// covered.
 func covered(item *QueueItem, results []Result, l Load) bool {
 	if l.BusiestHour <= 0 {
 		return true

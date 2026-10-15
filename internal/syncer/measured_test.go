@@ -47,11 +47,25 @@ func TestMeasureCapacity(t *testing.T) {
 		t.Fatalf("one not measured: %+v", got[0])
 	}
 
-	// This LLMI's spec changed since it was measured: the annotation too.
+	// This LLMI's spec changed since it was measured: its result keeps
+	// counting, stale, so tuning a model does not switch its weights back
+	// to the annotation and move sessions between sites.
 	got = report("b2")
 	measureCapacity("a", got, models, other, both, 1, now)
-	if got[0].Basis != store.BasisDeclared {
+	if got[0].Basis != store.BasisMeasured || got[0].Capacity != 24 {
 		t.Fatalf("spec changed: %+v", got[0])
+	}
+	// What it runs cannot be told now, as during a rollout: the hash
+	// stored counts, and without one, the annotation.
+	got = report("")
+	measureCapacity("a", got, models, append(other, deployment("a", "glm-b300", "b1", 2)), both, 1, now)
+	if got[0].Basis != store.BasisMeasured || got[0].Capacity != 24 {
+		t.Fatalf("rollout: %+v", got[0])
+	}
+	got = report("")
+	measureCapacity("a", got, models, other, both, 1, now)
+	if got[0].Basis != store.BasisDeclared {
+		t.Fatalf("no hash: %+v", got[0])
 	}
 
 	// A deployment with nothing ready does not hold the model back.

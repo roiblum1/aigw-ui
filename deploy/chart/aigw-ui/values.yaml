@@ -49,6 +49,12 @@ capacity:
   # a time: once a week, such as "Fri 22:00 - Sat 06:00 Asia/Jerusalem", or
   # every day, such as "01:00 - 05:00 UTC". Empty never.
   window: ""
+  # Measure prefill/decode LLMInferenceServices. Their Jobs run in the
+  # gateway's namespace with the site's peer client certificate mounted,
+  # which reaches every model on the peer listener with no key and no quota,
+  # and the hub then needs to create Jobs there, which lets it mount any
+  # Secret of that namespace. See docs/security.md before turning it on.
+  peerMeasurements: false
 
 # What every site's entry route has in common. Leave domain and peerSNI empty
 # if the hub should not render entry routes.

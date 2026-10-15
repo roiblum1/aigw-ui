@@ -325,11 +325,16 @@ func TestDrainedGivesUp(t *testing.T) {
 
 // A prefill/decode deployment is measured whole, through the gateway's peer
 // listener, from the gateway's namespace; the result is divided by its decode
-// replicas.
+// replicas. It is off unless the hub turns it on: its Job holds the site's
+// peer client certificate.
 func TestPrefillDecode(t *testing.T) {
 	st, cl, s := setup("img")
 	st.deployments[0].Topology = kube.TopologyPrefillDecode
 	cl.pods = []string{"glm-decode-0", "glm-decode-1"}
+	if _, err := s.Start(context.Background(), live("")); !errors.Is(err, ErrPeerOff) || len(st.runs) != 0 || len(cl.jobs) != 0 {
+		t.Fatalf("peer off: %v %+v", err, st.runs)
+	}
+	s.opt.PeerMeasurements = true
 	run, err := s.Start(context.Background(), live(""))
 	if err != nil {
 		t.Fatal(err)
@@ -429,9 +434,12 @@ func TestCampaign(t *testing.T) {
 	st.deployments = append(st.deployments,
 		store.Deployment{ModelID: "m1", ClusterID: "c2", ClusterName: "site-b", Namespace: "llm", Name: "glm", Topology: "single", SpecHash: "s2", Instances: ready(1)},
 		store.Deployment{ModelID: "m2", ClusterID: "c1", ClusterName: "site-a", Namespace: "llm", Name: "qwen", Topology: "single", SpecHash: "q1", Instances: ready(2)})
-	win, _ := capacity.ParseWindow("00:00 - 23:59 UTC")
-	s.opt.Window = win
+	// Thursdays only; glm's use was all on Wednesday, so the window has none.
+	thursday, _ := capacity.ParseWindow("Thu 00:00 - Thu 23:59 UTC")
+	s.opt.Window = thursday
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	st.models = []store.Model{{ID: "m1", Name: "glm"}, {ID: "m2", Name: "qwen"}}
+	st.hours = []store.HourUse{{ModelID: "m1", Unit: store.UnitTokens, Hour: now.Add(-24 * time.Hour), Used: 1000}}
 	s.Tick(ctx, now)
 	s.Tick(ctx, now)
 	var started []string
@@ -449,6 +457,7 @@ func TestCampaign(t *testing.T) {
 		store.Deployment{ModelID: "m1", ClusterID: "c2", ClusterName: "site-b", Namespace: "llm", Name: "glm", Topology: "single", SpecHash: "s2", Instances: ready(1)})
 	st.models = []store.Model{{ID: "m1", Name: "glm"}}
 	st.hours = []store.HourUse{{ModelID: "m1", Unit: store.UnitTokens, Hour: now.Add(-24 * time.Hour), Used: 1000}}
+	win, _ := capacity.ParseWindow("00:00 - 23:59 UTC")
 	s.opt.Window = win
 	s.Tick(ctx, now)
 	if len(st.runs) != 0 {
@@ -464,13 +473,14 @@ func TestCampaign(t *testing.T) {
 	if q, _ := s.Queue(ctx, now); q[0].State != llmi.Next {
 		t.Fatalf("outside the window: %+v", q[0])
 	}
+	// Use 31 days ago is no history: whether site-b can take the load
+	// cannot be told, so an operator decides.
 	s.opt.Window = win
 	st.hours[0].Hour = now.AddDate(0, 0, -31)
-	if q, _ := s.Queue(ctx, now); q[0].State != llmi.Next {
+	if q, _ := s.Queue(ctx, now); q[0].State != llmi.WaitsHistory {
 		t.Fatalf("31 days ago: %+v", q[0])
 	}
 
-	st, _, s = setup("img")
 	st, _, s = setup("img")
 	s.opt.Window = closed
 	s.Tick(ctx, now) // a Thursday

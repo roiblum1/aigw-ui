@@ -46,8 +46,30 @@ compromised.
 **Capacity measurements** need more, in the namespace of each model that is
 measured: create, get and delete on Jobs, list on Pods and get on `pods/log`.
 That is a step up from writing gateway objects: the hub then runs a workload
-next to the model. The Job is described [below](#what-the-tool-can-change-on-an-llm-cluster).
+next to the model, and whoever may create Jobs in a namespace can mount any
+Secret of that namespace in one. The Job is described [below](#what-the-tool-can-change-on-an-llm-cluster).
 Leave `capacity.image` empty to turn measurements off.
+
+**Prefill/decode measurements are off by default**
+(`capacity.peerMeasurements: false`). Such an LLMI is measured through the
+gateway's peer listener, so its Job runs in the **gateway's namespace** with
+the site's peer client certificate (`fleet.peerClientSecret`) mounted.
+Turning them on grants two things you should weigh first:
+
+- **The certificate is unmetered access.** The peer listener asks for no API
+  key and counts nothing against a quota, so whoever holds the certificate
+  can call every model on that listener for free. The Job's pod holds it
+  for the length of the measurement, and anyone who can exec into pods or
+  read Secrets in the gateway namespace can take it.
+- **Jobs in the gateway namespace.** The hub needs create on Jobs there, which
+  lets it mount any Secret of that namespace, among them the tenants' API
+  keys (`aigw-ui-api-keys`) and the gateway's own certificates. The hub can
+  already write that Secret, but it never reads the others.
+
+Do not grant it while you have no prefill/decode model. With it off, the
+Capacity page says so for each prefill/decode LLMI, the API refuses to
+measure one (409), and measuring by itself skips them; their site weights
+follow `aigw-ui.io/capacity-per-instance`.
 
 ## Tenant API keys
 
@@ -175,7 +197,10 @@ A capacity measurement creates one Job, `aigw-capacity-<id>`, in the
 namespace of the model it measures, when an operator starts it. Its pod runs
 the image set in `capacity.image`, gets no service account token, runs as a
 non-root user without privileges, and sends requests only to the pod named
-in the form, over the cluster network. It loads that pod until its latency
+in the form, over the cluster network. A prefill/decode measurement, only
+with `capacity.peerMeasurements` on, runs in the gateway's namespace instead,
+mounts the peer client certificate read-only and sends to the site's own
+peer listener ([above](#kubeconfigs)). It loads that pod until its latency
 targets break, which slows the answers of that pod's own users. The hub
 deletes the Job when the measurement is stopped; Kubernetes deletes it 7 days
 after it ends.

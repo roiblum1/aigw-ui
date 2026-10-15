@@ -64,7 +64,7 @@ The shape key in 0.14 (GPU, GPUs per instance, topology, revision) cannot tell B
   - prefill/decode: there is no fixed instance. The whole LLMI is measured, and per-instance capacity = the LLMI's result ÷ its decode replicas during the run.
 - **Same spec on two sites:** each is measured anyway. Sites differ in network, tuning and versions.
 
-*As built (0.16.0, after review):* the LLMI's `spec` does not hold all of what it runs. KServe merges `LLMInferenceServiceConfig`s into it (the ones `baseRefs` names, and its own defaults, where the vLLM image usually is), and an image can be pushed again under the same tag. The hash therefore also covers the specs of the configs `baseRefs` names and the image digests the ready `main` containers run, by role. While a rollout runs (ready pods of one role on different images) the stored hash is kept, so results do not drop back and forth; a measurement waits until the pods agree. Changes to KServe's own default configs other than the image are still not seen.
+*As built (0.16.0, after review):* the LLMI's `spec` does not hold all of what it runs. KServe merges `LLMInferenceServiceConfig`s into it (the ones `baseRefs` names, and its own defaults, where the vLLM image usually is), and an image can be pushed again under the same tag. The hash therefore also covers the specs of the configs `baseRefs` names and the image digests the ready `main` containers run, by role. While a rollout runs (ready pods of one role on different images) the stored hash is kept, so results do not drop back and forth; a measurement waits until the pods agree. *Second review:* KServe's presets (the template, the scheduler) are applied without a `baseRefs` entry, so the hash takes the configs from `status.appliedConfigs`, which lists them with their namespaces; a scheduler upgrade made in a preset then changes it. And dropping a result on every hash change made a model that is tuned often switch between measured and declared site weights, moving sessions each time: a changed hash now keeps the result, marked stale, as for a new profile version.
 
 ### One benchmark profile, versioned
 
@@ -112,7 +112,7 @@ The operator confirms by typing the model's name. The result is marked `live`. I
 - Drained: above 5% fails the step as contaminated. It usually means clients call the site's own route directly.
 - Live: expected; the share is shown with the step.
 
-*As built (0.16.0, after review):* 1 − sent ÷ counted also counts the measurement's own failed requests, whose prompts the pod counts and AIPerf (with server token counts) does not report, so a step at its limit could fail as "contaminated". Other traffic is now the larger of two estimates: during the step, counted − sent − one longest prompt per failed request; and, drained, the prompt tokens the pods counted in a 20-second quiet spell before the step while nothing was sent, carried over the step. Failed requests are checked before contamination. Live throughput is taken over AIPerf's profiling (counters read every 2 seconds), not the Job's wall time with AIPerf's start and exit. AIPerf 0.13 keeps its first-request and last-answer timestamps to itself (they are `INTERNAL`), so the window is the profiling's exported start and end, a few seconds wider than `benchmark_duration`.
+*As built (0.16.0, after review):* 1 − sent ÷ counted also counts the measurement's own failed requests, whose prompts the pod counts and AIPerf (with server token counts) does not report, so a step at its limit could fail as "contaminated". Drained, other traffic is now the prompt tokens the pods counted in a 20-second quiet spell before the step while nothing was sent, carried over the step; counted − sent (less one longest prompt per failed request) is shown only, since it also holds requests cut off at the end of a step. Live, that second figure is the step's other traffic. Failed requests are checked before contamination. Live throughput is taken over AIPerf's profiling (counters read every 2 seconds), not the Job's wall time with AIPerf's start and exit. AIPerf 0.13 keeps its first-request and last-answer timestamps to itself (they are `INTERNAL`), so the window is the profiling's exported start and end, a few seconds wider than `benchmark_duration`.
 
 ### Prefill/decode
 
@@ -126,7 +126,7 @@ Measured through the LLMI's own scheduler on the gateway's peer listener. The Jo
 
 | Trigger | Old result |
 | --- | --- |
-| Spec hash changes | Dropped: the LLMI counts as not measured until measured again |
+| Spec hash changes | Dropped: the LLMI counts as not measured until measured again. *As built (second review):* kept and marked stale until measured again, so the site weights do not switch to declared with each tuning |
 | Active profile version changes | Kept and marked stale, until measured again, so capacity does not fall to zero all at once |
 | Result older than 30 days | Kept and marked stale |
 

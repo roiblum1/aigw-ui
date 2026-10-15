@@ -164,6 +164,7 @@ const MaxResultAge = 30 * 24 * time.Hour
 
 // Why a result is stale.
 const (
+	StaleSpec    = "spec"    // measured before its spec hash changed
 	StaleProfile = "profile" // measured with another version of the profile
 	StaleAge     = "age"     // older than MaxResultAge
 )

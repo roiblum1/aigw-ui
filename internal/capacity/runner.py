@@ -483,14 +483,15 @@ def measure(concurrency):
 def foreign_share(step):
     """The part of the prompt tokens the instance counted that something else
     sent: Step.ForeignShare in the server, which decides; this only steers
-    the sweep."""
+    the sweep. The quiet spell's figure when there is one, else what was
+    counted beyond what was sent."""
     counted = step["server_prompt_tokens"]
     if not counted:
         return 0.0
-    own = step["input_tokens"] + step["errors"] * settings["max_prompt_tokens"]
-    share = (counted - own) / counted
     if step.get("quiet_prompt_tokens") is not None and step.get("quiet_s") and step["server_seconds"]:
-        share = max(share, step["quiet_prompt_tokens"] / step["quiet_s"] * step["server_seconds"] / counted)
+        share = step["quiet_prompt_tokens"] / step["quiet_s"] * step["server_seconds"] / counted
+    else:
+        share = (counted - step["input_tokens"] - step["errors"] * settings["max_prompt_tokens"]) / counted
     return min(max(share, 0.0), 1.0)
 
 

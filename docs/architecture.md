@@ -167,9 +167,10 @@ sum over the model's LLMInferenceServices on that cluster of
   was measured to serve, in thousands of input-equivalent tokens a second,
   and the annotation is not used for that model. A model is all measured or
   all declared, and counted with one version of the benchmark profile, so
-  its sites' numbers are in one unit. An LLMI that is not measured yet, such
-  as one whose spec changed, puts the model back on the annotation until it
-  is (`internal/llmi`). A change from one to the other is applied at once
+  its sites' numbers are in one unit. An LLMI that is not measured yet puts
+  the model back on the annotation until it is (`internal/llmi`); one whose
+  spec changed keeps its last result, marked stale, so tuning a model does
+  not switch its weights back and forth. A change from one to the other is applied at once
   rather than one instance per poll, because it changes the unit. The
   Models page marks a site's weight "measured". The older name
   `aigw-ui.io/capacity-per-replica` is read when the newer one is not set,

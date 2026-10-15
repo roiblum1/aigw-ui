@@ -28,26 +28,32 @@ versions differ.
 **Its spec hash** says what it runs: SHA-256 of its `spec` with every
 `replicas` field removed, and of what is set outside it:
 
-- the specs of the `LLMInferenceServiceConfig`s its `baseRefs` name, in
-  their order, from its own namespace or else from KServe's: a shared
-  config can change vLLM's arguments for every LLMI built on it;
+- the specs of the `LLMInferenceServiceConfig`s it is built on, in the
+  order KServe applied them: KServe's own presets (the vLLM template, the
+  scheduler) and those its `baseRefs` name, as its `status.appliedConfigs`
+  lists them. A preset or a shared config can change vLLM's arguments or
+  the scheduler for every LLMI built on it. With an older KServe that does
+  not list them, the configs its `baseRefs` name, from its own namespace or
+  else from KServe's;
 - the image digest its ready model servers (the `main` container) run, by
-  role (prefill, decode, the workers of a multi-node group): a vLLM upgrade
-  in KServe's own config, or an image pushed again under the same tag,
-  changes only that.
+  role (prefill, decode, the workers of a multi-node group): an image
+  pushed again under the same tag changes only that.
 
-Scaling it keeps its result; changing anything else, such as one argument
-or the image, makes it not measured until it is measured again. A
+Scaling it keeps its result. Changing anything else, such as one argument,
+a preset or the image, marks the result **stale**: it keeps counting, for
+what the model can be given and for the site weights, and the LLMI goes
+into the campaign's queue until it is measured on its new spec. A model
+tuned often would otherwise switch between measured and declared site
+weights with each change, and each switch moves sessions between sites. A
 prefill/decode LLMI adds the ratio of prefill to decode replicas, since
 that changes what one decode replica serves.
 
 While its ready pods of one role run different images, as during a
 rollout, or none is ready, or the configs could not be read this time, the
-hub keeps the hash it has, so a rollout does not drop the result back and
-forth. It is not measured until its pods agree. A hub not allowed to list
-pods hashes without the images; one not allowed to read the configs hashes
-their names only. Changes to KServe's own default configs other than the
-image are not seen: measure again after changing vLLM's arguments there.
+hub keeps the hash it has, so a rollout does not mark the result stale
+and fresh again. It is not measured until its pods agree. A hub not
+allowed to list pods hashes without the images; one not allowed to read
+the configs hashes their names only.
 
 **What one instance is:** one pod on one node; one LeaderWorkerSet group
 over several nodes, as KServe counts ready instances; for prefill and
@@ -190,30 +196,37 @@ It starts only once the model's name is typed. The result is marked
 included, over the time AIPerf was profiling, not its whole run; the
 latency is AIPerf's own requests'.
 
-**Other traffic.** It is estimated two ways, and the larger counts:
+**Other traffic.**
 
-- **During the step:** the prompt tokens the pod counted beyond what AIPerf
-  sent and had answered. The pod also counts the prompts of the
-  measurement's own requests that failed, and AIPerf does not report them,
-  so the longest prompt is allowed for each failed request: a step near its
-  limit, where requests start to fail, is not taken for one that something
-  else reached.
-- **Before a drained step:** the Job waits for the pods to have nothing in
-  flight, for at most a minute, then watches their prompt counter for 20
-  seconds while it sends nothing; what they count then is someone else's,
-  carried over the step at the same rate. Pods that never run dry fail the
-  step.
+- **Drained, the quiet spell decides.** Before each step the Job waits for
+  the pods to have nothing in flight, for at most a minute, then watches
+  their prompt counter for 20 seconds while it sends nothing. What they
+  count then is someone else's, carried over the step at the same rate.
+  Pods that never run dry fail the step. A step with more than 5% fails as
+  contaminated; it usually means clients call the site's own route
+  directly.
+- **Shown only: what the pods counted beyond what was sent.** The pods
+  also count the prompts of the measurement's own requests that failed or
+  were cut off at the end of a step, and AIPerf does not report them. At
+  prompts of 100,000 tokens one such request is 1.5% of a step, so near
+  the limit, where requests start to fail, this figure would read as
+  contamination. The longest prompt is allowed for each failed request,
+  and the figure is in the step's tooltip (`beyond_sent`).
+- **Live**, other traffic is expected: there is no quiet spell, the figure
+  beyond what was sent is the step's other traffic, and it is shown with
+  the step.
 
-Drained, a step with more than 5% fails as contaminated; it usually means
-clients call the site's own route directly. A step with too many failed
-requests says so first. Live, other traffic is expected, and shown with
-the step.
+A step with too many failed requests says so first.
 
 ## Prefill and decode
 
 A prefill/decode LLMI has no instance of its own, so it is measured whole,
 through its scheduler on the gateway's **peer listener**, which asks for
-the site's client certificate. The Job runs in the gateway's namespace and
+the site's client certificate. This is **off by default**: turn it on with
+`capacity.peerMeasurements: true` after reading
+[what it grants](security.md#kubeconfigs): the certificate reaches every
+model on the peer listener with no key and no quota, and Jobs in the
+gateway's namespace can mount its Secrets. The Job runs in the gateway's namespace and
 mounts the client certificate (`fleet.peerClientSecret`, `llm-peer-client`
 by default) and the CA (`fleet.peerCAConfigMap`) read-only; AIPerf cannot
 present a certificate, so the Job's script passes its requests on with it,
@@ -236,7 +249,7 @@ AIServiceBackend.
 
 | What happened | Its result |
 |---|---|
-| Its spec hash changed: its spec, a config it names, or the image it runs | Dropped: not measured until measured again |
+| Its spec hash changed: its spec, a config or preset it is built on, or the image it runs | Kept, marked stale, until measured again |
 | The profile has a new version | Kept, marked stale, until measured again |
 | It is older than 30 days | Kept, marked stale |
 
@@ -255,10 +268,13 @@ of what they serve within the targets, the model's busiest hour that fell
 inside the window in the last 30 days, in the model's unit. Otherwise the
 LLMI waits for an operator, and the page says what part of that hour the
 others take. A site holding most of a model's capacity is then measured
-live, or drained by hand at a quieter time. A model with no traffic in the
-window is drained freely; one with traffic whose other sites are not
-measured yet waits, since nothing shows they can take it, so a model's
-first measurement is usually started by an operator.
+live, or drained by hand at a quieter time. A model with recorded use, none
+of it in the window, is drained freely. One with traffic whose other sites
+are not measured yet waits, since nothing shows they can take it, so a
+model's first measurement is usually started by an operator. So does a
+model with no recorded use in the last 30 days, such as a new one or one
+without quotas, whose use the hub does not record: its load cannot be
+told.
 
 **Measuring by itself** on the page shows the window, the queue and what
 each item waits for. Empty, the default, never.

@@ -16,6 +16,7 @@ func valid(t *testing.T) {
 		"REDIS_URL", "REDIS_CA_FILE", "REDIS_TLS_INSECURE", "REDIS_KEY_PREFIX", "REDIS_ALLOW_RESET",
 		"OVERAGE_INTERVAL", "OVERAGE_THRESHOLD", "BEST_EFFORT_PRIORITY",
 		"FLEET_PEER_SNI", "FLEET_DOMAIN", "FLEET_PEER_CA_CONFIGMAP", "FLEET_PEER_CLIENT_SECRET", "FLEET_SESSION_HEADER",
+		"CAPACITY_PEER_MEASUREMENTS",
 	} {
 		t.Setenv(name, "")
 	}
@@ -35,6 +36,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if c.OverageEvery != 15*time.Second || c.OverageThreshold != 0.9 {
 		t.Errorf("overage defaults = %v, %v", c.OverageEvery, c.OverageThreshold)
+	}
+	if c.CapacityPeer {
+		t.Error("prefill/decode measurements on by default")
 	}
 	if c.Fleet.BestEffortPriority != -1 {
 		t.Errorf("best-effort priority = %d, want -1", c.Fleet.BestEffortPriority)

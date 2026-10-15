@@ -155,6 +155,17 @@ func TestContamination(t *testing.T) {
 	if ok, why := q.Check(set); ok || !strings.Contains(why, "contaminated: 12%") {
 		t.Fatalf("quiet 5,000/s: %v %q", ok, why)
 	}
+	// Nothing came in the quiet spell, and the instance counted 7% beyond
+	// what AIPerf reported: a request cut off at the end of the step, which
+	// AIPerf does not report as failed. Drained, the quiet spell decides;
+	// the 7% is shown.
+	q.ServerPromptTokens, q.QuietPromptTokens = ptr(4_300_000), ptr(0)
+	if ok, why := q.Check(set); !ok || *q.ForeignShare(set) != 0 || math.Abs(*q.CountedBeyondSent(set)-300_000.0/4_300_000) > 1e-9 {
+		t.Fatalf("cut off: %v %q %v", ok, why, *q.CountedBeyondSent(set))
+	}
+	if v := Analyze(set, []Step{q}).Steps[0]; *v.ForeignShare != 0 || *v.BeyondSent < 0.069 {
+		t.Fatalf("view: %+v", v)
+	}
 
 	set.Mode = ModeLive
 	s.ServerPromptTokens = ptr(8_000_000)
