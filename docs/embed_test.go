@@ -28,6 +28,9 @@ func TestList(t *testing.T) {
 			t.Errorf("%s is listed before %s", notes[i-1], notes[i])
 		}
 	}
+	if text, err := Read("design/capacity-prices-wallets"); err != nil || title(text, "") != "Capacity, prices and wallets: the target design" {
+		t.Errorf("design: %v", err)
+	}
 	if _, err := Read("../go"); err == nil {
 		t.Error("read a file outside the documents")
 	}

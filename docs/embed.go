@@ -14,7 +14,7 @@ import (
 //go:embed platform-architecture.html
 var PlatformArchitecture []byte
 
-//go:embed *.md release-notes/*.md
+//go:embed *.md release-notes/*.md design/*.md
 var files embed.FS
 
 // Doc is one document of the Docs page.
@@ -28,7 +28,7 @@ type Doc struct {
 }
 
 // guides is the order of the guides: what a new operator reads first.
-var guides = []string{"how-it-works", "user-guide", "optimization", "pricing", "capacity", "performance", "architecture", "operations", "deployment", "security", "api", "platform-architecture"}
+var guides = []string{"how-it-works", "user-guide", "optimization", "pricing", "capacity", "performance", "architecture", "operations", "deployment", "security", "api", "platform-architecture", "design/capacity-prices-wallets"}
 
 // List returns every document: the guides in reading order, then the release
 // notes, newest first.

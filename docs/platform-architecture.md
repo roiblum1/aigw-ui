@@ -16,6 +16,16 @@ the routing is configured, and what happens under load and failure.
 [architecture.md](architecture.md) is a different document: it describes how
 this tool works today.
 
+## Target design for capacity, prices and wallets
+
+**[design/capacity-prices-wallets.md](design/capacity-prices-wallets.md)**
+is the target design of the work after 0.14.2: every LLMInferenceService
+measured with one versioned benchmark profile, one price per model from the
+OpenRouter market by default, a budget planner that says how many dollars a
+day are left to give and which model runs out first, and wallets: one budget
+per tenant across all priced models. Each pull request of that work refers
+to it, and updates it wherever the code or the clusters turn out different.
+
 ## The page is a target design
 
 It describes where the platform is going. This is what this tool, the hub's
