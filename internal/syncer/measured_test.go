@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"aigw-ui/internal/capacity"
+	"aigw-ui/internal/kube"
 	"aigw-ui/internal/store"
 )
 
@@ -115,5 +116,17 @@ func TestThreeFigures(t *testing.T) {
 		if got := threeFigures(v); got != want {
 			t.Errorf("%v: %s, want %s", v, got, want)
 		}
+	}
+}
+
+// The cluster's discovery message says what the hub may not list and what it
+// does not know for it.
+func TestShapesNote(t *testing.T) {
+	if n := shapesNote([]kube.ModelCapacity{{Model: "m"}}); n != "" {
+		t.Fatalf("allowed: %q", n)
+	}
+	n := shapesNote([]kube.ModelCapacity{{Model: "m", ShapesDenied: []string{"pods"}}, {Model: "n", ConfigsDenied: true}})
+	if !strings.Contains(n, "not allowed to list pods") || !strings.Contains(n, "not allowed to list LLMInferenceServiceConfigs") {
+		t.Fatalf("denied: %q", n)
 	}
 }

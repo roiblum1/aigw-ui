@@ -87,6 +87,10 @@ type ModelCapacity struct {
 	// deployments' GPUs: "pods", "nodes" or both. Their GPUs are then not
 	// known.
 	ShapesDenied []string
+	// ConfigsDenied is set when the hub was not allowed to list the
+	// LLMInferenceServiceConfigs: the spec hash then holds their names only,
+	// and a change in one does not mark a measurement stale.
+	ConfigsDenied bool
 }
 
 // Pool names an InferencePool: the set of pods of one deployment that its
@@ -153,7 +157,7 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 
 		mc := byModel[model]
 		if mc == nil {
-			mc = &ModelCapacity{Model: model, ShapesDenied: gpus.denied}
+			mc = &ModelCapacity{Model: model, ShapesDenied: gpus.denied, ConfigsDenied: configs.denied}
 			byModel[model] = mc
 		}
 		mc.Known = mc.Known || known

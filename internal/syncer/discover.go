@@ -115,15 +115,23 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 	return len(found), nil
 }
 
-// shapesNote says what the hub was not allowed to list to find the GPUs of
-// the cluster's deployments, or "" when it was allowed.
+// shapesNote says what the hub was not allowed to list on the cluster and
+// what it does not know for it, or "" when it was allowed everything.
 func shapesNote(capacity []kube.ModelCapacity) string {
+	var notes []string
 	for _, mc := range capacity {
 		if len(mc.ShapesDenied) > 0 {
-			return "not allowed to list " + strings.Join(mc.ShapesDenied, " or ") + ", so the GPUs of its deployments are not known"
+			notes = append(notes, "not allowed to list "+strings.Join(mc.ShapesDenied, " or ")+", so the GPUs of its deployments are not known")
+			break
 		}
 	}
-	return ""
+	for _, mc := range capacity {
+		if mc.ConfigsDenied {
+			notes = append(notes, "not allowed to list LLMInferenceServiceConfigs, so a change in a config or preset an LLMInferenceService is built on does not mark its measurement stale")
+			break
+		}
+	}
+	return strings.Join(notes, "; ")
 }
 
 // observeCapacity stores how many instances of each model the cluster has
