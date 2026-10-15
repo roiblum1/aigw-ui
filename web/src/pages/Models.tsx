@@ -201,6 +201,14 @@ export default function Models() {
                         </span>
                       )
                     )}
+                    {m.market?.state === "moved" && (
+                      <span
+                        className="tag warn"
+                        title="The market price changed since the model's prices were taken from it. Prices shows the new one; nothing changes by itself."
+                      >
+                        market moved
+                      </span>
+                    )}
                     {m.price_dry_run && (
                       <span className="tag warn" title="Every tenant is counted in dollars and nobody is refused. Switch it off under Prices.">
                         dry-run
@@ -265,7 +273,7 @@ export default function Models() {
       )}
 
       {limiting && <BestEffortLimit model={limiting} onClose={() => setLimiting(null)} onChanged={reload} />}
-      {priced && <ModelPrices model={priced} onClose={() => setPricing(null)} onChanged={reload} />}
+      {priced && <ModelPrices key={priced.id} model={priced} onClose={() => setPricing(null)} onChanged={reload} />}
       {editing && data && (
         <ModelForm
           model={editing === "new" ? null : editing}

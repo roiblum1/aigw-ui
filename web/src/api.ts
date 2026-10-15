@@ -107,6 +107,47 @@ export interface Model {
   pending_prices: Price | null;
   /** Every tenant is counted and nobody is refused. */
   price_dry_run: boolean;
+  /** The market entry chosen by hand: null follows the annotation and the served names, "" is none. */
+  market_id_set: string | null;
+  /** The values of aigw-ui.io/market-id on the model's deployments. */
+  market_annotations: string[];
+  /** The model's market price, or null when it has none. */
+  market: MarketPrice | null;
+  /** Why the model has no market price, when it is not for want of a match. */
+  market_note: string;
+}
+
+/** A model's entry in the market snapshot, in dollars for a million tokens. */
+export interface MarketPrice {
+  id: string;
+  name: string;
+  hf_id: string;
+  /** How the entry was found: chosen by hand, by annotation, or by a served name. */
+  source: "set" | "annotation" | "name";
+  snapshot_date: string;
+  prompt: number;
+  completion: number;
+  cache_read: number | null;
+  /** What Use market prices sets, in credits; null when the market's price cannot be used. */
+  prices: { price_input: number; price_cached: number; price_output: number } | null;
+  /** The model's prices next to the market's. */
+  state: "no-prices" | "in-use" | "moved" | "custom";
+}
+
+export interface MarketEntry {
+  id: string;
+  hf_id: string;
+  name: string;
+  context: number;
+  prompt: number;
+  completion: number;
+  cache_read: number | null;
+}
+
+export interface MarketSearch {
+  source: string;
+  snapshot_date: string;
+  models: MarketEntry[];
 }
 
 /** A credit is 0.00001 dollars. A model without prices is counted in tokens. */
@@ -123,6 +164,8 @@ export interface Price {
   applied_at: string | null;
   note: string;
   created_at: string;
+  /** "<entry>@<snapshot date>" for prices taken unchanged from the market. */
+  market: string;
 }
 
 /** Prices as they are sent, in dollars for a million tokens. */
@@ -685,6 +728,8 @@ export const api = {
   prices: (id: string) => request<Price[]>("GET", `/models/${id}/prices`),
   setPrices: (id: string, p: PriceInput) => request<Price[]>("PUT", `/models/${id}/prices`, p),
   deletePendingPrices: (id: string) => request<void>("DELETE", `/models/${id}/prices/pending`),
+  market: (q: string) => request<MarketSearch>("GET", `/market?q=${encodeURIComponent(q)}`),
+  setMarketID: (id: string, marketID: string | null) => request<void>("PUT", `/models/${id}/market-id`, { market_id: marketID }),
   setPriceDryRun: (id: string, enabled: boolean) => request<void>("PUT", `/models/${id}/prices/dry-run`, { enabled }),
   overage: () => request<OverageEntry[]>("GET", "/overage"),
   capacity: () => request<CapacityOverview>("GET", "/capacity"),

@@ -20,13 +20,13 @@ type ModelInput struct {
 }
 
 func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet, spent_mode, best_effort_unlimited, best_effort_limit, price_dry_run FROM models ORDER BY name`)
+	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet, spent_mode, best_effort_unlimited, best_effort_limit, price_dry_run, market_id FROM models ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	models, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Model, error) {
-		m := Model{Endpoints: []Endpoint{}, Warnings: []string{}}
-		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet, &m.SpentMode, &m.BestEffortUnlimited, &m.BestEffortLimit, &m.PriceDryRun)
+		m := Model{Endpoints: []Endpoint{}, Warnings: []string{}, MarketAnnotations: []string{}}
+		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet, &m.SpentMode, &m.BestEffortUnlimited, &m.BestEffortLimit, &m.PriceDryRun, &m.MarketIDSet)
 		return m, err
 	})
 	if err != nil {
@@ -42,6 +42,15 @@ func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
 		// A fleet model's quota attaches to the entry backend rendered for it.
 		models[i].QuotaCapable = models[i].Fleet
 		byID[models[i].ID] = &models[i]
+	}
+	annotations, err := s.marketAnnotations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for id, values := range annotations {
+		if m := byID[id]; m != nil {
+			m.MarketAnnotations = values
+		}
 	}
 	rows, err = s.db.Query(ctx,
 		`SELECT e.model_id, e.cluster_id, c.name, c.fleet_enabled, e.host, e.port, e.upstream_model, e.source, e.backends,
@@ -187,5 +196,33 @@ func (s *Store) SetModelFleet(ctx context.Context, id string, on bool) (string, 
 		_, err = tx.Exec(ctx, `UPDATE models SET fleet = $2 WHERE id = $1`, id, on)
 		return err
 	})
+	return name, mapErr(err)
+}
+
+// marketAnnotations returns, per model, the values of aigw-ui.io/market-id
+// its deployments declare, each once and in order.
+func (s *Store) marketAnnotations(ctx context.Context) (map[string][]string, error) {
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT model_id, market_id FROM model_deployments WHERE market_id <> '' ORDER BY model_id, market_id`)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for rows.Next() {
+		var id, value string
+		if err := rows.Scan(&id, &value); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out[id] = append(out[id], value)
+	}
+	return out, rows.Err()
+}
+
+// SetMarketID sets the market entry of a model, and returns the model's
+// name. nil goes back to the annotation and the automatic match; "" is no
+// market price.
+func (s *Store) SetMarketID(ctx context.Context, modelID string, marketID *string) (string, error) {
+	var name string
+	err := s.db.QueryRow(ctx, `UPDATE models SET market_id = $2 WHERE id = $1 RETURNING name`, modelID, marketID).Scan(&name)
 	return name, mapErr(err)
 }

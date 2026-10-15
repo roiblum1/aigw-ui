@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { api, type Model, type Price } from "../api";
+import { useEffect, useState } from "react";
+import { api, type MarketEntry, type MarketPrice, type Model, type Price } from "../api";
 import { CREDITS_PER_DOLLAR, ErrorBanner, Field, FormModal, formatTime, useAction, useLoad } from "../components";
 
 /** A price for a million tokens, in dollars, with the decimals it needs. */
@@ -14,6 +14,24 @@ function perMillion(credits: number): string {
 
 /** Prices as they will be: those waiting for their day, or those in use. */
 const nextPrices = (m: Model) => m.pending_prices ?? m.prices;
+
+/** A market price: dollars for a million tokens. */
+const usd = (n: number) =>
+  n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 5 });
+
+const marketSource: Record<MarketPrice["source"], string> = {
+  set: "chosen here",
+  annotation: "named by aigw-ui.io/market-id",
+  name: "matched by its served name",
+};
+
+const marketState: Record<MarketPrice["state"], string> = {
+  "no-prices": "The model has no prices yet. Use market prices fills them in below.",
+  "in-use": "The model's prices are the market's.",
+  moved:
+    "The market moved since the model's prices were taken from it. Use market prices fills in the new ones; nothing changes until you save them.",
+  custom: "The model's prices are set by hand.",
+};
 
 /** 6×, 1.5×. */
 const times = (n: number) => `${Number(n.toFixed(1))}×`;
@@ -54,6 +72,9 @@ export default function ModelPrices(props: {
   const [note, setNote] = useState(props.suggestedNote ?? "");
   const history = useLoad(() => api.prices(model.id));
   const models = useLoad(api.models);
+  // The market entry is changed here without closing the dialog.
+  const [market, setMarket] = useState({ price: model.market, note: model.market_note, set: model.market_id_set });
+  const [choosing, setChoosing] = useState(false);
   const action = useAction();
 
   // Until measured on the model: a cached prompt token at a tenth of an
@@ -66,6 +87,23 @@ export default function ModelPrices(props: {
     if (cached === "" || Number(cached) === Number(tidy(before * 0.1))) setCached(tidy(next * 0.1));
     if (output === "" || Number(output) === Number(tidy(before * 4))) setOutput(tidy(next * 4));
   };
+
+  const useMarket = () => {
+    const p = market.price?.prices;
+    if (!p || !market.price) return;
+    setInput(dollars(p.price_input));
+    setCached(dollars(p.price_cached));
+    setOutput(dollars(p.price_output));
+    setNote(`OpenRouter ${market.price.id}, snapshot ${market.price.snapshot_date}`);
+  };
+
+  const chooseMarket = (id: string | null) =>
+    action.run(async () => {
+      await api.setMarketID(model.id, id);
+      const fresh = (await api.models()).find((x) => x.id === model.id);
+      if (fresh) setMarket({ price: fresh.market, note: fresh.market_note, set: fresh.market_id_set });
+      setChoosing(false);
+    });
 
   const save = async () => {
     await api.setPrices(model.id, {
@@ -102,9 +140,10 @@ export default function ModelPrices(props: {
       <ErrorBanner message={action.error || history.error || models.error} />
       <p className="hint">
         What tenants are charged for a million tokens of this model: one price, the same whichever site or GPU serves
-        the request. Set them by hand so that the models compare as you want, a bigger model dearer than a smaller one;
-        the Capacity page can check them against what the GPUs cost. Each request is charged by these prices, rounded
-        down, and the model's quotas and usage are counted in dollars. Reasoning tokens are part of the output.
+        the request. By default it is the model's OpenRouter price, so a dollar means what the same traffic would cost
+        there and the models compare as the market does; any price can be set by hand. Each request is charged by these
+        prices, rounded down, and the model's quotas and usage are counted in dollars. Reasoning tokens are part of the
+        output.
       </p>
 
       {model.prices ? (
@@ -131,6 +170,51 @@ export default function ModelPrices(props: {
           </button>
         </p>
       )}
+
+      <div className="endpoint">
+        {market.price ? (
+          <>
+            <p>
+              <span className="strong">Market:</span> OpenRouter <span className="mono">{market.price.id}</span>,{" "}
+              {marketSource[market.price.source]}, snapshot {market.price.snapshot_date}: {usd(market.price.prompt)} in
+              {market.price.cache_read != null && `, ${usd(market.price.cache_read)} cached`}, {usd(market.price.completion)}{" "}
+              out per million.{" "}
+              {market.price.prices && (
+                <button type="button" className="link" onClick={useMarket}>
+                  Use market prices
+                </button>
+              )}
+            </p>
+            <p className="detail">
+              {market.price.prices
+                ? marketState[market.price.state]
+                : "The market's prompt price is free or variable, so it cannot be used as a price."}
+            </p>
+          </>
+        ) : (
+          <p>
+            <span className="strong">No market price.</span>{" "}
+            {market.set === ""
+              ? "It was set to none here."
+              : market.note
+                ? `${market.note.charAt(0).toUpperCase()}${market.note.slice(1)}.`
+                : "No name the model is served under is a Hugging Face id in the market snapshot."}{" "}
+            Choose its entry, or set the prices by hand.
+          </p>
+        )}
+        {choosing ? (
+          <MarketChooser
+            busy={action.busy}
+            initial={market.price?.id ?? ""}
+            onChoose={chooseMarket}
+            onCancel={() => setChoosing(false)}
+          />
+        ) : (
+          <button type="button" className="link" onClick={() => setChoosing(true)}>
+            Choose the market entry
+          </button>
+        )}
+      </div>
 
       {model.prices && (
         <div className="endpoint">
@@ -252,5 +336,60 @@ export default function ModelPrices(props: {
         </>
       )}
     </FormModal>
+  );
+}
+
+/**
+ * Picks a model's entry in the market snapshot by search, or goes back to
+ * the automatic match, or sets none.
+ */
+function MarketChooser(props: {
+  busy: boolean;
+  initial: string;
+  onChoose: (id: string | null) => void;
+  onCancel: () => void;
+}) {
+  const [query, setQuery] = useState(props.initial);
+  const [found, setFound] = useState<MarketEntry[]>([]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      api
+        .market(query)
+        .then((r) => setFound(r.models))
+        .catch(() => setFound([]));
+    }, 200);
+    return () => clearTimeout(t);
+  }, [query]);
+  const exact = found.some((e) => e.id === query.trim());
+  return (
+    <div className="inline-form">
+      <input
+        list="market-entries"
+        placeholder="An OpenRouter id, such as z-ai/glm-5.3"
+        aria-label="Market entry"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && e.preventDefault()}
+      />
+      <datalist id="market-entries">
+        {found.map((e) => (
+          <option key={e.id} value={e.id}>
+            {e.name} · {usd(e.prompt)} in / {usd(e.completion)} out
+          </option>
+        ))}
+      </datalist>
+      <button type="button" className="primary" disabled={props.busy || !exact} onClick={() => props.onChoose(query.trim())}>
+        Use this entry
+      </button>
+      <button type="button" disabled={props.busy} onClick={() => props.onChoose(null)} title="Follow aigw-ui.io/market-id and the served names">
+        Automatic
+      </button>
+      <button type="button" disabled={props.busy} onClick={() => props.onChoose("")}>
+        None
+      </button>
+      <button type="button" className="link" onClick={props.onCancel}>
+        Cancel
+      </button>
+    </div>
   );
 }

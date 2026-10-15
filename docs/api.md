@@ -402,6 +402,8 @@ See [charging by cost](pricing.md).
 | PUT | `/models/{id}/prices` | `{"input_usd", "cached_usd", "output_usd", "now", "note"}` | The list. Replaces prices that were waiting |
 | DELETE | `/models/{id}/prices/pending` | | 204. 404 when none were waiting |
 | PUT | `/models/{id}/prices/dry-run` | `{"enabled"}` | 204. 409 for a model without prices in use |
+| GET | `/market?q=` | | `{"source", "snapshot_date", "models"}`: up to 25 entries of the market snapshot whose id, Hugging Face id or name holds `q` |
+| PUT | `/models/{id}/market-id` | `{"market_id"}` | 204. An entry of the snapshot; `""` is no market price; `null` follows the annotation and the served names again. Changes no price |
 
 - The three prices are dollars for a million tokens. They are stored as
   whole credits, so $0.11574 is 11574. `cached_usd` cannot be above
@@ -409,7 +411,19 @@ See [charging by cost](pricing.md).
 - Prices start at the next 00:00 UTC. `"now": true` starts them at once
   and is answered with 409 for a model that has tenant quotas.
 - A set of prices carries `effective_at` and `applied_at`, which is null
-  while it waits.
+  while it waits, and `market`: `"<entry>@<snapshot date>"` when the prices
+  are the market's unchanged, `""` when they were set by hand. The server
+  finds that out itself; the body has no field for it.
+
+A model also carries `market`, its price on the market, or null when it has
+none: `id`, `name` and `hf_id` of the entry, `source` (`set`, `annotation`
+or `name`: how it was found), `snapshot_date`, the market's `prompt`,
+`completion` and `cache_read` in dollars for a million tokens, `prices`
+(what **Use market prices** sets, in credits; null for a free or variable
+price) and `state`: `no-prices`, `in-use`, `moved` (the prices came from
+the market, which has changed since) or `custom`. `market_note` says why a
+model has no market price when it is not for want of a match;
+`market_id_set` and `market_annotations` are what the entry was found from.
 
 A model carries `unit` (`tokens` or `credits`), `prices`, `pending_prices`
 and `price_dry_run`. For a model in credits, `default_limit`, a quota's

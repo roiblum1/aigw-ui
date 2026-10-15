@@ -136,6 +136,12 @@ type Model struct {
 	PendingPrices *Price `json:"pending_prices"`
 	// PriceDryRun counts every tenant of a priced model and refuses nobody.
 	PriceDryRun bool `json:"price_dry_run"`
+	// MarketIDSet is the market entry an operator chose for the model: nil
+	// follows the annotation and the automatic match, "" is no market price.
+	MarketIDSet *string `json:"market_id_set"`
+	// MarketAnnotations are the values of aigw-ui.io/market-id on the
+	// model's deployments, each once.
+	MarketAnnotations []string `json:"market_annotations"`
 }
 
 // Cost returns the cost expression that is rendered for the model: the one

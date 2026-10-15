@@ -32,6 +32,10 @@ const (
 	RevisionAnnotation = "aigw-ui.io/model-revision"
 	// MaxModelLenAnnotation is the longest request the deployment takes.
 	MaxModelLenAnnotation = "aigw-ui.io/max-model-len"
+	// MarketIDAnnotation names the model's entry in the market snapshot
+	// (internal/market), such as "z-ai/glm-5.3", when its served name is not
+	// a Hugging Face id the market knows.
+	MarketIDAnnotation = "aigw-ui.io/market-id"
 )
 
 // IgnoreAnnotation set to "true" keeps an LLMInferenceService out of the
@@ -155,6 +159,7 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 		mc.Capacity += instances * w.PerInstance
 		d := gpus.of(svc, instances, known)
 		d.Revision = svc.GetAnnotations()[RevisionAnnotation]
+		d.MarketID = strings.TrimSpace(svc.GetAnnotations()[MarketIDAnnotation])
 		mc.Deployments = append(mc.Deployments, d)
 		mc.Step = max(mc.Step, w.PerInstance)
 		if mc.Detail != "" {
@@ -290,6 +295,8 @@ type Deployment struct {
 	// instances. 0 when unknown.
 	GPUsPerInstance float64
 	Revision        string
+	// MarketID is the annotation aigw-ui.io/market-id, "" when absent.
+	MarketID string
 	// Instances is its ready instances; Known is false until it reports them.
 	Instances float64
 	Known     bool

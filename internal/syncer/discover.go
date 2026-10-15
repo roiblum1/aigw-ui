@@ -138,7 +138,7 @@ func (s *Syncer) observeCapacity(ctx context.Context, c store.Cluster, found []k
 		}
 		for _, d := range f.Deployments {
 			sd := store.Deployment{Namespace: d.Namespace, Name: d.Name, Topology: d.Topology, GPU: d.GPU,
-				GPUsPerInstance: d.GPUsPerInstance, Revision: d.Revision}
+				GPUsPerInstance: d.GPUsPerInstance, Revision: d.Revision, MarketID: d.MarketID}
 			if d.Known {
 				sd.Instances = &d.Instances
 			}

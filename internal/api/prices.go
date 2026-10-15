@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"aigw-ui/internal/market"
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/syncer"
@@ -81,6 +82,18 @@ func (s *Server) setPrices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	// Prices that are the market's unchanged say so, so that the page can
+	// tell when the market moves away from them.
+	models, err := s.st.ListModels(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	for _, m := range models {
+		if m.ID == id {
+			p.Market = marketRef(m, p, market.Current())
+		}
+	}
 	name, err := s.st.SetPendingPrice(r.Context(), id, p, b.Now)
 	switch {
 	case errors.Is(err, store.ErrHasQuotas):
