@@ -1,6 +1,11 @@
 package render
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
 
 // How the gateway tells tenants apart.
 const (
@@ -42,6 +47,17 @@ type Identity struct {
 	Denied []string
 	// Disabled is the slug of every disabled tenant.
 	Disabled []string
+	// Closed are the tenants whose wallet is spent.
+	Closed []Closure
+}
+
+// Closure is a tenant whose wallet is spent: the gateway refuses its
+// requests to Models until Until, by itself, so the closure ends with the
+// window also while the hub is down.
+type Closure struct {
+	Slug   string
+	Models []string
+	Until  time.Time
 }
 
 // tokens reports whether the gateway checks tokens.
@@ -83,7 +99,7 @@ func jwtProvider(i Identity) map[string]any {
 // and any other credential shaped like a token, such as an expired token
 // still listed, is refused. An API key never looks like a token.
 func authorization(i Identity) map[string]any {
-	var rules []any
+	rules := walletRules(i.Closed)
 	deny := func(name, claim string, values []string) {
 		values = append([]string(nil), values...)
 		sort.Strings(values)
@@ -100,8 +116,10 @@ func authorization(i Identity) map[string]any {
 			})
 		}
 	}
-	deny("revoked", "jti", i.Denied)
-	deny("disabled-tenant", "sub", i.Disabled)
+	if i.tokens() {
+		deny("revoked", "jti", i.Denied)
+		deny("disabled-tenant", "sub", i.Disabled)
+	}
 	if i.Mode == IdentityBoth {
 		rules = append(rules,
 			map[string]any{
@@ -124,6 +142,46 @@ func authorization(i Identity) map[string]any {
 		return nil
 	}
 	return map[string]any{"defaultAction": "Allow", "rules": rules}
+}
+
+// maxCEL is the longest CEL expression a rule takes, with room to spare.
+const maxCEL = 3800
+
+// walletRules refuse each closed tenant on the models its wallet covers. The
+// client ID is in every request the gateway takes, from an API key or a
+// token, and the model's name is set by the AI gateway before the rules are
+// read. A tenant with many models gets several rules.
+func walletRules(closed []Closure) []any {
+	var rules []any
+	for _, c := range closed {
+		head := fmt.Sprintf("request.time < timestamp('%s') && '%s' in request.headers && request.headers['%s'].startsWith('%s.') && '%s' in request.headers && request.headers['%s'] in [",
+			c.Until.UTC().Format(time.RFC3339), ClientIDHeader, ClientIDHeader, celString(c.Slug), ModelHeader, ModelHeader)
+		var names []string
+		flush := func() {
+			if len(names) == 0 {
+				return
+			}
+			rules = append(rules, map[string]any{"name": "wallet-spent", "action": "Deny", "cel": head + strings.Join(names, ", ") + "]"})
+			names = nil
+		}
+		size := len(head)
+		for _, m := range c.Models {
+			q := "'" + celString(m) + "'"
+			if size+len(q)+3 > maxCEL {
+				flush()
+				size = len(head)
+			}
+			names = append(names, q)
+			size += len(q) + 2
+		}
+		flush()
+	}
+	return rules
+}
+
+// celString escapes s for a CEL string in single quotes.
+func celString(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(s)
 }
 
 // credentialsRemoved is the header mutation of a backend this tool renders

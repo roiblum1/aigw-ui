@@ -107,7 +107,11 @@ func (s *Server) planner(ctx context.Context, models []capacityModel) (plannerRe
 	for _, p := range budget.ByPeak(plans) {
 		out.byPeak = append(out.byPeak, p.ModelID)
 	}
-	out.fleet = budget.PlanFleet(plans, tenantsOf(quotas, priced), budget.History{Days: spend.Days, BusiestDay: spend.BusiestDay})
+	tenants, err := s.st.ListTenants(ctx)
+	if err != nil {
+		return out, err
+	}
+	out.fleet = budget.PlanFleet(plans, tenantsOf(quotas, priced, tenants), budget.History{Days: spend.Days, BusiestDay: spend.BusiestDay})
 	yesterday := now.Truncate(24 * time.Hour)
 	if out.market.YesterdaySpend, err = s.st.SpentBetween(ctx, yesterday.AddDate(0, 0, -1), yesterday); err != nil {
 		return out, err
@@ -124,20 +128,30 @@ func add(total *int64, n int64) *int64 {
 }
 
 // tenantsOf groups the enforced budgets of enabled tenants on priced models
-// by tenant. A model in tokens has no dollars to add.
-func tenantsOf(quotas []store.Quota, priced map[string]bool) []budget.Tenant {
+// by tenant, with their wallets. A model in tokens has no dollars to add;
+// a wallet bucket is the wallet itself, counted once as the wallet.
+func tenantsOf(quotas []store.Quota, priced map[string]bool, tenants []store.Tenant) []budget.Tenant {
 	byID := map[string]*budget.Tenant{}
 	var order []string
+	get := func(id string) *budget.Tenant {
+		t := byID[id]
+		if t == nil {
+			t = &budget.Tenant{ID: id}
+			byID[id] = t
+			order = append(order, id)
+		}
+		return t
+	}
+	for _, t := range tenants {
+		if t.Enabled && t.Wallet != nil {
+			get(t.ID).Wallet = &budget.Budget{Limit: t.Wallet.Credits, Window: t.Wallet.Window}
+		}
+	}
 	for _, q := range quotas {
-		if q.Shadow || !priced[q.ModelID] {
+		if q.Shadow || q.Wallet || !priced[q.ModelID] {
 			continue
 		}
-		t := byID[q.TenantID]
-		if t == nil {
-			t = &budget.Tenant{ID: q.TenantID}
-			byID[q.TenantID] = t
-			order = append(order, q.TenantID)
-		}
+		t := get(q.TenantID)
 		t.Budgets = append(t.Budgets, budget.Budget{ModelID: q.ModelID, Limit: q.TokenLimit, Window: q.Window})
 	}
 	out := make([]budget.Tenant, 0, len(order))

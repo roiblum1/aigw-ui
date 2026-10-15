@@ -208,7 +208,18 @@ type Tenant struct {
 	// APIKeyCount is how many of those keys are API keys rather than
 	// tokens: while any tenant has one, the gateways list every key.
 	APIKeyCount int `json:"api_key_count"`
-	QuotaCount  int `json:"quota_count"`
+	// Wallet is the tenant's budget across every priced model, nil when it
+	// has none; ClosedUntil is set while it is spent.
+	Wallet      *Wallet    `json:"wallet"`
+	ClosedUntil *time.Time `json:"wallet_closed_until"`
+	QuotaCount  int        `json:"quota_count"`
+}
+
+// Wallet is a tenant's budget across every priced model, in credits, per
+// hour or per day.
+type Wallet struct {
+	Credits int64  `json:"credits"`
+	Window  string `json:"window"`
 }
 
 type APIKey struct {
@@ -239,6 +250,9 @@ type Quota struct {
 	// a model with prices. The field keeps its name for callers that
 	// already use it.
 	Unit string `json:"unit"`
+	// Wallet marks a quota the hub keeps equal to the tenant's wallet, on a
+	// priced model it has no cap on.
+	Wallet bool `json:"wallet"`
 }
 
 type Overview struct {

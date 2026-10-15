@@ -30,6 +30,7 @@ const (
 	stepSize    = "long-prompt"
 	stepSticky  = "sticky"
 	stepFleet   = "fleet-revision"
+	stepWallet  = "wallet"
 	stepCleanup = "cleanup"
 )
 
@@ -50,6 +51,7 @@ func plan() []Step {
 		{ID: stepSize, Title: "A long prompt is accepted", Status: Pending},
 		{ID: stepSticky, Title: "A conversation stays on one site", Status: Pending},
 		{ID: stepFleet, Title: "The cluster has the fleet's current entry routes", Status: Pending},
+		{ID: stepWallet, Title: "A spent wallet refuses the tenant", Status: Pending},
 		{ID: stepCleanup, Title: "The temporary tenant is removed", Status: Pending},
 	}
 }
@@ -123,6 +125,8 @@ func (t *test) steps() {
 		{stepSize, t.longPrompt, false},
 		{stepSticky, t.sticky, false},
 		{stepFleet, t.fleetRevision, false},
+		// Last: a closed wallet refuses the tenant from then on.
+		{stepWallet, t.wallet, false},
 	} {
 		t.set(step.id, Running, "")
 		status, detail := step.run()
