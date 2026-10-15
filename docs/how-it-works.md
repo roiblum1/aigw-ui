@@ -175,14 +175,18 @@ charged by its prompt tokens, the part of them that came from the prefix
 cache, and its output tokens, each at its own price.
 
 **How.** The server writes a cost expression from the three prices into the
-model's `QuotaPolicy`. The gateway evaluates it for every answered request
-and adds the result to the tenant's counter. Limits and counters are in
-credits of $0.00001.
+model's `QuotaPolicy`, the same on every cluster. The gateway evaluates it
+for every answered request and adds the result to the tenant's counter.
+Limits and counters are in credits of $0.00001.
 
 **Why.**
 
 - **The gateway computes the cost**, so no request passes through the hub
   and nothing has to be reconciled later.
+- **One price per model, not per GPU or site**, so a budget is never tied to
+  a cluster and a tenant pays the same wherever the entry route sends it.
+  The prices are set by hand; GPU costs on the Capacity page only check
+  them.
 - **Prices start at 00:00 UTC** because a counter does not know what its
   amounts were charged at. At that moment every window starts from zero.
 - **A model starts in dry-run** because its limits were converted from

@@ -7,7 +7,8 @@ The **Capacity** page answers, for each model:
 - How much can the model therefore be given a day, in dollars or tokens?
 - How much of that do the tenants' budgets take, and how far could they
   go?
-- Which one set of prices pays for its GPUs, and no more?
+- Optionally, with GPU costs: what do its GPUs cost, and which prices
+  would pay for them and no more?
 
 The figures come from measurements with
 [AIPerf](https://github.com/ai-dynamo/aiperf), NVIDIA's benchmark for model
@@ -42,13 +43,20 @@ pods, so the Job would have to go through the deployment's scheduler, which
 in this platform answers only on the gateway's peer listener with its client
 certificate. Until then such a shape is listed as not measured.
 
-## GPU prices
+## GPU costs (optional)
 
-**GPU prices** on the page holds what one GPU costs an hour, all in: the
+**GPU costs** on the page holds what one GPU costs an hour, all in: the
 hardware over its life (three or four years), power, cooling, rack, network
 and the people who run it. An instance costs its GPUs times this. The list
-shows every GPU the fleet's deployments run on; one without a price leaves
-the cost of its models out, and the page says so.
+shows every GPU the fleet's deployments run on.
+
+They are optional, and only this page uses them: for what the measured
+instances cost, what they are charged at the model's prices as a multiple of
+that, and prices that would pay for them. Nothing a tenant pays depends on
+them. A model has one price, set by hand on the Models page and the same on
+every site and GPU; see [charging by cost](pricing.md#setting-prices-by-hand).
+A model whose GPUs are costed in part gets a note, since its cost would
+leave some out; one with none costed shows the rest of the page as usual.
 
 ## How a measurement works
 
@@ -192,11 +200,13 @@ the overcommit limit once there is history.
 
 ## Budgets in dollars
 
-**How many dollars a model can be given a day.** At the break-even prices,
-what a model's ready GPUs serve a day at the expected busy share is worth
-exactly what those GPUs cost a day. So for a priced model, *can be given* is
-the GPUs' cost a day, without profit, and the overcommit limit says how far
-the budgets may go past it.
+**How many dollars a model can be given a day.** For a priced model, *can
+be given* is what its measured instances serve a day at the expected busy
+share, charged at the model's prices. It is in the same dollars as the
+budgets whatever the prices are, set by hand or not, so the comparison holds
+without GPU costs. The overcommit limit says how far the budgets may go past
+it. At the break-even prices it is also exactly what the GPUs cost a day,
+without profit.
 
 The figures appear where budgets are decided:
 
@@ -211,11 +221,12 @@ The figures appear where budgets are decided:
 - **Task log**: a budget change says where the model stands after it, for
   example "glm budgets now $1,840 of $1,700 a day (1.08×, limit 1.5×)".
 
-**A model in tokens** has no dollars. **Use these prices**, next to the
-break-even prices on the Capacity page, opens the model's prices with them
-filled in. The prices then follow the rules in [pricing](pricing.md): they
-start at the next 00:00 UTC, the first prices convert the model's limits once,
-and the model starts in dry-run.
+**A model in tokens** has no dollars. Give it prices under **Prices** on
+the Models page, by hand; or, when its GPUs have a cost, **Use these
+prices** next to the break-even prices on the Capacity page opens the
+model's prices with them filled in. The prices then follow the rules in
+[pricing](pricing.md): they start at the next 00:00 UTC, the first prices
+convert the model's limits once, and the model starts in dry-run.
 
 **Busiest day in 30 days** is the most the model was used in one day,
 best-effort included, against what the measured instances serve busy all
@@ -230,10 +241,10 @@ actual use instead would raise the price in a quiet month, which makes
 tenants use less, which raises it again. Set it once, then review it every
 month or so against the average day shown beside it.
 
-**Cost and price.** With every measured shape's GPU priced:
+**Prices and cost.** With a cost for every measured shape's GPU:
 
 ```
-cost an hour        = sum over measured shapes of: GPUs per instance x GPU price x ready instances
+cost an hour        = sum over measured shapes of: GPUs per instance x GPU cost x ready instances
 input price per 1M  = cost an hour / (3,600 x weighted tokens a second x expected busy share) x 1,000,000
 weighted            = sum over measured shapes of: ready instances x
                       ((prompt - cached) + cached ratio x cached + output ratio x output)
@@ -276,7 +287,7 @@ and a table of every step. **Measurements** lists the earlier ones.
 | PUT | `/models/{id}/target-utilization` | `{"utilization"}` | 204. 0.05 to 1 |
 | PUT | `/models/{id}/overcommit-limit` | `{"limit"}` | 204. 1 to 10 |
 | GET | `/budgets` | | `{"models", "credits"}`: for each model `measured`, `capacity_day`, `ceiling_day`, `given_day`, `left_day`, `overcommit`, `overcommit_limit`, `short_windows`, `pool_day`, in its unit; `credits` adds them up over the measured models in dollars |
-| PUT | `/gpu-prices/{gpu}` | `{"usd_per_hour", "note"}` | 204 |
+| PUT | `/gpu-prices/{gpu}` | `{"usd_per_hour", "note"}` | 204. A GPU cost, shown as **GPU costs** on the page |
 | DELETE | `/gpu-prices/{gpu}` | | 204 |
 | GET | `/clusters/{id}/deployments/{namespace}/{name}/pods` | | The deployment's ready pods, read from the cluster |
 | GET | `/models/{id}/capacity-runs` | | The model's measurements, newest first |

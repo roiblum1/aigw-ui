@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.14.2](v0.14.2.md) | not released yet | Prices set by hand are the normal path: the Prices dialog shows the other models' prices beside the ones typed; GPU costs are optional and only check the prices |
 | [0.14.1](v0.14.1.md) | not released yet | Site weights of the entry route from the measurements, once every deployment of a model is measured; the annotation stays the fallback |
 | [0.14.0](v0.14.0.md) | not released yet | What is left to give: each model's budgets against what its GPUs serve a day and an overcommit limit, shown in the quota form, on the Capacity page and the Overview; hourly budgets at their daily maximum; the measured break-even prices in one click |
 | [0.13.2](v0.13.2.md) | not released yet | A cluster where the hub may not list pods or nodes says so, instead of showing GPUs as unlabelled |

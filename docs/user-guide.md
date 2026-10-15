@@ -250,12 +250,16 @@ refused. The **Budgets** card on the Overview shows every model. See
 [capacity](capacity.md#budgets-in-dollars).
 
 **Prices.** **Prices** in a model's row sets what a million tokens of the
-model cost: input, cached input and output. The model's quotas and usage
-are then shown and entered in dollars, and a prompt answered from the
-prefix cache costs less. Prices start at the next 00:00 UTC, and the model
-starts in dry-run: counted, nobody refused. A model with prices shows
-**priced**, and **dry-run** while that is on. See
-[charging by cost](pricing.md).
+model cost: input, cached input and output. One price for the model, the
+same on every site and GPU. Set them by hand so that the models compare as
+you want, a bigger model dearer; the dialog lists the other models' prices
+next to the ones being typed. The model's quotas and usage are then shown
+and entered in dollars, and a prompt answered from the prefix cache costs
+less. Prices start at the next 00:00 UTC, and the model starts in dry-run:
+counted, nobody refused. A model with prices shows its input price, and
+**dry-run** while that is on. See [charging by cost](pricing.md); the
+Capacity page can check the prices against what the GPUs cost, which is
+optional.
 
 ## Letting tenants use what others leave unused
 

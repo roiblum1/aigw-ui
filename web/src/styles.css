@@ -558,6 +558,10 @@
   .modal.wide {
     width: min(840px, calc(100vw - 32px));
   }
+  /* A table in a form, before the next field. */
+  .table-wrap.compare {
+    margin-bottom: 14px;
+  }
   .modal::backdrop {
     background: rgb(8 10 17 / 0.55);
     backdrop-filter: blur(2px);

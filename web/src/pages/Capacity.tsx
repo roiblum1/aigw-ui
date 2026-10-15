@@ -52,7 +52,7 @@ export default function Capacity() {
   usePolling(reload, running ? 15_000 : 60_000);
   const [measuring, setMeasuring] = useState<{ m: CapacityModel; shape: string } | null>(null);
   const [history, setHistory] = useState<CapacityModel | null>(null);
-  const [pricing, setPricing] = useState(false);
+  const [costing, setCosting] = useState(false);
   const [pricesFor, setPricesFor] = useState<{ model: Model; suggested: CapacityPrices; note: string } | null>(null);
   const action = useAction();
 
@@ -77,30 +77,25 @@ export default function Capacity() {
       await reload();
     });
   };
-  const unpriced = data?.gpus.filter((g) => g.usd_per_hour == null && g.deployments > 0) ?? [];
 
   return (
     <section>
       <PageHeader
         title="Capacity"
-        subtitle="What each shape of a model serves at the latency you promise, what the model can therefore be given a day, how much of that the budgets take, and the prices that pay for its GPUs and no more."
+        subtitle="What each shape of a model serves at the latency you promise, what the model can therefore be given a day at its prices, and how much of that the budgets take. GPU costs are optional: they add what the GPUs cost and a price that would pay for them, to check the prices against."
       >
-        <button onClick={() => setPricing(true)}>GPU prices</button>
+        <button
+          onClick={() => setCosting(true)}
+          title="Optional. What each GPU costs an hour, used only on this page. Tenants pay the model's prices, the same on every site and GPU."
+        >
+          GPU costs
+        </button>
       </PageHeader>
       <ErrorBanner message={error || action.error} />
       {data && !data.image && (
         <div className="banner warn">
           No AIPerf image is set, so nothing can be measured. Set <span className="mono">capacity.image</span> in the
           chart to an image the clusters can pull; see the capacity guide under Docs.
-        </div>
-      )}
-      {unpriced.length > 0 && (
-        <div className="banner warn">
-          {unpriced.map((g) => g.gpu).join(", ")} {unpriced.length === 1 ? "has" : "have"} no price, so the cost of the
-          models on {unpriced.length === 1 ? "it" : "them"} is not worked out.{" "}
-          <button className="link" onClick={() => setPricing(true)}>
-            Set GPU prices
-          </button>
         </div>
       )}
       {dollarModels.length > 0 && (
@@ -128,7 +123,7 @@ export default function Capacity() {
       ))}
       {measuring && <MeasureForm m={measuring.m} shape={measuring.shape} onClose={() => setMeasuring(null)} onStarted={reload} />}
       {history && <RunHistory m={history} onClose={() => setHistory(null)} onChanged={reload} />}
-      {pricing && data && <GPUPrices gpus={data.gpus} onClose={() => setPricing(false)} onChanged={reload} />}
+      {costing && data && <GPUCosts gpus={data.gpus} onClose={() => setCosting(false)} onChanged={reload} />}
       {pricesFor && (
         <ModelPrices
           model={pricesFor.model}
@@ -399,9 +394,19 @@ function Summary({ plan, onUsePrices }: { plan: CapacityPlan; onUsePrices: () =>
       </div>
 
       <div className="panel">
-        <h3>Cost and price</h3>
+        <h3>Prices and cost</h3>
+        {plan.unit !== "credits" && (
+          <p className="detail">
+            The model has no prices, so its budgets are in tokens. Give it prices under{" "}
+            <span className="strong">Prices</span> on the Models page to count it in dollars with the others.
+          </p>
+        )}
         {plan.cost_per_hour == null ? (
-          <p className="detail">Set the price of every GPU the measured shapes run on to see what they cost.</p>
+          <p className="detail">
+            Optional: with a cost for its GPUs under <span className="strong">GPU costs</span>, this shows what the
+            measured instances cost a day and prices that would pay for them, to check the model's prices against.
+            Tenants pay the model's prices, the same on every site and GPU.
+          </p>
         ) : (
           <p className="detail">
             The measured instances cost {formatDollars(plan.cost_per_hour)} an hour,{" "}
@@ -410,19 +415,20 @@ function Summary({ plan, onUsePrices }: { plan: CapacityPlan; onUsePrices: () =>
         )}
         {plan.charged_per_hour != null && (
           <p className="detail">
-            Busy for an hour at the model's prices, they are charged {formatDollars(plan.charged_per_hour)}
-            {plan.cost_per_hour ? `: ${(plan.charged_per_hour / plan.cost_per_hour).toFixed(2)}× their cost` : ""}.
+            Busy for an hour at the model's prices, the measured instances are charged{" "}
+            {formatDollars(plan.charged_per_hour)}
+            {plan.cost_per_hour ? `: ${(plan.charged_per_hour / plan.cost_per_hour).toFixed(2)}× what they cost` : ""}.
           </p>
         )}
         {plan.break_even && (
           <p className="detail">
-            One set of prices that pays for them at {percent(plan.utilization)} busy, per 1M tokens:{" "}
+            Prices that would pay for them at {percent(plan.utilization)} busy, per 1M tokens:{" "}
             <span className="strong">
               {formatPrice(plan.break_even.price_input)} input, {formatPrice(plan.break_even.price_cached)} cached,{" "}
               {formatPrice(plan.break_even.price_output)} output
             </span>
-            . Tenants pay it whichever shape serves them, and at these prices what the GPUs serve a day at{" "}
-            {percent(plan.utilization)} busy is worth what they cost a day.{" "}
+            . At these, what the GPUs serve a day at {percent(plan.utilization)} busy is worth what they cost a day: a
+            check for the prices you set by hand, or a start.{" "}
             <button className="link" onClick={onUsePrices}>
               Use these prices
             </button>
@@ -672,7 +678,12 @@ function MeasureForm(props: { m: CapacityModel; shape: string; onClose: () => vo
   );
 }
 
-function GPUPrices(props: { gpus: CapacityGPU[]; onClose: () => void; onChanged: () => Promise<void> }) {
+/**
+ * What each GPU costs an hour. Optional: only this page uses it, for what the
+ * measured instances cost and the prices that would pay for them. A model's
+ * prices are its own, the same on every site and GPU.
+ */
+function GPUCosts(props: { gpus: CapacityGPU[]; onClose: () => void; onChanged: () => Promise<void> }) {
   const [rows, setRows] = useState(() => props.gpus.map((g) => ({ ...g, text: g.usd_per_hour == null ? "" : String(g.usd_per_hour) })));
   const [added, setAdded] = useState("");
   const action = useAction();
@@ -690,12 +701,17 @@ function GPUPrices(props: { gpus: CapacityGPU[]; onClose: () => void; onChanged:
       await props.onChanged();
     });
   return (
-    <Modal title="GPU prices" onClose={props.onClose} wide>
+    <Modal title="GPU costs" onClose={props.onClose} wide>
       <ErrorBanner message={action.error} />
       <p className="hint">
-        What one GPU costs an hour, all in: the hardware over its life, power, cooling, rack, network and the people who
-        run it. An instance costs its GPUs times this. The GPUs are read from the node label{" "}
+        Optional. What one GPU costs an hour, all in: the hardware over its life, power, cooling, rack, network and the
+        people who run it. An instance costs its GPUs times this. The GPUs are read from the node label{" "}
         <span className="mono">nvidia.com/gpu.product</span> of the model's pods.
+      </p>
+      <p className="hint">
+        Only the Capacity page uses these: for what each model's instances cost, and prices that would pay for them, to
+        check the prices you set against. Nothing a tenant pays depends on them. A model has one price, the same
+        whichever site or GPU serves the request, set under Prices on the Models page.
       </p>
       <div className="table-wrap">
         <table className="plain">
@@ -720,7 +736,7 @@ function GPUPrices(props: { gpus: CapacityGPU[]; onClose: () => void; onChanged:
                     max={1000}
                     step="any"
                     value={r.text}
-                    aria-label={`Price of ${r.gpu}`}
+                    aria-label={`Cost of ${r.gpu}`}
                     onChange={(e) => change(i, { text: e.target.value })}
                   />
                 </td>

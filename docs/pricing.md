@@ -47,10 +47,48 @@ the check it makes before the request. That is $0.00001.
 token and an output token at four times. The Prices dialog fills these in
 from the input price. Both can be changed.
 
-## Setting a price without profit
+## One price per model
 
-A price is the cost of an hour of GPU divided by what the GPU serves in
-that hour.
+A model has one set of prices, the same on every site and whichever GPU
+serves the request. The hub writes one cost expression per model and
+renders it to every cluster, so a tenant pays the same for the model
+whether the entry route sends its conversation to a B300 site or an H200
+one. A budget is never tied to a site: a tenant with $50 a day on a model
+can spend it wherever the model is served.
+
+## Setting prices by hand
+
+This is the usual way. How the models compare matters more than the
+amounts:
+
+- **A bigger model costs more.** A token of a large model takes more
+  hardware than a token of a small one, so it takes more of a tenant's
+  budget. For example, per million input tokens: GLM $10, Kimi $6, Qwen $1.
+  The Prices dialog lists the other models' prices next to the ones being
+  typed, dearest first, each as a multiple of the cheapest.
+- **The ratios steer the work.** A budget buys more of a cheaper model, so
+  a tenant has a reason to send easy work to a small one.
+- **The level.** Nobody is invoiced and the prices are not meant to earn.
+  Choose the level so that what tenants are expected to use in a day, at
+  these prices, adds up to about what the fleet costs a day. Or treat the
+  dollars as credits, a unit of budget, and only keep the ratios right.
+
+Prices are worth setting even though each model has its own budgets: they
+make a tenant's budget on one model comparable with another, which a router
+that picks the model per request needs.
+
+## Checking prices against the GPUs (optional)
+
+The [Capacity](capacity.md) page measures what each shape of a model
+serves. With a cost for each GPU under **GPU costs** there, it shows what
+the measured instances cost a day, what they are charged busy for an hour
+at the model's prices as a multiple of that cost, and prices that would pay
+for them exactly. Use them to check that your ratios are not far from what
+the hardware says, or as a start with **Use these prices**. Nothing a
+tenant pays depends on GPU costs.
+
+The arithmetic behind those prices: a price is the cost of an hour of GPU
+divided by what the GPU serves in that hour.
 
 1. **Cost per GPU-hour.** The yearly cost of the hardware (its price over
    three or four years, power, cooling, rack, network, licences, the
