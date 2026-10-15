@@ -1,18 +1,14 @@
 import { useState, type FormEvent } from "react";
 import { ArrowLeft, Copy, Plus, Users } from "lucide-react";
-import { api, type ApiKey, type SigningKeys, type Tenant, type Wallet } from "../api";
+import { api, type ApiKey, type SigningKeys, type Tenant } from "../api";
 import {
   Empty,
   ErrorBanner,
   Field,
   FormModal,
-  LimitInput,
   Modal,
   PageHeader,
-  formatAmount,
   formatTime,
-  limitText,
-  limitValue,
   useAction,
   useLoad,
   usePolling,
@@ -87,15 +83,7 @@ export default function Tenants() {
                       </span>
                     )}
                   </td>
-                  <td>
-                    {t.quota_count}
-                    {t.wallet && (
-                      <span className={t.wallet_closed_until ? "tag warn" : "tag"} title="A budget across every priced model">
-                        wallet {formatAmount(t.wallet.credits, "credits")}/{t.wallet.window === "1h" ? "hour" : "day"}
-                        {t.wallet_closed_until && " · spent"}
-                      </span>
-                    )}
-                  </td>
+                  <td>{t.quota_count}</td>
                   <td className="row-actions">
                     <button onClick={() => setOpenId(t.id)}>Manage</button>
                   </td>
@@ -167,97 +155,6 @@ function IdentityPanel(props: { signing: SigningKeys; tenants: Tenant[]; onChang
         </button>
       )}
     </section>
-  );
-}
-
-/** A tenant's wallet: what it may spend across every priced model, and what it spent. */
-function WalletSection(props: { tenant: Tenant; onChanged: () => void }) {
-  const { tenant } = props;
-  const now = useLoad(() => api.wallet(tenant.id));
-  const [editing, setEditing] = useState(false);
-  const w = now.data;
-  return (
-    <section className="card">
-      <h2>Wallet</h2>
-      <p className="hint">
-        One budget across every model with prices, per hour or per day: each request pays its model's price from it. The
-        tenant's quotas on priced models become caps inside it, and it gets a bucket equal to the wallet on each priced
-        model it has no cap on. When it is spent, the tenant is refused on every priced model until the window ends, or
-        served as best-effort where a model does that.
-      </p>
-      <ErrorBanner message={now.error} />
-      {tenant.wallet ? (
-        <p>
-          {formatAmount(tenant.wallet.credits, "credits")} per {tenant.wallet.window === "1h" ? "hour" : "day"}
-          {w && (
-            <>
-              {" "}
-              · spent {formatAmount(w.spent, "credits")} since {formatTime(w.start)}
-              {w.closed_until && <span className="tag warn">spent: refused until {formatTime(w.closed_until)}</span>}
-              {!w.enforced && <span className="tag warn" title="The hub needs Redis and the usage history to add wallets up">not enforced</span>}
-            </>
-          )}
-        </p>
-      ) : (
-        <p className="hint">No wallet: the tenant's quotas are budgets of their own.</p>
-      )}
-      {w && Object.keys(w.by_model).length > 0 && (
-        <p className="detail">
-          By model:{" "}
-          {Object.entries(w.by_model)
-            .map(([name, n]) => `${name} ${formatAmount(n, "credits")}`)
-            .join(", ")}
-          .
-        </p>
-      )}
-      <button onClick={() => setEditing(true)}>{tenant.wallet ? "Change wallet" : "Give a wallet"}</button>
-      {editing && (
-        <WalletForm
-          tenant={tenant}
-          onClose={() => setEditing(false)}
-          onSaved={() => {
-            props.onChanged();
-            now.reload();
-          }}
-        />
-      )}
-    </section>
-  );
-}
-
-function WalletForm(props: { tenant: Tenant; onClose: () => void; onSaved: () => void }) {
-  const current = props.tenant.wallet;
-  const [on, setOn] = useState(current !== null);
-  const [text, setText] = useState(current ? limitText(current.credits, "credits") : "");
-  const [window, setWindow] = useState<Wallet["window"]>(current?.window ?? "1d");
-  return (
-    <FormModal
-      title={`Wallet of ${props.tenant.slug}`}
-      submitLabel="Save"
-      onClose={props.onClose}
-      onSubmit={async () => {
-        await api.setWallet(props.tenant.id, on ? { credits: limitValue(text, "credits"), window } : null);
-        props.onSaved();
-      }}
-    >
-      <label className="check">
-        <input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} />
-        <span>A wallet across every priced model</span>
-      </label>
-      {on && (
-        <>
-          <Field label="Amount, in dollars">
-            <LimitInput unit="credits" value={text} onChange={setText} label="Wallet" autoFocus />
-          </Field>
-          <Field label="Per" hint="An hour starts on the hour, a day at 00:00 UTC.">
-            <select value={window} onChange={(e) => setWindow(e.target.value as Wallet["window"])}>
-              <option value="1h">hour</option>
-              <option value="1d">day</option>
-            </select>
-          </Field>
-        </>
-      )}
-    </FormModal>
   );
 }
 
@@ -428,8 +325,6 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
           </table>
         )}
       </section>
-
-      <WalletSection tenant={tenant} onChanged={reload} />
 
       <TenantQuotas
         tenant={tenant}

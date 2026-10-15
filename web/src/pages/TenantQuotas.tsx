@@ -207,14 +207,6 @@ export default function TenantQuotas(props: {
                 <tr key={q.id}>
                   <td className="strong">
                     {q.model_name}
-                    {q.wallet ? (
-                      <div className="detail" title="The hub keeps it equal to the wallet; setting a limit makes it a cap inside the wallet.">
-                        wallet bucket
-                      </div>
-                    ) : (
-                      props.tenant.wallet &&
-                      q.unit === "credits" && <div className="detail">cap inside the wallet</div>
-                    )}
                     <StandardNote model={props.models.find((m) => m.id === q.model_id)} short />
                   </td>
                   <td>

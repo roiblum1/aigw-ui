@@ -29,15 +29,6 @@ type Server struct {
 	// tenantPage lets tenants sign in with an API key to see their own usage.
 	tenantPage  bool
 	keyFailures keyFailures
-	// wallets is set when the hub enforces wallets: it adds them up from
-	// the usage history, which needs Redis.
-	wallets bool
-}
-
-// WithWallets says whether the hub enforces wallets.
-func (s *Server) WithWallets(on bool) *Server {
-	s.wallets = on
-	return s
 }
 
 // New builds the API. usage may be nil, which turns usage monitoring off.
@@ -109,8 +100,6 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("DELETE /api/v1/tenants/{id}", s.deleteTenant)
 	api.HandleFunc("POST /api/v1/tenants/{id}/keys", s.createKey)
 	api.HandleFunc("DELETE /api/v1/keys/{id}", s.revokeKey)
-	api.HandleFunc("PUT /api/v1/tenants/{id}/wallet", s.setWallet)
-	api.HandleFunc("GET /api/v1/tenants/{id}/wallet", s.getWallet)
 	api.HandleFunc("GET /api/v1/signing-keys", s.signingKeys)
 	api.HandleFunc("POST /api/v1/signing-keys/rotate", s.rotateSigningKey)
 	api.HandleFunc("PUT /api/v1/tenants/{id}/quotas", s.upsertQuota)

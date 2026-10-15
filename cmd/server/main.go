@@ -21,7 +21,6 @@ import (
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/syncer"
 	"aigw-ui/internal/usage"
-	"aigw-ui/internal/wallet"
 )
 
 func main() {
@@ -77,16 +76,11 @@ func run() error {
 	// Moving tenants to best-effort needs the counters, so it runs only
 	// with Redis. Without it a spent budget is refused, as before.
 	var overageService *overage.Service
-	// Wallets are added up from the usage history, so they are enforced
-	// only with it.
-	wallets := false
 	if usageService != nil {
 		overageService = overage.New(st, usageService, sy, cfg.OverageEvery, cfg.OverageThreshold)
 		go overageService.Run(ctx)
 		if cfg.HistoryEvery > 0 {
 			go history.New(st, usageService, cfg.HistoryEvery).Run(ctx)
-			go wallet.New(st, sy, cfg.OverageEvery).Run(ctx)
-			wallets = true
 		}
 	}
 
@@ -102,7 +96,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService, overageService), bench, cfg.AdminToken, cfg.UIDir, cfg.TenantPage).WithWallets(wallets).Handler(),
+		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService, overageService), bench, cfg.AdminToken, cfg.UIDir, cfg.TenantPage).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

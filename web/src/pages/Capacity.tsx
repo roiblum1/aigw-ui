@@ -741,8 +741,7 @@ function FleetPanel({ b, onSplit }: { b: Budgets; onSplit: () => void }) {
       <p>
         The fleet serves <span className="strong">{formatDollars(f.value_day)}</span> a day at the models' prices.{" "}
         <span className="strong">{formatDollars(f.can_be_given_day)}</span> can be given, up to{" "}
-        {formatDollars(f.ceiling_day)} with overcommit. {formatDollars(f.given_day)} is given
-        {f.wallets_day > 0 && `, ${formatDollars(f.wallets_day)} of it in wallets`}.{" "}
+        {formatDollars(f.ceiling_day)} with overcommit. {formatDollars(f.given_day)} is given.{" "}
         <LeftToGive left={f.left_day} format={formatDollars} />.{" "}
         <button className="link" onClick={onSplit} disabled={f.left_day <= 0}>
           Split what is left
@@ -801,7 +800,7 @@ function SplitForm(props: { b: Budgets; onClose: () => void; onApplied: () => Pr
       <ErrorBanner message={action.error || tenants.error} />
       <p className="hint">
         Equal daily budgets on one model, out of what is left to give on it and in the fleet. Nothing changes until you
-        apply it. Splitting into wallets comes with the wallets.
+        apply it.
       </p>
       <div className="grid-2">
         <Field label="Model">

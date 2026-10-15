@@ -1,5 +1,7 @@
 # Capacity, prices and wallets: the target design
 
+> **Wallets were removed in 0.21.0.** They were built in 0.20.0 (step 5c) and taken out at the owner's request: a tenant's budgets are per model only, as before. The wallet sections below are kept as the record of what was designed and built.
+
 ## Summary
 
 **Price belongs to the model; capacity belongs to the LLMI.** GLM 5.3 costs the same per million tokens on every site and GPU. What differs between the B300 deployment and the 8×H100 one is only how many of those dollars a second one instance serves.
@@ -9,7 +11,7 @@ Up to 0.12.3, aigw-ui does dynamic token management and routing between sites. T
 1. **Measure.** Every LLMInferenceService (LLMI) is benchmarked with one versioned profile, isolated from users when possible.
 2. **Price.** Every model has one price, by default its OpenRouter price, so a dollar means "what this traffic would cost on OpenRouter".
 3. **Plan.** The hub turns measurements and prices into dollars a day the fleet can give, what is given, what is left, and which model runs out first.
-4. **Wallets.** A tenant can get one budget per hour or per day across all models, with optional per-model caps inside it.
+4. **Wallets.** A tenant can get one budget per hour or per day across all models, with optional per-model caps inside it. *Removed in 0.21.0.*
 
 The starting point is main at 0.14.2: measurements keyed by shape, "can be given / ceiling / left" per model (0.14.0), site weights from measurements (0.14.1), prices by hand with optional GPU costs (0.14.2). This design keeps those features, re-keys measurements from shape to LLMI, defaults prices to the market, and adds the fleet view and wallets.
 
@@ -268,7 +270,7 @@ An Overview card: yesterday's spend is what the same traffic would have cost on 
 `GET /api/v1/budgets` gains:
 
 - per model: `value_per_second` (*R*), `peak_hour_share` (*ρ*), and `llmis[]` with cluster, namespace, name, ready, `value_per_second` (*r*), measured at, profile version, mode (`drained` or `live`), stale;
-- a top-level `fleet`: `value_day`, `can_be_given_day`, `ceiling_day`, `given_day`, `wallets_day`, `left_day`, `suggested_overcommit`.
+- a top-level `fleet`: `value_day`, `can_be_given_day`, `ceiling_day`, `given_day`, `left_day`, `suggested_overcommit` (`wallets_day` too, from 0.20.0 until 0.21.0).
 
 A portal, and later the semantic router, reads these instead of computing them.
 
@@ -362,6 +364,8 @@ As in "Wallets" below, with the tenant header `x-aigw-tenant` from the token, an
 - **Wallet buckets** are quota rows the hub keeps (`quotas.wallet`), equal to the wallet, one per wallet tenant on each priced model it has no cap on; a quota set by hand on that model is a cap and stays one. They keep the per-model counters, and bound the tenant on each model while the hub is down.
 - **Not yet checked on a real gateway**: that the authorization rule sees `x-ai-eg-model`. The AI gateway sets it in its filter, which comes before the authorization filter in the lab's filter chain, but the lab login expired before the rule could be applied there. The self-test step "A spent wallet refuses the tenant" checks it for 403 on any gateway.
 
+*Removed (0.21.0):* the self-test's wallet step passed on the lab (403 thirty seconds after the wallet was set), and wallets were then removed at the owner's request: one budget across models did not match how the company hands out budgets. Migration 024 drops `wallet_closures`, `quotas.wallet` and the tenants' wallet columns. A wallet bucket stays as the tenant's budget on its model, of the same amount and window, so no gateway limit changes when the hub is upgraded; the planner, the tenant pages and the self-test count per-model budgets only.
+
 ## Wallets
 
 A wallet is one budget for a tenant across all priced models, per hour or per day. Per-model budgets stay; for a tenant with a wallet they become caps inside it. The tenant, or later the semantic router, picks the model per request and pays that model's price from the same wallet.
@@ -441,7 +445,7 @@ Five steps, one pull request each after the lab checks; step 3 can run beside st
 ## Rules every pull request keeps
 
 - **The hub is a control plane.** No prompt passes through code written for this platform. The Lua filter for wallets sees headers only; the measurement Job makes up its own prompts and the hub reads only numbers.
-- **Budgets hold while the hub is down.** Gateway enforcement keeps that true; the hub fallback for wallets is the one documented exception.
+- **Budgets hold while the hub is down.** Gateway enforcement keeps that true; the hub fallback for wallets was the one documented exception, until wallets were removed in 0.21.0.
 - **Nothing changes a price or a budget by itself.** Market moves, overcommit suggestions and Split are shown and applied by hand.
 - **One profile version at a time.** Figures from different profile versions are never added together.
 - **Release notes say what was tested and what was not**, as every note since 0.7 does, with a migration for any database change and the guides updated: `capacity.md`, `pricing.md`, `how-it-works.md`, `api.md`.

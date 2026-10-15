@@ -74,21 +74,19 @@ func tenants() []Tenant {
 	return []Tenant{
 		// $300 a day on GLM and $5 an hour on Qwen: 30,000,000 + 24 × 500,000 = 42,000,000.
 		{ID: "t1", Budgets: []Budget{{ModelID: "glm", Limit: 30_000_000, Window: "1d"}, {ModelID: "qwen", Limit: 500_000, Window: "1h"}}},
-		// A wallet of $10 an hour: 24,000,000; its $3 cap on GLM is inside it, not added.
-		{ID: "t2", Wallet: &Budget{Limit: 1_000_000, Window: "1h"}, Budgets: []Budget{{ModelID: "glm", Limit: 300_000, Window: "1d"}}},
-		// A wallet of $100 a day: 10,000,000.
-		{ID: "t3", Wallet: &Budget{Limit: 10_000_000, Window: "1d"}},
+		// $3 a day on GLM: 300,000.
+		{ID: "t2", Budgets: []Budget{{ModelID: "glm", Limit: 300_000, Window: "1d"}}},
+		// $100 a day on Qwen: 10,000,000.
+		{ID: "t3", Budgets: []Budget{{ModelID: "qwen", Limit: 10_000_000, Window: "1d"}}},
 	}
 }
 
 func TestGiven(t *testing.T) {
 	ts := tenants()
-	if ts[0].Given() != 42_000_000 || ts[1].Given() != 24_000_000 || ts[2].Given() != 10_000_000 {
+	if ts[0].Given() != 42_000_000 || ts[1].Given() != 300_000 || ts[2].Given() != 10_000_000 {
 		t.Fatalf("given %d %d %d", ts[0].Given(), ts[1].Given(), ts[2].Given())
 	}
-	// On a model, only tenants without a wallet: the wallet tenant picks the
-	// model per request.
-	if GivenOn(ts, "glm") != 30_000_000 || GivenOn(ts, "qwen") != 12_000_000 {
+	if GivenOn(ts, "glm") != 30_300_000 || GivenOn(ts, "qwen") != 22_000_000 {
 		t.Fatalf("given on glm %d, qwen %d", GivenOn(ts, "glm"), GivenOn(ts, "qwen"))
 	}
 }
@@ -96,22 +94,22 @@ func TestGiven(t *testing.T) {
 func TestPlanFleet(t *testing.T) {
 	g, _ := PlanModel(glm())
 	q, _ := PlanModel(qwen())
-	f := PlanFleet([]Plan{g, q}, tenants(), History{Days: 20, BusiestDay: 38_000_000})
+	f := PlanFleet([]Plan{g, q}, tenants(), History{Days: 20, BusiestDay: 26_150_000})
 	// V = 86,400 × (2,180 + 616) = 241,574,400.
 	// Can be given 113,011,200 + 26,611,200 = 139,622,400; ceiling 169,516,800 + 53,222,400 = 222,739,200.
-	// Given 42,000,000 + 24,000,000 + 10,000,000 = 76,000,000, of it wallets 34,000,000; left 146,739,200.
-	// s = 38,000,000 / 76,000,000 = 0.5, so k = 1/s = 2.
-	if f.ValueDay != 241_574_400 || f.CanBeGivenDay != 139_622_400 || f.CeilingDay != 222_739_200 || f.GivenDay != 76_000_000 ||
-		f.WalletsDay != 34_000_000 || f.LeftDay != 146_739_200 || f.SuggestedOvercommit == nil || !near(*f.SuggestedOvercommit, 2) {
+	// Given 42,000,000 + 300,000 + 10,000,000 = 52,300,000; left 170,439,200.
+	// s = 26,150,000 / 52,300,000 = 0.5, so k = 1/s = 2.
+	if f.ValueDay != 241_574_400 || f.CanBeGivenDay != 139_622_400 || f.CeilingDay != 222_739_200 || f.GivenDay != 52_300_000 ||
+		f.LeftDay != 170_439_200 || f.SuggestedOvercommit == nil || !near(*f.SuggestedOvercommit, 2) {
 		t.Fatalf("fleet = %+v", f)
 	}
 	for _, tc := range []struct {
 		h    History
 		want *float64
 	}{
-		{History{Days: 13, BusiestDay: 38_000_000}, nil},     // less than two weeks
-		{History{Days: 30, BusiestDay: 1_000_000}, ptr(5)},   // 1/s = 76: at most 5
-		{History{Days: 30, BusiestDay: 152_000_000}, ptr(1)}, // 1/s = 0.5: at least 1
+		{History{Days: 13, BusiestDay: 26_150_000}, nil},     // less than two weeks
+		{History{Days: 30, BusiestDay: 1_000_000}, ptr(5)},   // 1/s = 52.3: at most 5
+		{History{Days: 30, BusiestDay: 104_600_000}, ptr(1)}, // 1/s = 0.5: at least 1
 		{History{Days: 30}, nil},                             // nothing spent
 	} {
 		got := PlanFleet([]Plan{g, q}, tenants(), tc.h).SuggestedOvercommit
@@ -135,14 +133,14 @@ func TestByPeak(t *testing.T) {
 
 func TestSplit(t *testing.T) {
 	// 100,000,001 credits among three: 33,333,333 each, the odd credit kept.
-	got := Split(100_000_001, []string{"a", "b", "c"}, "")
-	if len(got) != 3 || got[0].Amount != 33_333_333 || got[2].TenantID != "c" || got[0].ModelID != "" {
+	got := Split(100_000_001, []string{"a", "b", "c"}, "glm")
+	if len(got) != 3 || got[0].Amount != 33_333_333 || got[2].TenantID != "c" || got[0].ModelID != "glm" {
 		t.Fatalf("split = %+v", got)
 	}
-	if got := Split(9, []string{"a", "b"}, "glm"); got[1].Amount != 4 || got[1].ModelID != "glm" {
-		t.Fatalf("on glm = %+v", got)
+	if got := Split(9, []string{"a", "b"}, "glm"); got[1].Amount != 4 {
+		t.Fatalf("9 among two = %+v", got)
 	}
-	if got := Split(10, nil, ""); got == nil || len(got) != 0 {
+	if got := Split(10, nil, "glm"); got == nil || len(got) != 0 {
 		t.Fatalf("nobody = %#v", got)
 	}
 }

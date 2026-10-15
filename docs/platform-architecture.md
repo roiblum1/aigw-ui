@@ -23,7 +23,8 @@ is the target design of the work after 0.14.2: every LLMInferenceService
 measured with one versioned benchmark profile, one price per model from the
 OpenRouter market by default, a budget planner that says how many dollars a
 day are left to give and which model runs out first, and wallets: one budget
-per tenant across all priced models. Each pull request of that work refers
+per tenant across all priced models (built in 0.20.0 and removed in 0.21.0: a
+tenant's budgets are per model). Each pull request of that work refers
 to it, and updates it wherever the code or the clusters turn out different.
 
 ## The page is a target design

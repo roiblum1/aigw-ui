@@ -448,8 +448,8 @@ R_m            = sum over its LLMIs of: ready instances x r_i
 can be given   = 86,400 x busy share x R_m
 ceiling        = can be given x overcommit limit
 V              = 86,400 x the sum of every priced model's R_m
-given          = what every tenant can spend in a day: its wallet at its daily maximum,
-                 or the sum of its budgets at theirs
+given          = what every tenant can spend in a day: the sum of its budgets,
+                 each at its daily maximum
 left           = sum of the ceilings - given
 ```
 
@@ -513,7 +513,7 @@ saturated.
 | PUT | `/benchmark-profile` | `{"name", "workload", "slo", "sweep", "note"}` | The new version, now active |
 | PUT | `/models/{id}/target-utilization` | `{"utilization"}` | 204. 0.05 to 1 |
 | PUT | `/models/{id}/overcommit-limit` | `{"limit"}` | 204. 1 to 10 |
-| GET | `/budgets` | | `{"models", "credits", "fleet", "by_peak", "market"}`. For each model `measured`, `capacity_day`, `ceiling_day`, `given_day`, `left_day`, `overcommit`, `overcommit_limit`, `short_windows`, `pool_day`, in its unit, and for a priced model `value_per_second` (*R*, credits a second), `peak_hour_share`, `saturated` and `llmis` (each with `ready`, `value_per_second`, `measured_at`, `profile_version`, `mode`, `stale`); `credits` adds them up over the measured models in dollars; `fleet` has `value_day`, `can_be_given_day`, `ceiling_day`, `given_day`, `wallets_day`, `left_day`, `suggested_overcommit`; `by_peak` the priced models by their busiest hour; `market` `yesterday_spend`, `cost_day`, `cost_partial` |
+| GET | `/budgets` | | `{"models", "credits", "fleet", "by_peak", "market"}`. For each model `measured`, `capacity_day`, `ceiling_day`, `given_day`, `left_day`, `overcommit`, `overcommit_limit`, `short_windows`, `pool_day`, in its unit, and for a priced model `value_per_second` (*R*, credits a second), `peak_hour_share`, `saturated` and `llmis` (each with `ready`, `value_per_second`, `measured_at`, `profile_version`, `mode`, `stale`); `credits` adds them up over the measured models in dollars; `fleet` has `value_day`, `can_be_given_day`, `ceiling_day`, `given_day`, `left_day`, `suggested_overcommit`; `by_peak` the priced models by their busiest hour; `market` `yesterday_spend`, `cost_day`, `cost_partial` |
 | POST | `/budgets/split` | `{"amount", "tenant_ids", "model_id"}` | `{"proposals"}`: equal daily budgets in credits. 400 above what is left on the model or in the fleet. Changes nothing |
 | PUT | `/gpu-prices/{gpu}` | `{"usd_per_hour", "note"}` | 204. A GPU cost, shown as **GPU costs** on the page |
 | DELETE | `/gpu-prices/{gpu}` | | 204 |

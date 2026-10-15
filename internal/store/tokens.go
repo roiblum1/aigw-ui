@@ -216,15 +216,11 @@ func (s *Store) DeniedTokens(ctx context.Context) ([]string, error) {
 // cluster: API keys until the hub signs its first token, then API keys and
 // tokens while any enabled tenant has an API key left, then tokens only.
 func (s *Store) Identity(ctx context.Context) (render.Identity, error) {
-	closed, err := s.closedWallets(ctx)
-	if err != nil {
-		return render.Identity{}, err
-	}
 	keys, err := s.ListSigningKeys(ctx)
 	if err != nil || len(keys) == 0 {
-		return render.Identity{Mode: render.IdentityKeys, Closed: closed}, err
+		return render.Identity{Mode: render.IdentityKeys}, err
 	}
-	id := render.Identity{Issuer: s.tokens.Issuer, Audience: s.tokens.Audience, JWKS: token.JWKS(GatewayKeys(keys)), Closed: closed}
+	id := render.Identity{Issuer: s.tokens.Issuer, Audience: s.tokens.Audience, JWKS: token.JWKS(GatewayKeys(keys))}
 	if id.Mode, err = s.IdentityMode(ctx); err != nil {
 		return id, err
 	}
