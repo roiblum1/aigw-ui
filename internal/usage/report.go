@@ -86,11 +86,26 @@ type Pool struct {
 	DryRun bool `json:"dry_run,omitempty"`
 }
 
+// Budget is the usage of one tenant's budget across models in the current
+// window, in credits. It is counted by the gateways' global rate limit
+// services, in one key per gateway namespace.
+type Budget struct {
+	TenantID   string    `json:"tenant_id"`
+	TenantSlug string    `json:"tenant_slug"`
+	Limit      int64     `json:"limit"`
+	Window     string    `json:"window"`
+	Used       int64     `json:"used"`
+	ResetsAt   time.Time `json:"resets_at"`
+	Counters   []Counter `json:"counters"`
+}
+
 type Report struct {
 	At     time.Time `json:"at"`
 	Quotas []Quota   `json:"quotas"`
 	// Pools is empty when the report is for one tenant.
 	Pools []Pool `json:"pools"`
+	// Budgets are the tenants' budgets across models.
+	Budgets []Budget `json:"budgets"`
 	// Hint explains an empty result when it can.
 	Hint string `json:"hint,omitempty"`
 }
@@ -130,13 +145,18 @@ func (s *Service) Report(ctx context.Context, tenantID string) (Report, error) {
 // window that ended stay in Redis for a while, which is how the last usage
 // of a window is still read after it.
 func (s *Service) ReportAt(ctx context.Context, tenantID string, now time.Time) (Report, error) {
-	rep := Report{At: now.UTC(), Quotas: []Quota{}, Pools: []Pool{}}
-	buckets, err := s.buckets(ctx, now, tenantID)
+	rep := Report{At: now.UTC(), Quotas: []Quota{}, Pools: []Pool{}, Budgets: []Budget{}}
+	buckets, budgets, err := s.buckets(ctx, now, tenantID)
 	if err != nil {
 		return rep, err
 	}
 	var keys []string
 	for _, b := range buckets {
+		for _, k := range b.keys {
+			keys = append(keys, k.redis)
+		}
+	}
+	for _, b := range budgets {
 		for _, k := range b.keys {
 			keys = append(keys, k.redis)
 		}
@@ -180,6 +200,19 @@ func (s *Service) ReportAt(ctx context.Context, tenantID string, now time.Time) 
 		}
 		rep.Quotas = append(rep.Quotas, q)
 	}
+	for _, b := range budgets {
+		var used int64
+		counters := make([]Counter, 0, len(b.keys))
+		for _, k := range b.keys {
+			counters = append(counters, Counter{Backend: k.backend, Clusters: k.clusters, Used: values[k.redis]})
+			used = max(used, values[k.redis])
+		}
+		rep.Budgets = append(rep.Budgets, Budget{
+			TenantID: b.tenantID, TenantSlug: b.tenantSlug, Limit: b.limit, Window: b.window,
+			Used: used, ResetsAt: render.WindowEnd(b.window, now), Counters: counters,
+		})
+	}
+	sort.Slice(rep.Budgets, func(i, j int) bool { return rep.Budgets[i].TenantSlug < rep.Budgets[j].TenantSlug })
 	sort.Slice(rep.Pools, func(i, j int) bool { return rep.Pools[i].ModelName < rep.Pools[j].ModelName })
 	sort.Slice(rep.Quotas, func(i, j int) bool {
 		a, b := rep.Quotas[i], rep.Quotas[j]
@@ -230,7 +263,7 @@ func (s *Service) Reset(ctx context.Context, tenantID, modelID string) (ResetRes
 	if !s.rd.AllowReset {
 		return ResetResult{}, ErrResetDisabled
 	}
-	buckets, err := s.buckets(ctx, time.Now(), tenantID)
+	buckets, _, err := s.buckets(ctx, time.Now(), tenantID)
 	if err != nil {
 		return ResetResult{}, err
 	}

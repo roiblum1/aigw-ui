@@ -89,6 +89,9 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 	}, `SELECT slug FROM tenants WHERE enabled ORDER BY slug`); err != nil {
 		return st, err
 	}
+	if err := s.addTenantBudgets(ctx, &st); err != nil {
+		return st, err
+	}
 
 	rows, err = s.db.Query(ctx,
 		`SELECT q.model_id, t.slug, q.slot, q.token_limit, q.window_size, q.shadow
@@ -141,10 +144,51 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 // token sets and a request with an API key has none. Until then the model
 // keeps its rules per tenant (StandardHeld).
 func renderedStandard(st render.State, std *Standard) *render.Budget {
-	if std == nil || !st.AuthEnabled || st.Identity.Mode != render.IdentityTokens {
+	if std == nil || !tokensOnly(st) {
 		return nil
 	}
 	return &render.Budget{Limit: std.Limit, Window: std.Window}
+}
+
+// tokensOnly reports whether the gateway reads the tenant header a token
+// sets, which the budgets across models, the models a tenant may call and
+// a model's standard are enforced through.
+func tokensOnly(st render.State) bool {
+	return st.AuthEnabled && st.Identity.Mode == render.IdentityTokens
+}
+
+// addTenantBudgets gives the state the enabled tenants' budgets across
+// models and the models each restricted tenant may call, by model name.
+// Neither is given until the gateway takes tokens only (BudgetHeld).
+func (s *Store) addTenantBudgets(ctx context.Context, st *render.State) error {
+	if !tokensOnly(*st) {
+		return nil
+	}
+	rows, err := s.db.Query(ctx,
+		`SELECT t.slug, t.budget_credits, t.budget_window, t.restricted,
+		        (SELECT coalesce(array_agg(m.name ORDER BY m.name), '{}') FROM tenant_models tm JOIN models m ON m.id = tm.model_id WHERE tm.tenant_id = t.id)
+		 FROM tenants t WHERE t.enabled AND (t.budget_credits IS NOT NULL OR t.restricted) ORDER BY t.slug`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var slug string
+		var credits *int64
+		var window *string
+		var restricted bool
+		var models []string
+		if err := rows.Scan(&slug, &credits, &window, &restricted, &models); err != nil {
+			return err
+		}
+		if credits != nil && window != nil {
+			st.Budgets = append(st.Budgets, render.TenantBudget{TenantSlug: slug, Limit: *credits, Window: *window})
+		}
+		if restricted {
+			st.Restricted = append(st.Restricted, render.TenantModels{TenantSlug: slug, Models: models})
+		}
+	}
+	return rows.Err()
 }
 
 // Reasons an entry route is left as it is on the clusters.
@@ -280,6 +324,7 @@ func (s *Store) addPrices(ctx context.Context, st *render.State, index map[strin
 	for id, p := range prices.current {
 		if i, ok := index[id]; ok {
 			st.Models[i].CostExpression = p.Render().Expression()
+			st.Models[i].Priced = true
 		}
 	}
 	for _, id := range dryRun {

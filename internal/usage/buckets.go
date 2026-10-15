@@ -33,21 +33,32 @@ type key struct {
 	overage        bool
 }
 
-// buckets works out, from the desired state of every cluster, which quotas
-// and pools exist and which Redis keys hold their usage in the window that
-// contains now. tenantID limits it to the quotas of one tenant.
-func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) ([]*bucket, error) {
+// budgetBucket is a tenant's budget across models being put together: what
+// is known from Postgres, and the Redis keys that hold its usage, one per
+// gateway namespace since every cluster with the same namespace renders the
+// same policy and counts in the same key.
+type budgetBucket struct {
+	tenantID, tenantSlug string
+	limit                int64
+	window               string
+	keys                 []*key
+}
+
+// buckets works out, from the desired state of every cluster, which quotas,
+// pools and budgets across models exist and which Redis keys hold their
+// usage in the window that contains now. tenantID limits it to one tenant.
+func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) ([]*bucket, []*budgetBucket, error) {
 	clusters, err := s.st.ListClusters(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	models, err := s.st.ListModels(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tenants, err := s.st.ListTenants(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	modelBySlug := make(map[string]store.Model, len(models))
 	for _, m := range models {
@@ -62,10 +73,32 @@ func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) (
 	byID := map[bucketID]*bucket{}
 	byRedisKey := map[string]*key{}
 	var out []*bucket
+	budgetBySlug := map[string]*budgetBucket{}
+	var budgets []*budgetBucket
 	for _, c := range clusters {
 		state, err := s.st.RenderStateWithoutKeys(ctx, c.ID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		for _, ct := range render.BudgetCounters(state) {
+			id := tenantIDBySlug[ct.TenantSlug]
+			if id == "" || (tenantID != "" && tenantID != id) {
+				continue
+			}
+			b := budgetBySlug[ct.TenantSlug]
+			if b == nil {
+				b = &budgetBucket{tenantID: id, tenantSlug: ct.TenantSlug, limit: ct.Limit, window: ct.Window}
+				budgetBySlug[ct.TenantSlug] = b
+				budgets = append(budgets, b)
+			}
+			redisKey := ct.RedisKey(s.rd.Prefix, now)
+			k := byRedisKey[redisKey]
+			if k == nil {
+				k = &key{backend: state.Namespace + "/" + render.BudgetPolicyName, redis: redisKey}
+				byRedisKey[redisKey] = k
+				b.keys = append(b.keys, k)
+			}
+			k.clusters = append(k.clusters, c.Name)
 		}
 		for _, ct := range render.Counters(state) {
 			model, ok := modelBySlug[ct.ModelSlug]
@@ -105,7 +138,7 @@ func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) (
 			k.clusters = append(k.clusters, c.Name)
 		}
 	}
-	return out, nil
+	return out, budgets, nil
 }
 
 // StandardUsed is what the model's standard counted for the tenant slug in

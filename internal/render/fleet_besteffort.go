@@ -51,7 +51,7 @@ func objectiveHeader(objective string) map[string]any {
 func fleetOverageRoute(s State, m Model, tenants []string) *unstructured.Unstructured {
 	name := BestEffortName(m.Slug)
 	u := modelRoute(s.Namespace, name, m)
-	u.Object["spec"] = map[string]any{
+	u.Object["spec"] = routeSpec(m, map[string]any{
 		"parentRefs": []any{fleetParent(s)},
 		"rules": []any{
 			map[string]any{
@@ -68,7 +68,7 @@ func fleetOverageRoute(s State, m Model, tenants []string) *unstructured.Unstruc
 				"timeouts": map[string]any{"request": fleetRequestTimeout},
 			},
 		},
-	}
+	})
 	return u
 }
 

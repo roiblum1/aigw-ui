@@ -70,8 +70,13 @@ func quotaPolicies(s State, m Model) []*unstructured.Unstructured {
 		if len(m.Existing) > 0 {
 			// Some of these backends belong to routes of the cluster's own.
 			// The sync copies the revision to those routes before it writes
-			// the policy, so that they are built again with the new rules.
-			p.SetAnnotations(map[string]string{QuotaRevisionAnnotation: quotaRevision(m)})
+			// the policy, so that they are built again with the new rules,
+			// and puts the cost in credits on them, for the budgets.
+			annotations := map[string]string{QuotaRevisionAnnotation: quotaRevision(m)}
+			if m.Priced && m.CostExpression != "" {
+				annotations[CreditsAnnotation] = m.CostExpression
+			}
+			p.SetAnnotations(annotations)
 		}
 		out = append(out, p)
 	}

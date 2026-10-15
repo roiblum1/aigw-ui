@@ -48,9 +48,19 @@ func Chat(ctx context.Context, baseURL, key, model string) (ChatResult, error) {
 
 // ChatWith is Chat with extra request headers.
 func ChatWith(ctx context.Context, baseURL, key, model string, headers map[string]string) (ChatResult, error) {
+	return chat(ctx, baseURL, key, model, testPrompt, headers)
+}
+
+// ChatLong is Chat with a prompt several times as long, for a check that
+// needs a request to cost at least a credit at a model's prices.
+func ChatLong(ctx context.Context, baseURL, key, model string) (ChatResult, error) {
+	return chat(ctx, baseURL, key, model, strings.Repeat(testPrompt, 6), nil)
+}
+
+func chat(ctx context.Context, baseURL, key, model, prompt string, headers map[string]string) (ChatResult, error) {
 	body, err := json.Marshal(map[string]any{
 		"model":      model,
-		"messages":   []map[string]string{{"role": "user", "content": testPrompt}},
+		"messages":   []map[string]string{{"role": "user", "content": prompt}},
 		"max_tokens": 1,
 	})
 	if err != nil {

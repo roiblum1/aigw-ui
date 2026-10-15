@@ -22,7 +22,7 @@ type usageResponse struct {
 // it to one tenant.
 func (s *Server) getUsage(w http.ResponseWriter, r *http.Request) {
 	if s.usage == nil {
-		writeJSON(w, http.StatusOK, usageResponse{Report: usage.Report{At: time.Now().UTC(), Quotas: []usage.Quota{}, Pools: []usage.Pool{}}})
+		writeJSON(w, http.StatusOK, usageResponse{Report: usage.Report{At: time.Now().UTC(), Quotas: []usage.Quota{}, Pools: []usage.Pool{}, Budgets: []usage.Budget{}}})
 		return
 	}
 	report, err := s.usage.Report(r.Context(), r.URL.Query().Get("tenant_id"))

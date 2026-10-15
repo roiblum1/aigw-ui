@@ -94,14 +94,21 @@ func (s *Server) cancelStandard(w http.ResponseWriter, r *http.Request) {
 }
 
 // keepsTokensOnly refuses what would make the gateways take API keys again
-// while a model has a standard: its rule would leave every request with an
-// API key to the model's pool.
+// while a model has a standard, a tenant has a budget across models or may
+// call only some models: their rules read the tenant header a token sets,
+// and would leave every request with an API key unheld.
 func (s *Server) keepsTokensOnly(ctx context.Context) error {
 	any, err := s.st.AnyStandard(ctx)
-	if err != nil || !any {
+	if err != nil {
 		return err
 	}
-	return errors.New("a model has a standard budget, which needs every tenant on tokens; an API key would leave its requests to the model's pool. Create a token instead")
+	if any {
+		return errors.New("a model has a standard budget, which needs every tenant on tokens; an API key would leave its requests to the model's pool. Create a token instead")
+	}
+	if any, err = s.st.AnyBudget(ctx); err != nil || !any {
+		return err
+	}
+	return errors.New("a tenant has a budget across models or a list of models it may call, which need every tenant on tokens; a request with an API key would be held by neither. Create a token instead")
 }
 
 func windowName(w string) string {

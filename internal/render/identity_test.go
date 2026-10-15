@@ -116,7 +116,7 @@ func TestIdentityDeniedSplit(t *testing.T) {
 	for n := range 300 {
 		i.Denied = append(i.Denied, fmt.Sprintf("%016x", n))
 	}
-	rules := authorization(i)["rules"].([]any)
+	rules := authorization(i, nil)["rules"].([]any)
 	if len(rules) != 4 { // 128 + 128 + 44 revoked, 1 disabled
 		t.Fatalf("%d rules", len(rules))
 	}

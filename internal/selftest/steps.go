@@ -30,6 +30,8 @@ const (
 	stepSize    = "long-prompt"
 	stepSticky  = "sticky"
 	stepFleet   = "fleet-revision"
+	stepBudget  = "budget"
+	stepModels  = "models"
 	stepCleanup = "cleanup"
 )
 
@@ -50,6 +52,8 @@ func plan() []Step {
 		{ID: stepSize, Title: "A long prompt is accepted", Status: Pending},
 		{ID: stepSticky, Title: "A conversation stays on one site", Status: Pending},
 		{ID: stepFleet, Title: "The cluster has the fleet's current entry routes", Status: Pending},
+		{ID: stepBudget, Title: "A budget across models is counted and refuses", Status: Pending},
+		{ID: stepModels, Title: "A tenant held to its models is refused for any other", Status: Pending},
 		{ID: stepCleanup, Title: "The temporary tenant is removed", Status: Pending},
 	}
 }
@@ -126,6 +130,10 @@ func (t *test) steps() {
 		{stepSize, t.longPrompt, false},
 		{stepSticky, t.sticky, false},
 		{stepFleet, t.fleetRevision, false},
+		// Last: the budget step lifts the model's quota and then spends the
+		// budget, after which nothing but a refusal is to be expected.
+		{stepBudget, t.budget, false},
+		{stepModels, t.models, false},
 	} {
 		t.set(step.id, Running, "")
 		status, detail := step.run()

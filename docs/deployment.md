@@ -154,6 +154,22 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
 4. Run the self-test again after every upgrade of Envoy Gateway or the AI
    Gateway. The patch names the generated route, and that name can change.
 
+## Before the first budget across models
+
+1. In the cluster's Envoy Gateway configuration (`envoy-gateway-config`),
+   enable global rate limiting with the hub's Redis:
+   `rateLimit.backend.type: Redis`, `rateLimit.backend.redis.url` the hub's
+   Redis, and `rateLimit.timeout: 5s`. The default timeout of 20 ms is
+   cancelled on every call to a Redis across a network, and every request
+   then passes unheld. Envoy Gateway 1.9 cannot mount only a CA for Redis
+   TLS: set `REDIS_TLS`, `REDIS_TLS_CACERT` and `REDIS_AUTH` through
+   `provider.kubernetes.rateLimitDeployment.container.env`, as the AI
+   gateway's quota rate limit service is set up.
+2. Restart the Envoy Gateway controller. It deploys `envoy-ratelimit` next
+   to the AI gateway's quota rate limit service; the two do not collide.
+3. Run **Self-test** on the cluster with a priced model. The step "A budget
+   across models is counted and refuses" fails while anything is missing.
+
 ## Before a model serves a spent budget as best-effort
 
 1. The model needs its entry route, and the server needs Redis

@@ -13,13 +13,73 @@ import (
 const tenantSelect = `SELECT t.id, t.slug, t.display_name, t.enabled, t.created_at,
 	(SELECT count(*) FROM api_keys k WHERE k.tenant_id = t.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())),
 	(SELECT count(*) FROM api_keys k WHERE k.tenant_id = t.id AND k.revoked_at IS NULL AND k.kind = 'key'),
-	(SELECT count(*) FROM quotas q WHERE q.tenant_id = t.id)
+	(SELECT count(*) FROM quotas q WHERE q.tenant_id = t.id),
+	t.budget_credits, t.budget_window, t.restricted,
+	(SELECT coalesce(array_agg(tm.model_id::text ORDER BY tm.model_id), '{}') FROM tenant_models tm WHERE tm.tenant_id = t.id)
 	FROM tenants t`
 
 func scanTenant(row pgx.Row) (Tenant, error) {
 	var t Tenant
-	err := row.Scan(&t.ID, &t.Slug, &t.DisplayName, &t.Enabled, &t.CreatedAt, &t.KeyCount, &t.APIKeyCount, &t.QuotaCount)
+	var credits *int64
+	var window *string
+	var restricted bool
+	var models []string
+	err := row.Scan(&t.ID, &t.Slug, &t.DisplayName, &t.Enabled, &t.CreatedAt, &t.KeyCount, &t.APIKeyCount, &t.QuotaCount,
+		&credits, &window, &restricted, &models)
+	if credits != nil && window != nil {
+		t.Budget = &TenantBudget{Credits: *credits, Window: *window}
+	}
+	if restricted {
+		t.Models = models
+	}
 	return t, mapErr(err)
+}
+
+// SetTenantBudget sets the tenant's budget across models, nil to remove it,
+// and returns the tenant.
+func (s *Store) SetTenantBudget(ctx context.Context, id string, b *TenantBudget) (Tenant, error) {
+	var credits *int64
+	var window *string
+	if b != nil {
+		credits, window = &b.Credits, &b.Window
+	}
+	if err := affected(s.db.Exec(ctx, `UPDATE tenants SET budget_credits = $2, budget_window = $3 WHERE id = $1`, id, credits, window)); err != nil {
+		return Tenant{}, err
+	}
+	return s.GetTenant(ctx, id)
+}
+
+// SetTenantModels sets the models the tenant may call: nil for every model,
+// else the given ones and no other. It returns the tenant.
+func (s *Store) SetTenantModels(ctx context.Context, id string, models []string) (Tenant, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Tenant{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := affected(tx.Exec(ctx, `UPDATE tenants SET restricted = $2 WHERE id = $1`, id, models != nil)); err != nil {
+		return Tenant{}, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM tenant_models WHERE tenant_id = $1`, id); err != nil {
+		return Tenant{}, mapErr(err)
+	}
+	for _, m := range models {
+		if _, err := tx.Exec(ctx, `INSERT INTO tenant_models (tenant_id, model_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, id, m); err != nil {
+			return Tenant{}, mapErr(err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Tenant{}, mapErr(err)
+	}
+	return s.GetTenant(ctx, id)
+}
+
+// AnyBudget reports whether any enabled tenant has a budget across models
+// or may call only some models: both need every tenant on tokens.
+func (s *Store) AnyBudget(ctx context.Context) (bool, error) {
+	var yes bool
+	err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tenants WHERE enabled AND (budget_credits IS NOT NULL OR restricted))`).Scan(&yes)
+	return yes, mapErr(err)
 }
 
 func (s *Store) ListTenants(ctx context.Context) ([]Tenant, error) {

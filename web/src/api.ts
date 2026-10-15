@@ -221,6 +221,15 @@ export interface Tenant {
   /** Of those, the API keys of the kind before tokens. */
   api_key_count: number;
   quota_count: number;
+  /** The tenant's budget across every priced model, in credits, or null. */
+  budget: TenantBudget | null;
+  /** The IDs of the models the tenant may call; null for every model. */
+  models: string[] | null;
+}
+
+export interface TenantBudget {
+  credits: number;
+  window: Window;
 }
 
 export interface ApiKey {
@@ -382,6 +391,18 @@ export interface UsagePool {
   dry_run?: boolean;
 }
 
+/** A tenant's budget across models and what it used of it, in credits. */
+export interface UsageBudget {
+  tenant_id: string;
+  tenant_slug: string;
+  limit: number;
+  window: Window;
+  /** Highest counter; each counter is held to the limit on its own. */
+  used: number;
+  resets_at: string;
+  counters: { backend: string; clusters: string[]; used: number }[];
+}
+
 export interface UsageReport {
   /** False when the server has no Redis to read from. */
   enabled: boolean;
@@ -390,6 +411,7 @@ export interface UsageReport {
   at: string;
   quotas: UsageQuota[];
   pools: UsagePool[];
+  budgets: UsageBudget[];
   hint?: string;
 }
 
@@ -745,12 +767,23 @@ export interface CapacityOverview {
   campaign: Campaign;
 }
 
+/** A tenant's budget across every priced model, in credits. */
+export interface MyTenantBudget {
+  limit: number;
+  window: Window;
+  used: number;
+  resets_at: string;
+  /** False while no gateway holds the tenant to it. */
+  enforced: boolean;
+}
+
 export interface MyUsage {
   tenant: string;
   display_name: string;
   at: string;
   usage_enabled: boolean;
   budgets: MyBudget[];
+  budget: MyTenantBudget | null;
   /** Credits for a million tokens. */
   prices: { model_name: string; price_input: number; price_cached: number; price_output: number }[];
   days_from: string;
@@ -922,6 +955,11 @@ export const api = {
   updateTenant: (id: string, display_name: string, enabled: boolean) =>
     request<Tenant>("PUT", `/tenants/${id}`, { display_name, enabled }),
   deleteTenant: (id: string) => request<void>("DELETE", `/tenants/${id}`),
+  /** A null amount removes the budget. */
+  setTenantBudget: (id: string, credits: number | null, window: Window) =>
+    request<Tenant>("PUT", `/tenants/${id}/budget`, { credits, window }),
+  /** null lets the tenant call every model. */
+  setTenantModels: (id: string, models: string[] | null) => request<Tenant>("PUT", `/tenants/${id}/models`, { models }),
   createKey: (tenantId: string, name: string) =>
     request<{ key: ApiKey; secret: string }>("POST", `/tenants/${tenantId}/keys`, { name }),
   revokeKey: (id: string) => request<void>("DELETE", `/keys/${id}`),

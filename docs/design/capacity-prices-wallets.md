@@ -1,6 +1,6 @@
 # Capacity, prices and wallets: the target design
 
-> **Wallets were removed in 0.21.0.** They were built in 0.20.0 (step 5c) and taken out at the owner's request: a tenant's budgets are per model only, as before. The wallet sections below are kept as the record of what was designed and built.
+> **Wallets were removed in 0.21.0, and the budget across models came back in 0.22.0 as the gateway-enforced design.** Wallets were built in 0.20.0 (step 5c) as the hub-enforced fallback and taken out at the owner's request. 0.22.0 is what check A5 was for: one `BackendTrafficPolicy` with a shared rule per tenant, charged from the credits the routes write, counted in the hub's Redis, plus a model allowlist per tenant in the `SecurityPolicy` (403). See [architecture](../architecture.md#a-budget-across-models). The wallet sections below are kept as the record of what was designed and built.
 
 ## Summary
 
