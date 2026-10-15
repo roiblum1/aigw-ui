@@ -297,8 +297,10 @@ A second `POST` while one runs, on any cluster, answers 409.
 }
 ```
 
-The step IDs are `gateway`, `apply`, `key`, `bad-key`, `counter`, `limit`,
-`reset` and `cleanup`.
+The step IDs, in the order they run, are `gateway`, `apply`, `key`,
+`bad-key`, `counter`, `limit`, `overage`, `reset`, `client-id`,
+`tenant-header`, `cached-tokens`, `revoked-token`, `long-prompt`, `sticky`,
+`fleet-revision`, `wallet` and `cleanup`.
 
 On update, any field that is left out keeps its stored value, so a body with
 only `{"site": "site2"}` changes the site and nothing else. An empty
