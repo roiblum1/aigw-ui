@@ -40,7 +40,6 @@ func plan() []Step {
 		{ID: stepApply, Title: "A temporary tenant, key and quota are applied", Status: Pending},
 		{ID: stepKey, Title: "A request with the new key is answered", Status: Pending},
 		{ID: stepBadKey, Title: "A request with an unknown key, a forged token or an expired one is refused", Status: Pending},
-		{ID: stepRevoked, Title: "A revoked token is refused", Status: Pending},
 		{ID: stepCounter, Title: "The tokens are counted where the Usage page reads them", Status: Pending},
 		{ID: stepLimit, Title: "A request over the quota is refused", Status: Pending},
 		{ID: stepOverage, Title: "A tenant past its budget is served as best-effort", Status: Pending},
@@ -48,6 +47,7 @@ func plan() []Step {
 		{ID: stepSpoof, Title: "A client cannot choose its tenant", Status: Pending},
 		{ID: stepTenant, Title: "A client cannot choose its tenant by the tenant header", Status: Pending},
 		{ID: stepCached, Title: "The model reports cached prompt tokens", Status: Pending},
+		{ID: stepRevoked, Title: "A revoked token is refused", Status: Pending},
 		{ID: stepSize, Title: "A long prompt is accepted", Status: Pending},
 		{ID: stepSticky, Title: "A conversation stays on one site", Status: Pending},
 		{ID: stepFleet, Title: "The cluster has the fleet's current entry routes", Status: Pending},
@@ -114,7 +114,6 @@ func (t *test) steps() {
 		{stepApply, t.apply, true},
 		{stepKey, t.firstRequest, true},
 		{stepBadKey, t.unknownKey, false},
-		{stepRevoked, t.revokedToken, false},
 		{stepCounter, t.counter, false},
 		{stepLimit, t.limit, false},
 		{stepOverage, t.overage, false},
@@ -122,6 +121,10 @@ func (t *test) steps() {
 		{stepSpoof, t.clientID, false},
 		{stepTenant, t.tenantHeader, false},
 		{stepCached, t.cachedTokens, false},
+		// After every step that reads the counter: waiting for the gateway to
+		// take the second token sends requests the spent quota refuses, and
+		// each adds a hit of 1 to it.
+		{stepRevoked, t.revokedToken, false},
 		{stepSize, t.longPrompt, false},
 		{stepSticky, t.sticky, false},
 		{stepFleet, t.fleetRevision, false},
