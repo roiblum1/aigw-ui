@@ -49,6 +49,8 @@ type capacityModel struct {
 	// the same order.
 	Plan    capacity.Plan      `json:"plan"`
 	Running *store.CapacityRun `json:"running"`
+	// prices are the model's, nil in tokens: what the planner values it at.
+	prices *capacity.Prices
 }
 
 // capacityGPU is a GPU the fleet runs on, or one with a price.
@@ -228,6 +230,7 @@ func (s *Server) plans(ctx context.Context) ([]capacityModel, []capacityGPU, err
 		}
 		if m.Prices != nil {
 			in.Prices = &capacity.Prices{Input: m.Prices.Input, Cached: m.Prices.Cached, Output: m.Prices.Output}
+			cm.prices = in.Prices
 		}
 		for _, q := range quotas {
 			if q.ModelID == m.ID && !q.Shadow {
@@ -272,20 +275,34 @@ type modelBudget struct {
 	OvercommitLimit float64  `json:"overcommit_limit"`
 	ShortWindows    int      `json:"short_windows"`
 	PoolDay         *int64   `json:"pool_day"`
+	// The planner's figures, for a priced model: R_m in credits a second,
+	// the busiest hour's share of what it serves, and each LLMI.
+	ValuePerSecond *float64      `json:"value_per_second"`
+	PeakHourShare  *float64      `json:"peak_hour_share"`
+	Saturated      bool          `json:"saturated"`
+	LLMIs          []plannerLLMI `json:"llmis"`
 }
 
 func budgetOf(m capacityModel) modelBudget {
 	p := m.Plan
 	return modelBudget{ModelID: m.ModelID, ModelName: m.ModelName, Unit: m.Unit, Measured: p.MeasuredInstances > 0,
 		CapacityDay: p.CapacityDay, CeilingDay: p.CeilingDay, GivenDay: p.GivenDay, LeftDay: p.LeftDay,
-		Overcommit: p.Overcommit, OvercommitLimit: p.OvercommitLimit, ShortWindows: p.ShortWindows, PoolDay: p.PoolDay}
+		Overcommit: p.Overcommit, OvercommitLimit: p.OvercommitLimit, ShortWindows: p.ShortWindows, PoolDay: p.PoolDay,
+		LLMIs: []plannerLLMI{}}
 }
 
 // budgets returns, for every model, what it can be given a day, what its
 // budgets take and what is left under its overcommit limit, and the same
-// added up over the measured models counted in dollars.
+// added up over the measured models counted in dollars; the planner's
+// figures per model and for the fleet; and the market value of yesterday.
 func (s *Server) budgets(w http.ResponseWriter, r *http.Request) {
-	models, _, err := s.plans(r.Context())
+	ctx := r.Context()
+	models, _, err := s.plans(ctx)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	plan, err := s.planner(ctx, models)
 	if err != nil {
 		fail(w, err)
 		return
@@ -299,6 +316,9 @@ func (s *Server) budgets(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, m := range models {
 		b := budgetOf(m)
+		if p, ok := plan.models[m.ModelID]; ok {
+			b.ValuePerSecond, b.PeakHourShare, b.Saturated, b.LLMIs = &p.plan.ValuePerSecond, p.plan.PeakHourShare, p.plan.Saturated, p.llmis
+		}
 		out = append(out, b)
 		if b.Unit == store.UnitCredits && b.Measured {
 			total.CapacityDay += b.CapacityDay
@@ -307,7 +327,7 @@ func (s *Server) budgets(w http.ResponseWriter, r *http.Request) {
 			total.LeftDay += b.LeftDay
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"models": out, "credits": total})
+	writeJSON(w, http.StatusOK, map[string]any{"models": out, "credits": total, "fleet": plan.fleet, "by_peak": plan.byPeak, "market": plan.market})
 }
 
 // cents rounds an amount in credits to whole cents for a sentence; what a

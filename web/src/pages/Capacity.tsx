@@ -2,6 +2,7 @@ import { Fragment, useState } from "react";
 import { Gauge } from "lucide-react";
 import {
   api,
+  type Budgets,
   type BenchmarkProfile,
   type Campaign,
   type CapacityGPU,
@@ -51,8 +52,13 @@ function perDay(n: number, unit: Unit): string {
  */
 export default function Capacity() {
   const { data, error, reload } = useLoad(api.capacity);
+  const budgets = useLoad(api.budgets);
+  const [splitting, setSplitting] = useState(false);
   const running = data?.models.some((m) => m.running) ?? false;
-  usePolling(reload, running ? 15_000 : 60_000);
+  usePolling(async () => {
+    await reload();
+    await budgets.reload();
+  }, running ? 15_000 : 60_000);
   const [measuring, setMeasuring] = useState<{ m: CapacityModel; llmi: CapacityLLMI } | null>(null);
   const [profiling, setProfiling] = useState(false);
   const [history, setHistory] = useState<CapacityModel | null>(null);
@@ -71,8 +77,6 @@ export default function Capacity() {
         note: `Break-even from the capacity measurement at ${percent(m.plan.utilization)} busy`,
       });
     });
-  const dollarModels = data?.models.filter((m) => m.unit === "credits" && m.plan.measured_instances > 0) ?? [];
-  const total = (f: (p: CapacityPlan) => number) => dollarModels.reduce((n, m) => n + f(m.plan), 0);
 
   const stop = (run: CapacityRun) => {
     if (!confirm(`Stop measuring ${run.model_name}? Its Job is deleted; the steps it finished are kept.`)) return;
@@ -105,16 +109,7 @@ export default function Capacity() {
           chart to an image the clusters can pull; see the capacity guide under Docs.
         </div>
       )}
-      {dollarModels.length > 0 && (
-        <div className="banner info">
-          The {dollarModels.length === 1 ? "measured model" : `${dollarModels.length} measured models`} counted in
-          dollars can be given <span className="strong">{formatDollars(total((p) => p.capacity_day))}</span> a day;
-          with {dollarModels.length === 1 ? "its overcommit limit" : "their overcommit limits"}, up to{" "}
-          {formatDollars(total((p) => p.ceiling_day))}. The budgets take{" "}
-          {formatDollars(total((p) => p.given_day))}, so{" "}
-          <LeftToGive left={total((p) => p.left_day)} format={formatDollars} /> a day.
-        </div>
-      )}
+      {budgets.data && <FleetPanel b={budgets.data} onSplit={() => setSplitting(true)} />}
       {data && <ProfileLine profile={data.profile} onEdit={() => setProfiling(true)} />}
       {data && <CampaignPanel campaign={data.campaign} models={data.models} />}
       {data?.models.length === 0 && <Empty icon={Gauge}>No models yet. Add one on the Models page.</Empty>}
@@ -138,6 +133,17 @@ export default function Capacity() {
           profile={data.profile}
           onClose={() => setMeasuring(null)}
           onStarted={reload}
+        />
+      )}
+      {splitting && budgets.data && (
+        <SplitForm
+          b={budgets.data}
+          onClose={() => setSplitting(false)}
+          onApplied={async () => {
+            setSplitting(false);
+            await budgets.reload();
+            await reload();
+          }}
         />
       )}
       {profiling && data && (
@@ -715,6 +721,135 @@ function MeasureForm(props: {
             <input value={confirmName} onChange={(e) => setConfirmName(e.target.value)} autoComplete="off" />
           </Field>
         </>
+      )}
+    </FormModal>
+  );
+}
+
+/**
+ * The planner's first line: what the fleet serves a day at the models'
+ * prices, what can be given, what is given and what is left, then which model
+ * runs out first at its busiest hour.
+ */
+function FleetPanel({ b, onSplit }: { b: Budgets; onSplit: () => void }) {
+  const f = b.fleet;
+  if (f.value_day === 0 && f.given_day === 0) return null;
+  const byID = new Map(b.models.map((m) => [m.model_id, m]));
+  const peaks = b.by_peak.map((id) => byID.get(id)).filter((m) => m && m.peak_hour_share != null);
+  return (
+    <div className="banner info">
+      <p>
+        The fleet serves <span className="strong">{formatDollars(f.value_day)}</span> a day at the models' prices.{" "}
+        <span className="strong">{formatDollars(f.can_be_given_day)}</span> can be given, up to{" "}
+        {formatDollars(f.ceiling_day)} with overcommit. {formatDollars(f.given_day)} is given
+        {f.wallets_day > 0 && `, ${formatDollars(f.wallets_day)} of it in wallets`}.{" "}
+        <LeftToGive left={f.left_day} format={formatDollars} />.{" "}
+        <button className="link" onClick={onSplit} disabled={f.left_day <= 0}>
+          Split what is left
+        </button>
+      </p>
+      {f.suggested_overcommit != null && (
+        <p className="detail">
+          The busiest of the last 30 days would have held with an overcommit of up to {f.suggested_overcommit.toFixed(2)}×
+          over what is given; change it per model below.
+        </p>
+      )}
+      {peaks.length > 0 && (
+        <p className="detail">
+          At their busiest hour:{" "}
+          {peaks.map((m, i) => (
+            <Fragment key={m!.model_id}>
+              {i > 0 && " · "}
+              {m!.model_name} {percent(m!.peak_hour_share!)}
+              {m!.saturated && <span className="tag warn">saturated</span>}
+            </Fragment>
+          ))}
+          . The first is where the next GPU helps most.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Proposes equal daily budgets on one model out of what is left, and applies them once confirmed. */
+function SplitForm(props: { b: Budgets; onClose: () => void; onApplied: () => Promise<void> }) {
+  const priced = props.b.models.filter((m) => m.unit === "credits" && m.measured);
+  const tenants = useLoad(api.tenants);
+  const [modelID, setModelID] = useState(priced[0]?.model_id ?? "");
+  const model = priced.find((m) => m.model_id === modelID);
+  const left = Math.min(model?.left_day ?? 0, props.b.fleet.left_day);
+  const [amount, setAmount] = useState("");
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [proposals, setProposals] = useState<{ tenant_id: string; amount: number }[] | null>(null);
+  const action = useAction();
+  const slug = (id: string) => tenants.data?.find((t) => t.id === id)?.slug ?? id;
+
+  const propose = () =>
+    action.run(async () => {
+      const r = await api.split({ amount: Math.round(Number(amount) * 100000), tenant_ids: chosen, model_id: modelID });
+      setProposals(r.proposals);
+    });
+  const apply = async () => {
+    if (!proposals || !model) throw new Error("Propose a split first.");
+    if (!confirm(`Set the daily budget on ${model.model_name} of ${proposals.length} tenants to ${formatDollars(proposals[0].amount)}? It replaces the budget each has on it.`))
+      return;
+    for (const p of proposals) await api.setQuota(p.tenant_id, modelID, p.amount, "1d", false);
+    await props.onApplied();
+  };
+  return (
+    <FormModal title="Split what is left" submitLabel="Apply" onClose={props.onClose} onSubmit={apply} wide>
+      <ErrorBanner message={action.error || tenants.error} />
+      <p className="hint">
+        Equal daily budgets on one model, out of what is left to give on it and in the fleet. Nothing changes until you
+        apply it. Splitting into wallets comes with the wallets.
+      </p>
+      <div className="grid-2">
+        <Field label="Model">
+          <select value={modelID} onChange={(e) => (setModelID(e.target.value), setProposals(null))}>
+            {priced.map((m) => (
+              <option key={m.model_id} value={m.model_id}>
+                {m.model_name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Dollars a day, in all" hint={`Up to ${formatDollars(Math.max(left, 0))}.`}>
+          <input type="number" min={0.01} step="any" value={amount} onChange={(e) => (setAmount(e.target.value), setProposals(null))} />
+        </Field>
+      </div>
+      <h3>Tenants</h3>
+      <div className="grid-3">
+        {tenants.data?.map((t) => (
+          <label key={t.id} className="check">
+            <input
+              type="checkbox"
+              checked={chosen.includes(t.id)}
+              onChange={(e) => (setChosen(e.target.checked ? [...chosen, t.id] : chosen.filter((x) => x !== t.id)), setProposals(null))}
+            />
+            <span>{t.slug}</span>
+          </label>
+        ))}
+      </div>
+      <button type="button" disabled={action.busy || !chosen.length || !(Number(amount) > 0)} onClick={propose}>
+        Propose
+      </button>
+      {proposals && (
+        <table className="plain">
+          <thead>
+            <tr>
+              <th>Tenant</th>
+              <th className="text-right">A day on {model?.model_name}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {proposals.map((p) => (
+              <tr key={p.tenant_id}>
+                <td>{slug(p.tenant_id)}</td>
+                <td className="text-right tabular-nums">{formatDollars(p.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </FormModal>
   );

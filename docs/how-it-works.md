@@ -285,6 +285,24 @@ weight is the capacity times 100.
   cluster would send the gateways several lists in a row, and every list
   moves conversations.
 
+### The budget planner
+
+**What it does.** Says how many dollars a day the fleet can still give, and
+which model runs out first at its busiest hour.
+
+**How.** What each LLMI serves at the targets, at its model's prices, times
+its ready instances, gives what each model serves a second; the busy share
+and the overcommit limit turn that into what can be given; the tenants'
+budgets and wallets are what is given. Split proposes equal budgets out of
+what is left.
+
+**Why.**
+
+- *Nobody works it out by hand*: a budget is set against a figure, not a
+  guess.
+- *Nothing changes by itself*: suggestions and splits are shown, and an
+  operator applies them.
+
 ### Measure an LLMInferenceService
 
 **What it does.** Finds how many requests one instance of an

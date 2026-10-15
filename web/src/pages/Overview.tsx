@@ -41,6 +41,25 @@ function BudgetsCard({ b }: { b: Budgets }) {
         what the tenants' budgets take. Hourly and per-minute budgets count at the most they allow in a day. See{" "}
         <a href="#capacity">Capacity</a>.
       </p>
+      {b.fleet.value_day > 0 && (
+        <p>
+          The fleet serves <span className="strong">{formatDollars(b.fleet.value_day)}</span> a day at the models' prices;{" "}
+          {formatDollars(b.fleet.can_be_given_day)} can be given, up to {formatDollars(b.fleet.ceiling_day)} with
+          overcommit, {formatDollars(b.fleet.given_day)} is given, and{" "}
+          {b.fleet.left_day >= 0 ? (
+            <span className="strong">{formatDollars(b.fleet.left_day)} is left</span>
+          ) : (
+            <span className="warn-text">the budgets are {formatDollars(-b.fleet.left_day)} past the ceiling</span>
+          )}
+          .
+        </p>
+      )}
+      <p className="detail">
+        Yesterday's spend: <span className="strong">{formatDollars(b.market.yesterday_spend)}</span>, what the same
+        traffic cost at the models' prices (OpenRouter's, where they are the market's).
+        {b.market.cost_day != null &&
+          ` The measured GPUs cost ${formatDollars(b.market.cost_day)} a day${b.market.cost_partial ? ", some left out for want of a GPU cost" : ""}.`}
+      </p>
       <div className="table-wrap">
         <table className="plain">
           <thead>
@@ -50,6 +69,9 @@ function BudgetsCard({ b }: { b: Budgets }) {
               <th className="text-right">Ceiling</th>
               <th className="text-right">Given</th>
               <th className="text-right">Left</th>
+              <th className="text-right wrap" title="The busiest hour of the last 30 days, against what the model serves in an hour">
+                Busiest hour
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -64,9 +86,13 @@ function BudgetsCard({ b }: { b: Budgets }) {
                     </td>
                     <td className="text-right tabular-nums">{formatAmount(m.given_day, m.unit)}</td>
                     <td className="text-right tabular-nums">{left(m.left_day, m.unit)}</td>
+                    <td className="text-right tabular-nums">
+                      {m.peak_hour_share == null ? "–" : `${Math.round(m.peak_hour_share * 100)}%`}
+                      {m.saturated && <span className="tag warn">saturated</span>}
+                    </td>
                   </>
                 ) : (
-                  <td colSpan={4} className="detail">
+                  <td colSpan={5} className="detail">
                     Not measured: given {formatAmount(m.given_day, m.unit)} a day against an unknown capacity
                   </td>
                 )}
@@ -79,6 +105,7 @@ function BudgetsCard({ b }: { b: Budgets }) {
                 <td className="text-right tabular-nums">{formatAmount(b.credits.ceiling_day, "credits")}</td>
                 <td className="text-right tabular-nums">{formatAmount(b.credits.given_day, "credits")}</td>
                 <td className="text-right tabular-nums strong">{left(b.credits.left_day, "credits")}</td>
+                <td />
               </tr>
             )}
           </tbody>
