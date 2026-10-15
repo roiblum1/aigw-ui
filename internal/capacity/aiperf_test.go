@@ -2,7 +2,6 @@ package capacity
 
 import (
 	"encoding/json"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,9 +79,11 @@ func TestRealAIPerf(t *testing.T) {
 		if ok, why := s.Check(set); !ok || *s.ForeignShare(set) > 0.02 {
 			t.Errorf("step %d: %v %q, foreign %v", s.Concurrency, ok, why, *s.ForeignShare(set))
 		}
-		// The counters are taken over AIPerf's own time, first request to
-		// last answer, and the quiet spell before the step saw nothing.
-		if math.Abs(s.ServerSeconds-s.DurationSeconds) > 0.5 || s.QuietSeconds < 2 || s.QuietPromptTokens == nil || *s.QuietPromptTokens != 0 {
+		// The counters are taken over AIPerf's profiling, which holds its
+		// first request to its last answer and a few seconds more, and the
+		// quiet spell before the step saw nothing.
+		if s.ServerSeconds < s.DurationSeconds-0.5 || s.ServerSeconds > s.DurationSeconds+5 || s.QuietSeconds < 2 ||
+			s.QuietPromptTokens == nil || *s.QuietPromptTokens != 0 {
 			t.Errorf("step %d: server %v s, AIPerf %v s, quiet %v s %v", s.Concurrency, s.ServerSeconds, s.DurationSeconds, s.QuietSeconds, s.QuietPromptTokens)
 		}
 	}

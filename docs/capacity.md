@@ -150,7 +150,7 @@ reads every 20 seconds:
 | Prompt and output tokens | The model server's `usage`, as AIPerf records it |
 | Time to first token, time between tokens: p50 and p95 | AIPerf |
 | Share of prompt tokens from the cache | The pod's own counters over the step: `vllm:prompt_tokens_cached_total` over `vllm:prompt_tokens_total`, or `vllm:prefix_cache_hits_total` over `vllm:prefix_cache_queries_total` |
-| Prompt and generated tokens the pod counted, and over what time | `vllm:prompt_tokens_total`, `vllm:generation_tokens_total`, read every 2 seconds and taken from AIPerf's first request to its last answer: the time AIPerf divides its own tokens by |
+| Prompt and generated tokens the pod counted, and over what time | `vllm:prompt_tokens_total`, `vllm:generation_tokens_total`, read every 2 seconds and taken over AIPerf's profiling: its first request to its last answer and, since AIPerf 0.13 exports only the profiling's start and end, a few seconds more (3 in 255 in a sample) |
 | Drained: prompt tokens the pod counted in the quiet spell before the step, and its length | `vllm:prompt_tokens_total` |
 
 **Nothing of a prompt reaches the hub**: the Job makes its prompts up and
@@ -187,7 +187,7 @@ one site only, or when you choose it. The form says so first:
 
 It starts only once the model's name is typed. The result is marked
 **live**, and its throughput is the pod's own counters, users' traffic
-included, over the time AIPerf had requests out, as a drained result; the
+included, over the time AIPerf was profiling, not its whole run; the
 latency is AIPerf's own requests'.
 
 **Other traffic.** It is estimated two ways, and the larger counts:

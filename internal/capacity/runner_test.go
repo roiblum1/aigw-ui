@@ -227,3 +227,34 @@ func TestRunnerNotIdle(t *testing.T) {
 		t.Fatalf("not idle: %+v", l)
 	}
 }
+
+// When AIPerf had requests out: its first request to its last answer when it
+// exports them, else its profiling's start and end (AIPerf 0.13 keeps the
+// first two to itself), else nothing, and the whole step counts.
+func TestRunnerSending(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is not installed")
+	}
+	fn := func(name string) string {
+		start := strings.Index(runner, "def "+name+"(")
+		end := strings.Index(runner[start+1:], "\ndef ")
+		return runner[start : start+1+end]
+	}
+	script := "import datetime, json, sys\n" + fn("sending") + "\n" + fn("stat") + "\n" +
+		"for line in sys.stdin:\n    print(json.dumps(sending(json.loads(line))))\n"
+	cmd := exec.Command(python, "-c", script)
+	cmd.Env = append(os.Environ(), "TZ=UTC")
+	cmd.Stdin = strings.NewReader(`{"min_request_timestamp":{"avg":1.0e18},"max_response_timestamp":{"avg":1.0001e18},"start_time":"2001-09-09T01:46:39"}
+{"start_time":"2001-09-09T01:46:39","end_time":"2001-09-09T01:48:20.5"}
+{"benchmark_duration":{"avg":100}}
+`)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	want := "[1000000000.0, 1000100000.0]\n[999999999.0, 1000000100.5]\n[null, null]\n"
+	if string(out) != want {
+		t.Fatalf("got\n%s", out)
+	}
+}

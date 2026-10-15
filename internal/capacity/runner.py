@@ -11,8 +11,9 @@
 # is someone else's.
 #
 # The instance's counters are read every few seconds during a step and taken
-# over the time AIPerf had requests out, from the first request to the last
-# answer: the same time AIPerf divides its own tokens by.
+# over the time AIPerf had requests out, not over AIPerf's whole run with its
+# start and its exit.
+import datetime
 import glob
 import http.client
 import http.server
@@ -316,6 +317,21 @@ def quiet_spell():
     return time.monotonic() - started, growth(before, after, "vllm:prompt_tokens_total")
 
 
+def sending(summary):
+    """When AIPerf had requests out, in seconds since the epoch: its first
+    request to its last answer when it says so, else the start and end of
+    its profiling, a few seconds wider; (None, None) without either."""
+    t0, t1 = stat(summary, "min_request_timestamp") / 1e9, stat(summary, "max_response_timestamp") / 1e9
+    if t0 and t1:
+        return t0, t1
+    try:
+        # Written in this container's local time.
+        return (datetime.datetime.fromisoformat(summary["start_time"]).timestamp(),
+                datetime.datetime.fromisoformat(summary["end_time"]).timestamp())
+    except (KeyError, TypeError, ValueError):
+        return None, None
+
+
 def stat(summary, name, key="avg"):
     value = (summary.get(name) or {}).get(key)
     return float(value) if value is not None else 0.0
@@ -435,7 +451,7 @@ def measure(concurrency):
         return False
     with open(found[0]) as f:
         s = json.load(f)
-    before, after, seconds = sampler.window(stat(s, "min_request_timestamp") / 1e9, stat(s, "max_response_timestamp") / 1e9)
+    before, after, seconds = sampler.window(*sending(s))
     prompt_tokens, cached_tokens = cache_growth(before, after)
     step = {
         "concurrency": concurrency,
