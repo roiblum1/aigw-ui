@@ -148,6 +148,12 @@ away. The tenant measured had the last rule; p50 in ms:
   the message is protobuf and smaller), and per-model quotas with as many
   tenants, which put their rules on that model's routes only.
 
+With the amount in the token (0.23), through the sandbox hub and the lab:
+38 ms without a budget and 69 ms with one at p50, one and sixteen at a time,
+the same as with a rule per tenant. On the hub, 1,000 tenants with budgets
+render a budget policy of 771 bytes, render in 13 ms, give a usage report
+of every budget in 590 ms, and a token renewal takes 1.6 ms.
+
 So since 0.23 the amount is in the tenant's tokens and one rule holds every
 tenant: the configuration and the time a change takes stay at the size of
 the last row whatever the number of tenants, and a tenant without a budget
