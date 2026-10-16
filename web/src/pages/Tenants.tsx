@@ -221,6 +221,9 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   const action = useAction();
   const [newKey, setNewKey] = useState<{ secret: string; key: ApiKey } | null>(null);
   const [keyName, setKeyName] = useState("");
+  // Every hook comes before the return below: the first render, without
+  // data, must call the same hooks as the next one.
+  const [keyKind, setKeyKind] = useState<"personal" | "token">("personal");
 
   if (!data) {
     return (
@@ -236,7 +239,6 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   const { tenant, keys, quotas } = data.detail;
   const act = (fn: () => Promise<unknown>) => action.run(async () => void (await fn(), await reload()));
 
-  const [keyKind, setKeyKind] = useState<"personal" | "token">("personal");
   const createKey = (e: FormEvent) => {
     e.preventDefault();
     act(async () => {
