@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/rest"
+
+	"aigw-ui/internal/render"
 )
 
 // A server that ignores label selectors returns objects this tool does not
@@ -233,5 +236,59 @@ func TestSyncMarksTheClustersOwnRoutes(t *testing.T) {
 	}
 	if len(calls) != 1 || !strings.HasSuffix(calls[0], "/quotapolicies/glm") {
 		t.Errorf("patches %v, want only the policy", calls)
+	}
+}
+
+// A route of the cluster's own that sends two priced models to one backend
+// charges each its own prices. Before, each model's policy wrote its own
+// expression in turn, and every request on the route was charged the
+// prices of the model synced last.
+func TestSyncPricesEachModelOfASharedRoute(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/aigatewayroutes/shared"):
+			b, _ := io.ReadAll(r.Body)
+			bodies = append(bodies, string(b))
+			w.Write([]byte(`{"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"shared","namespace":"models"}}`))
+		case r.Method == http.MethodPatch:
+			w.Write([]byte(`{"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"QuotaPolicy","metadata":{"name":"x","namespace":"models"}}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/namespaces/models/aigatewayroutes"):
+			w.Write([]byte(`{"apiVersion":"v1","kind":"List","metadata":{},"items":[
+				{"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"shared","namespace":"models"},"spec":{"rules":[
+					{"matches":[{"headers":[{"name":"x-ai-eg-model","value":"opus"}]}],"backendRefs":[{"name":"mock"}]},
+					{"matches":[{"headers":[{"name":"x-ai-eg-model","value":"sonnet"}]}],"backendRefs":[{"name":"mock"}]}]}}
+			]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}`))
+		}
+	}))
+	defer srv.Close()
+	client, err := newFromConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := func(model, credits string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "aigateway.envoyproxy.io/v1alpha1", "kind": "QuotaPolicy",
+			"metadata": map[string]any{"name": model, "namespace": "models", "annotations": map[string]any{
+				render.QuotaRevisionAnnotation: "r-" + model, render.CreditsAnnotation: credits, render.CreditsModelAnnotation: model}},
+			"spec": map[string]any{"targetRefs": []any{map[string]any{"kind": "AIServiceBackend", "name": "mock"}}},
+		}}
+	}
+	if _, err := client.Sync(context.Background(), "ns", []*unstructured.Unstructured{
+		policy("opus", "input_tokens * 15u"), policy("sonnet", "input_tokens * 3u")}, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := `model == 'opus' ? (input_tokens * 15u) : model == 'sonnet' ? (input_tokens * 3u) : 0u`
+	if len(bodies) != 2 {
+		t.Fatalf("route patches %v", bodies)
+	}
+	for _, b := range bodies {
+		if !strings.Contains(b, `"cel":"`+want+`"`) {
+			t.Errorf("patch %s, want the cost %s", b, want)
+		}
 	}
 }

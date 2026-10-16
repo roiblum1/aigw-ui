@@ -48,7 +48,11 @@ func (t *test) budget() (string, string) {
 		return Failed, "The cluster refused the objects: " + err.Error()
 	}
 	for _, r := range res.Rejected {
-		if r.Kind == "BackendTrafficPolicy" {
+		switch {
+		case r.Kind != "BackendTrafficPolicy":
+		case r.Gateway == "Overridden":
+			return Failed, "A policy on a route replaces the budget policy there, so the budget charges nothing on that route: " + r.GatewayMessage + ". Give that policy mergeType: StrategicMerge."
+		default:
 			return Failed, "The gateway's controller does not accept the budget policy: " + describe(res.Rejected) + ". Global rate limiting must be enabled in the Envoy Gateway configuration of this cluster (rateLimit.backend), with the Redis the gateways share."
 		}
 	}
@@ -105,7 +109,7 @@ func (t *test) budget() (string, string) {
 		}
 	}
 	if used == 0 {
-		return Failed, "The request was answered but nothing was counted under the tenant's budget where the Usage page reads it: the route does not write the cost in credits, or the rate limit service does not reach the shared Redis."
+		return Failed, "The request was answered but nothing was counted under the tenant's budget where the Usage page reads it: the route does not write the cost in credits, a policy on the route replaces the budget policy (Overridden in its status), or the rate limit service does not reach the shared Redis."
 	}
 	counted := fmt.Sprintf("%d credits counted for one request", used)
 	if known {
@@ -130,10 +134,14 @@ func (t *test) budget() (string, string) {
 	return Failed, counted + ", yet requests are still answered (last: " + last + "): the rate limit rule charges nothing, or the gateway does not hold the tenant to it."
 }
 
-// models holds the temporary tenant to no model at all, so that its next
+// models holds the temporary tenant first to the model under test, which
+// it must still be served, then to no model at all, so that its next
 // request is refused with HTTP 403 before any model or quota is asked. The
-// refusal comes from the authorization rule on the tenant header and the
-// model header the gateway sets, so a budget already spent does not hide it.
+// first proves the rule with a list matches the model header; the second
+// that the rule refuses. The refusal comes from the authorization rule on
+// the tenant header and the model header the gateway sets, so the budget
+// of the step before is taken away first, and the quota raised, so that
+// neither can refuse instead.
 func (t *test) models() (string, string) {
 	switch {
 	case t.key == "":
@@ -141,21 +149,54 @@ func (t *test) models() (string, string) {
 	case !t.budgetTokensOnly():
 		return Skipped, "A tenant's list of models needs the gateways on tokens only: its rule reads the tenant header a token sets."
 	}
+	if _, err := t.r.st.SetTenantBudget(t.ctx, t.tenant.ID, nil); err != nil {
+		return Failed, err.Error()
+	}
+	if err := t.r.st.UpsertQuota(t.ctx, t.tenant.ID, t.model.ID, render.MaxLimit, testWindow, nil); err != nil {
+		return Failed, err.Error()
+	}
+	if _, err := t.r.st.SetTenantModels(t.ctx, t.tenant.ID, []string{t.model.ID}); err != nil {
+		return Failed, err.Error()
+	}
+	if _, err := t.sync("Self-test of " + t.cluster.Name + ": held " + t.tenant.Slug + " to " + t.model.Name); err != nil {
+		return Failed, "The cluster refused the objects: " + err.Error()
+	}
+	start := time.Now()
+	var last string
+	served := false
+	for !served && time.Since(start) < keyWait {
+		res, err := t.chat(t.key)
+		switch {
+		case err != nil:
+			last = err.Error()
+		case res.Status == http.StatusOK:
+			served = true
+			continue
+		default:
+			last = answer(res)
+		}
+		if !t.wait() {
+			break
+		}
+	}
+	if !served {
+		return Failed, fmt.Sprintf("Held to %s alone, the tenant was not served that model within %d seconds (last: %s): the rule with a list refuses the model it lists.", t.model.Name, int(keyWait.Seconds()), last)
+	}
+
 	if _, err := t.r.st.SetTenantModels(t.ctx, t.tenant.ID, []string{}); err != nil {
 		return Failed, err.Error()
 	}
 	if _, err := t.sync("Self-test of " + t.cluster.Name + ": held " + t.tenant.Slug + " to no model"); err != nil {
 		return Failed, "The cluster refused the objects: " + err.Error()
 	}
-	start := time.Now()
-	var last string
+	start = time.Now()
 	for time.Since(start) < keyWait {
 		res, err := t.chat(t.key)
 		switch {
 		case err != nil:
 			last = err.Error()
 		case res.Status == http.StatusForbidden:
-			return Passed, fmt.Sprintf("Refused with HTTP 403 %d seconds after the sync, as a tenant that may call no model.", int(time.Since(start).Seconds()))
+			return Passed, fmt.Sprintf("Held to %s alone, the tenant was served it; held to no model, it was refused with HTTP 403 %d seconds after the sync.", t.model.Name, int(time.Since(start).Seconds()))
 		default:
 			last = answer(res)
 		}

@@ -113,7 +113,22 @@ func (s *Server) Handler() http.Handler {
 	root.Handle("GET /api/v1/my/usage", s.tenantAuth(http.HandlerFunc(s.getMyUsage)))
 	root.Handle("/api/", s.auth(s.audit(api)))
 	root.HandleFunc("/", s.ui)
-	return root
+	return securityHeaders(root)
+}
+
+// securityHeaders asks browsers not to guess a content type, not to show
+// the pages in another site's frame (the UI frames its own platform page),
+// and not to pass the address on. A handler can set a stricter policy of
+// its own, as the platform page does.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "SAMEORIGIN")
+		h.Set("Content-Security-Policy", "frame-ancestors 'self'")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {

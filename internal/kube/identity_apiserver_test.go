@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -80,7 +81,7 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	// policy and the route's cost as the Envoy Gateway and AI Gateway CRDs
 	// take them, and the CEL rule in the policy.
 	s.Models[0].Priced, s.Models[0].CostExpression = true, "input_tokens * 15u"
-	s.Budgets = []render.TenantBudget{{TenantSlug: "team-b", Limit: 300_000, Window: "1d"}, {TenantSlug: "team-a", Limit: 100_000, Window: "1h"}}
+	s.Budgets = []render.TenantBudget{{TenantSlug: "team-b", Slot: 0, Limit: 300_000, Window: "1d"}, {TenantSlug: "team-a", Slot: 2, Limit: 100_000, Window: "1h"}}
 	s.Restricted = []render.TenantModels{{TenantSlug: "team-a", Models: []string{"GLM5.3"}}}
 	if _, err := c.Sync(ctx, ns, render.Objects(s), nil); err != nil {
 		t.Fatalf("budgets: the API server refused a rendered object: %v", err)
@@ -90,8 +91,22 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rl, _, _ := unstructured.NestedSlice(bp.Object, "spec", "rateLimit", "global", "rules"); len(rl) != 2 || fmt.Sprint(rl[0].(map[string]any)["limit"]) != "map[requests:100000 unit:Hour]" {
+	// team-b at 0, a placeholder at 1, team-a at 2; a tenant's rule matches
+	// its header twice, Exact and Distinct.
+	rl, _, _ := unstructured.NestedSlice(bp.Object, "spec", "rateLimit", "global", "rules")
+	if len(rl) != 3 || fmt.Sprint(rl[2].(map[string]any)["limit"]) != "map[requests:100000 unit:Hour]" ||
+		!strings.Contains(fmt.Sprint(rl[1]), "aigw-ui.unused-position") ||
+		!strings.Contains(fmt.Sprint(rl[0].(map[string]any)["clientSelectors"]), "type:Distinct") {
 		t.Fatalf("budget rules: %v", rl)
+	}
+	// The entry route's own policy merges with it: the field is kept, which
+	// a CRD without it would have pruned.
+	fp, err := c.dyn.Resource(btp).Namespace(ns).Get(ctx, render.FleetName("glm-5-3"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merge, _, _ := unstructured.NestedString(fp.Object, "spec", "mergeType"); merge != "StrategicMerge" {
+		t.Fatalf("the entry route's policy has mergeType %q", merge)
 	}
 	route, _ := gvrFor("AIGatewayRoute")
 	r, err := c.dyn.Resource(route).Namespace(ns).Get(ctx, render.FleetName("glm-5-3"), metav1.GetOptions{})

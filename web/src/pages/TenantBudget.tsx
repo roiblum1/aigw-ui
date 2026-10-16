@@ -28,7 +28,7 @@ export function TenantBudgetCard(props: {
   const [edit, setEdit] = useState<{ limit: string; window: Window } | null>(null);
   const used = usage?.budgets.find((b) => b.tenant_id === tenant.id);
   const priced = props.models.filter((m) => m.prices);
-  const unpriced = props.models.filter((m) => !m.prices);
+  const unpriced = props.models.filter((m) => !m.prices || m.price_dry_run);
   const why = held(props.identity);
 
   const save = (e: FormEvent) => {
@@ -48,9 +48,10 @@ export function TenantBudgetCard(props: {
       <h2>Budget across models</h2>
       <p className="hint">
         One amount in dollars for every model with prices, counted together: a cheaper model spends it more slowly.
-        The gateway refuses the tenant (HTTP 429) once it is spent, until the next {tenant.budget ? windowLabel[tenant.budget.window] : "period"}.
-        A quota per model holds alongside it.
-        {unpriced.length > 0 && ` Models without prices are not counted: ${unpriced.map((m) => m.name).join(", ")}.`}
+        Once it is spent the gateway refuses the tenant (HTTP 429) on every model, until the next{" "}
+        {tenant.budget ? windowLabel[tenant.budget.window] : "period"}. A quota per model holds alongside it.
+        {unpriced.length > 0 &&
+          ` Models without prices, or with prices in a dry run, cost nothing from it, and are refused all the same once it is spent: ${unpriced.map((m) => m.name).join(", ")}.`}
       </p>
       {tenant.budget && why && <div className="banner warn">{why}</div>}
       {edit ? (
@@ -117,8 +118,8 @@ export function TenantBudgetCard(props: {
       )}
       {edit && (
         <p className="hint">
-          Changing the budget starts its count over for the running {windowLabel[edit.window]}: the gateway names the
-          counter after the rule, and the rule changes with the budget.
+          A new amount holds what the tenant already used in the running {windowLabel[edit.window]}. A new period
+          length starts a new count.
         </p>
       )}
     </section>

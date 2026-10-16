@@ -64,7 +64,7 @@ func TestTenantBudgetAndModels(t *testing.T) {
 	if st, err = s.RenderStateWithoutKeys(ctx, site.ID); err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Budgets) != 1 || st.Budgets[0] != (render.TenantBudget{TenantSlug: "team-a", Limit: 300_000, Window: "1d"}) {
+	if len(st.Budgets) != 1 || st.Budgets[0] != (render.TenantBudget{TenantSlug: "team-a", Slot: 0, Limit: 300_000, Window: "1d"}) {
 		t.Fatalf("budgets %+v", st.Budgets)
 	}
 	if len(st.Restricted) != 1 || st.Restricted[0].TenantSlug != "team-b" || len(st.Restricted[0].Models) != 1 || st.Restricted[0].Models[0] != "glm" {
@@ -102,5 +102,49 @@ func TestTenantBudgetAndModels(t *testing.T) {
 	}
 	if b, err = s.GetTenant(ctx, b.ID); err != nil || b.Models == nil || len(b.Models) != 0 {
 		t.Fatalf("after deleting the model: %v, %v", b.Models, err)
+	}
+}
+
+// A budget takes the lowest free position and keeps it while it exists: a
+// new amount keeps it, and another tenant's budget coming or going moves
+// nobody. Its position goes with the budget.
+func TestTenantBudgetSlots(t *testing.T) {
+	s, ctx := open(t)
+	a, b, c := tenant(t, s, ctx, "team-a"), tenant(t, s, ctx, "team-b"), tenant(t, s, ctx, "aaa-new")
+	slot := func(id string) *int {
+		var n *int
+		if err := s.db.QueryRow(ctx, `SELECT budget_slot FROM tenants WHERE id = $1`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	set := func(id string, credits int64) {
+		if _, err := s.SetTenantBudget(ctx, id, &TenantBudget{Credits: credits, Window: "1d"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(a.ID, 100)
+	set(b.ID, 200)
+	if *slot(a.ID) != 0 || *slot(b.ID) != 1 {
+		t.Fatalf("slots a=%d b=%d", *slot(a.ID), *slot(b.ID))
+	}
+	set(b.ID, 999)
+	if *slot(b.ID) != 1 {
+		t.Fatalf("a new amount moved b to %d", *slot(b.ID))
+	}
+	if _, err := s.SetTenantBudget(ctx, a.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if slot(a.ID) != nil || *slot(b.ID) != 1 {
+		t.Fatal("removing a moved b or kept a's position")
+	}
+	// A tenant that sorts first takes the free position, not b's.
+	set(c.ID, 300)
+	if *slot(c.ID) != 0 || *slot(b.ID) != 1 {
+		t.Fatalf("slots c=%d b=%d", *slot(c.ID), *slot(b.ID))
+	}
+	set(a.ID, 100)
+	if *slot(a.ID) != 2 {
+		t.Fatalf("a came back at %d", *slot(a.ID))
 	}
 }

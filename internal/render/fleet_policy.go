@@ -11,6 +11,12 @@ func RetryPatchName(slug string) string { return FleetName(slug) + "-retry" }
 // fleetTrafficPolicy attaches to the HTTPRoute the gateway generates from
 // the AIGatewayRoute called name, which has the same name. A request that
 // gets one of the retryOn statuses goes to the next site.
+//
+// It is merged into the policy on the listener, the tenants' budgets. A
+// policy on a route otherwise replaces the listener's for that route, and
+// Envoy Gateway reports the listener's as Overridden: every request through
+// an entry route went uncharged by the budgets (lab, 2026-10-16). With no
+// policy on the listener the merge changes nothing.
 func fleetTrafficPolicy(s State, m Model, name string, retryOn ...int64) *unstructured.Unstructured {
 	sites := m.fleetSites()
 	zones := make([]any, 0, len(sites))
@@ -42,6 +48,7 @@ func fleetTrafficPolicy(s State, m Model, name string, retryOn ...int64) *unstru
 		"targetRefs": []any{
 			map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": name},
 		},
+		"mergeType":    "StrategicMerge",
 		"loadBalancer": loadBalancer,
 		// A site over its limit answers 503 at once; the request then goes
 		// to the next site.

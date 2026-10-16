@@ -73,8 +73,9 @@ func quotaPolicies(s State, m Model) []*unstructured.Unstructured {
 			// the policy, so that they are built again with the new rules,
 			// and puts the cost in credits on them, for the budgets.
 			annotations := map[string]string{QuotaRevisionAnnotation: quotaRevision(m)}
-			if m.Priced && m.CostExpression != "" {
+			if m.chargesBudgets() {
 				annotations[CreditsAnnotation] = m.CostExpression
+				annotations[CreditsModelAnnotation] = m.Name
 			}
 			p.SetAnnotations(annotations)
 		}
