@@ -62,7 +62,9 @@ func TestPatchVerdict(t *testing.T) {
 // The hub's SecurityPolicy as Envoy Gateway reported it on a serving site
 // whose KServe route on the client listener had a SecurityPolicy of its own
 // (site export, 2026-10-16): accepted, and overridden for that route. That
-// is a warning in the sync, not a refusal.
+// is a warning in the sync, not a refusal. The gateway chart's health check
+// overrides it wherever it is on (the lab, 2026-10-17) and reaches no model,
+// so it is left out of the warning once the hub can see that.
 func TestSecurityPolicyOverridden(t *testing.T) {
 	gvr, _ := gvrFor("SecurityPolicy")
 	status := func(conditions ...any) *unstructured.Unstructured {
@@ -73,27 +75,67 @@ func TestSecurityPolicyOverridden(t *testing.T) {
 		}}
 	}
 	accepted := map[string]any{"type": "Accepted", "status": "True", "message": "Policy has been accepted."}
-	overridden := map[string]any{"type": "Overridden", "status": "True",
-		"message": "This policy is being overridden by other securityPolicies for these routes: [llm-glm53/glm53-b200-kserve-route]"}
+	overridden := func(routes string) map[string]any {
+		return map[string]any{"type": "Overridden", "status": "True",
+			"message": "This policy is being overridden by other securityPolicies for " + routes}
+	}
 	refused := map[string]any{"type": "Accepted", "status": "False", "message": "no such listener"}
+	// The gateway chart's health check answers itself; KServe's route goes
+	// to the model's pool.
+	route := func(ns, name string, rule map[string]any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+			"metadata": map[string]any{"name": name, "namespace": ns},
+			"spec":     map[string]any{"rules": []any{rule}},
+		}}
+	}
+	health := route("gw", "envoy-ai-gateway-health", map[string]any{
+		"matches": []any{map[string]any{"path": map[string]any{"type": "Exact", "value": "/healthz/gateway"}}},
+		"filters": []any{map[string]any{"type": "ExtensionRef", "extensionRef": map[string]any{"group": "gateway.envoyproxy.io", "kind": "HTTPRouteFilter", "name": "health"}}},
+	})
+	kserve := route("llm-glm53", "glm53-b200-kserve-route", map[string]any{
+		"backendRefs": []any{map[string]any{"group": "inference.networking.k8s.io", "kind": "InferencePool", "name": "glm53-b200"}},
+	})
+	mirror := route("gw", "shadow", map[string]any{
+		"filters": []any{map[string]any{"type": "RequestMirror", "requestMirror": map[string]any{"backendRef": map[string]any{"name": "glm53"}}}},
+	})
 	for name, tc := range map[string]struct {
 		live               *unstructured.Unstructured
+		routes             []runtime.Object
 		warnings, rejected int
+		names, omits       string
 	}{
-		"accepted":   {status(accepted), 0, 0},
-		"overridden": {status(accepted, overridden), 1, 0},
-		"refused":    {status(refused), 0, 1},
+		"accepted": {live: status(accepted)},
+		"overridden by a route the hub cannot read": {live: status(accepted, overridden("these routes: [llm-glm53/glm53-b200-kserve-route]")),
+			warnings: 1, names: "glm53-b200-kserve-route"},
+		"overridden by a model's route": {live: status(accepted, overridden("these routes: [llm-glm53/glm53-b200-kserve-route]")),
+			routes: []runtime.Object{kserve}, warnings: 1, names: "glm53-b200-kserve-route"},
+		"overridden by the health check": {live: status(accepted, overridden("these routes: [gw/envoy-ai-gateway-health]")),
+			routes: []runtime.Object{health}},
+		"overridden by the health check and a model's route": {live: status(accepted, overridden("these routes: [gw/envoy-ai-gateway-health llm-glm53/glm53-b200-kserve-route]")),
+			routes: []runtime.Object{health, kserve}, warnings: 1, names: "these routes: [llm-glm53/glm53-b200-kserve-route]", omits: "health"},
+		"overridden by a route that mirrors": {live: status(accepted, overridden("these routes: [gw/shadow]")),
+			routes: []runtime.Object{mirror}, warnings: 1, names: "gw/shadow"},
+		"overridden on a route rule": {live: status(accepted, overridden("these routes: [gw/envoy-ai-gateway-health] and these route rules: [gw/other/rule-0]")),
+			routes: []runtime.Object{health}, warnings: 1, names: "gw/other/rule-0"},
+		"refused": {live: status(refused), rejected: 1},
 	} {
-		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "SecurityPolicyList"}, tc.live)
+		objs := append([]runtime.Object{tc.live}, tc.routes...)
+		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+			map[schema.GroupVersionResource]string{gvr: "SecurityPolicyList", httpRouteGVR: "HTTPRouteList"}, objs...)
 		var res SyncResult
 		desired := tc.live.DeepCopy()
 		delete(desired.Object, "status")
 		(&Client{dyn: dyn}).readGatewayStatus(context.Background(), "gw", []*unstructured.Unstructured{desired}, &res)
 		if len(res.Warnings) != tc.warnings || len(res.Rejected) != tc.rejected {
 			t.Errorf("%s: warnings %v, rejected %v", name, res.Warnings, res.Rejected)
+			continue
 		}
-		if tc.warnings > 0 && !strings.Contains(res.Warnings[0], "glm53-b200-kserve-route") {
-			t.Errorf("%s: the warning does not name the route: %s", name, res.Warnings[0])
+		if tc.warnings > 0 && !strings.Contains(res.Warnings[0], tc.names) {
+			t.Errorf("%s: the warning does not name %q: %s", name, tc.names, res.Warnings[0])
+		}
+		if tc.omits != "" && strings.Contains(res.Warnings[0], tc.omits) {
+			t.Errorf("%s: the warning names %q: %s", name, tc.omits, res.Warnings[0])
 		}
 	}
 }

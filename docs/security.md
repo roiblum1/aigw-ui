@@ -40,11 +40,16 @@ LLMInferenceServiceConfigs they are built on, the pods of their deployments
 (`kserve.io/component=workload`) and the nodes' labels, to count ready
 instances, find each deployment's GPU and tell what it runs, and gets the
 `Deployment` or `LeaderWorkerSet` each service's status names, for its ready
-count. Without list on pods and nodes the instances are still counted, the
-GPUs are not known, and the cluster's discovery message says what was not
-allowed; without get on the workloads the count KServe copies into the
-service's status is used; without list on pods or on the configs, a change
-of image or of a shared config does not mark a measurement stale
+count. It gets the HTTPRoutes Envoy Gateway names when a policy of their
+own replaces the hub's `SecurityPolicy` on them, to leave a route that
+forwards nothing out of the sync's warning. Without list on pods and nodes
+the instances are still counted, the GPUs are not known, and the cluster's
+discovery message says what was not allowed; without get on the workloads
+the count KServe copies into the service's status is used; without get on
+HTTPRoutes the gateway chart's health check, where it is on, is warned
+about on every sync;
+without list on pods or on the configs, a change of image or of a shared
+config does not mark a measurement stale
 ([capacity](capacity.md#what-is-measured-each-llminferenceservice)). A ServiceAccount
 kubeconfig limited to that would reduce the damage if the hub were
 compromised.
@@ -332,10 +337,11 @@ to what they belong to:
 
 It reads, across the cluster, `LLMInferenceService`s and their configs, the
 workload pods, the nodes' labels, the `Deployment` or `LeaderWorkerSet`
-each service's status names, and its `InferencePool`, and in the gateway
-namespace the `Gateway`. Each of these that it may not read only takes away
-what it is for (GPU shapes, ready counts from the workload itself, the rank
-ports of a measurement).
+each service's status names, and its `InferencePool`, in the gateway
+namespace the `Gateway`, and the HTTPRoutes whose own `SecurityPolicy`
+replaces the hub's. Each of these that it may not read only takes away what
+it is for (GPU shapes, ready counts from the workload itself, the rank ports
+of a measurement, a warning without the routes that reach no model).
 
 Turning on "Enforce API keys" attaches API key auth to the whole gateway. That
 is the one setting that affects traffic this tool does not otherwise manage.

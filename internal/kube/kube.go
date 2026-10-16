@@ -48,6 +48,8 @@ var optional = map[string]bool{render.ObjectiveKind: true}
 
 var gatewayGVR = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
 
+var httpRouteGVR = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+
 func gvrFor(kind string) (schema.GroupVersionResource, bool) {
 	for _, m := range managed {
 		if m.Kind == kind {

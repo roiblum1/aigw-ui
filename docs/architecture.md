@@ -605,7 +605,13 @@ a tenant's key or token, carry no tenant header, and are charged to no
 tenant's budget or quota. Since 0.29.0 the sync reads the policy's status and
 adds a warning to the task message; it is not a rejection, since the route
 is the site's (a site export showed KServe's route of glm53 on the client
-listener with an internal key of its own, 2026-10-16). Discovery adds the
+listener with an internal key of its own, 2026-10-16). A route that
+forwards nothing is left out: none of its rules has a backend or mirrors to
+one, so it reaches no model. The gateway chart's health check
+(`envoy-ai-gateway-health`, which answers `/healthz/gateway` itself) is such
+a route, has a policy of its own, and is on the client listener wherever a
+site turns it on (`health.enabled`, for a global load balancer). The hub gets each route the report names to see that; a route it may
+not get stays in the warning. Discovery adds the
 same kind of warning to the cluster's discovery message when an
 `LLMInferenceService`'s `status.router.gateways[].listeners` holds the client
 listener: KServe's route there reaches the model without the entry route and
