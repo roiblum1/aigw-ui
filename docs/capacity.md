@@ -61,6 +61,17 @@ decode there is no fixed instance, so the whole LLMI is measured through
 its scheduler and the result is divided by its decode replicas during the
 run.
 
+**Where the load goes.** To the ports the LLMI's `InferencePool` lists
+(`spec.targetPorts`), the ones its scheduler sends requests to. A pod that
+runs one API server per data-parallel rank (vLLM's
+`--data-parallel-multi-port-external-lb`, as glm53 does on 8000 to 8007)
+gets the load on every rank in turn (AIPerf's `--url` given once per port,
+round robin), and the counters of all ranks are added up: the pod is one
+instance. Without a pool, or one the hub may not read, the load goes to the
+port of the main container's readiness probe, or 8000. glm53's probes go to
+a supervisor on 8208 that answers health checks only, so before 0.29.0 its
+measurement could not reach the model.
+
 The page also shows each LLMI's shape (GPU, GPUs per instance, topology,
 revision), its vLLM `--quantization` and whether it uses LMCache, read from
 its containers' arguments and environment (KServe passes extra arguments in
@@ -410,12 +421,12 @@ actual use instead would raise the price in a quiet month, which makes
 tenants use less, which raises it again. Set it once, then review it every
 month or so against the average day shown beside it.
 
-**Prices and cost.** With a cost for every measured shape's GPU:
+**Prices and cost.** With a cost for the GPU of every measured LLMI:
 
 ```
-cost an hour        = sum over measured shapes of: GPUs per instance x GPU cost x ready instances
+cost an hour        = sum over measured LLMIs of: GPUs per instance x GPU cost x ready instances
 input price per 1M  = cost an hour / (3,600 x weighted tokens a second x expected busy share) x 1,000,000
-weighted            = sum over measured shapes of: ready instances x
+weighted            = sum over measured LLMIs of: ready instances x
                       ((prompt - cached) + cached ratio x cached + output ratio x output)
 ```
 
@@ -500,7 +511,7 @@ saturated.
 - The scheduler's choice of replica by cache is not part of it. Multiplying
   by the ready instances assumes it spreads the load evenly.
 - The site weights of the entry route use the measurements only when every
-  deployment of the model with a ready instance has a measured shape;
+  LLMI of the model with a ready instance has a measurement that counts;
   until then they follow `aigw-ui.io/capacity-per-instance`. See
   [architecture](architecture.md).
 

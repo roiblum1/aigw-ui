@@ -1,10 +1,16 @@
 package kube
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+
+	"aigw-ui/internal/render"
 )
 
 func TestPatchVerdict(t *testing.T) {
@@ -50,5 +56,101 @@ func TestPatchVerdict(t *testing.T) {
 		if got == "Overridden" && !strings.Contains(message, "fleet-m") {
 			t.Errorf("%s: message %q does not name the route", name, message)
 		}
+	}
+}
+
+// The hub's SecurityPolicy as Envoy Gateway reported it on a serving site
+// whose KServe route on the client listener had a SecurityPolicy of its own
+// (site export, 2026-10-16): accepted, and overridden for that route. That
+// is a warning in the sync, not a refusal.
+func TestSecurityPolicyOverridden(t *testing.T) {
+	gvr, _ := gvrFor("SecurityPolicy")
+	status := func(conditions ...any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.envoyproxy.io/v1alpha1", "kind": "SecurityPolicy",
+			"metadata": map[string]any{"name": "aigw-ui-api-key-auth", "namespace": "gw"},
+			"status":   map[string]any{"ancestors": []any{map[string]any{"conditions": conditions}}},
+		}}
+	}
+	accepted := map[string]any{"type": "Accepted", "status": "True", "message": "Policy has been accepted."}
+	overridden := map[string]any{"type": "Overridden", "status": "True",
+		"message": "This policy is being overridden by other securityPolicies for these routes: [llm-glm53/glm53-b200-kserve-route]"}
+	refused := map[string]any{"type": "Accepted", "status": "False", "message": "no such listener"}
+	for name, tc := range map[string]struct {
+		live               *unstructured.Unstructured
+		warnings, rejected int
+	}{
+		"accepted":   {status(accepted), 0, 0},
+		"overridden": {status(accepted, overridden), 1, 0},
+		"refused":    {status(refused), 0, 1},
+	} {
+		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "SecurityPolicyList"}, tc.live)
+		var res SyncResult
+		desired := tc.live.DeepCopy()
+		delete(desired.Object, "status")
+		(&Client{dyn: dyn}).readGatewayStatus(context.Background(), "gw", []*unstructured.Unstructured{desired}, &res)
+		if len(res.Warnings) != tc.warnings || len(res.Rejected) != tc.rejected {
+			t.Errorf("%s: warnings %v, rejected %v", name, res.Warnings, res.Rejected)
+		}
+		if tc.warnings > 0 && !strings.Contains(res.Warnings[0], "glm53-b200-kserve-route") {
+			t.Errorf("%s: the warning does not name the route: %s", name, res.Warnings[0])
+		}
+	}
+}
+
+// A retry patch written for both names of the route configuration is in
+// effect when Envoy Gateway reports only the other name as not found, as
+// its translator words it (1.9.2, internal/xds/translator/jsonpatch.go).
+// When both are missing, the route configuration is.
+func TestOtherSchemeOnly(t *testing.T) {
+	policy := &unstructured.Unstructured{Object: map[string]any{}}
+	policy.SetAnnotations(map[string]string{render.RouteConfigsAnnotation: "gw/envoy-ai-gateway/http,http-80"})
+	missing := func(names ...string) string {
+		var list []string
+		for _, n := range names {
+			list = append(list, render.RouteConfigType+"/"+n)
+		}
+		return "Unable to find xds resources: " + strings.Join(list, ",")
+	}
+	for message, want := range map[string]bool{
+		missing("http-80", "http-80", "http-80"):                        true,
+		missing("gw/envoy-ai-gateway/http", "gw/envoy-ai-gateway/http"): true,
+		missing("gw/envoy-ai-gateway/http", "http-80"):                  false,
+		missing("http-8080"):                                            false,
+		"jsonpath ..routes matched nothing":                             false,
+	} {
+		if got := otherSchemeOnly(policy, message); got != want {
+			t.Errorf("%q: %v, want %v", message, got, want)
+		}
+	}
+	if otherSchemeOnly(&unstructured.Unstructured{Object: map[string]any{}}, missing("http-80")) {
+		t.Error("a patch with one name has no other")
+	}
+}
+
+// The port is read from the client listener when it serves plain HTTP.
+func TestClientPort(t *testing.T) {
+	gw := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+		"metadata": map[string]any{"name": "envoy-ai-gateway", "namespace": "gw"},
+		"spec": map[string]any{"listeners": []any{
+			map[string]any{"name": "http", "port": int64(80), "protocol": "HTTP"},
+			map[string]any{"name": "peers", "port": int64(8443), "protocol": "HTTPS"},
+		}},
+	}}
+	// The fake would file a Gateway under "gatewaies", so it is added by its
+	// resource.
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gatewayGVR: "GatewayList"})
+	if err := dyn.Tracker().Create(gatewayGVR, gw, "gw"); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{dyn: dyn}
+	for listener, want := range map[string]int64{"http": 80, "peers": 0, "none": 0} {
+		if got, err := c.ClientPort(context.Background(), "gw", "envoy-ai-gateway", listener); err != nil || got != want {
+			t.Errorf("%s: %d %v, want %d", listener, got, err, want)
+		}
+	}
+	if got, err := c.ClientPort(context.Background(), "gw", "missing", "http"); err != nil || got != 0 {
+		t.Errorf("no gateway: %d %v", got, err)
 	}
 }

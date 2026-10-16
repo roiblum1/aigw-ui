@@ -74,6 +74,22 @@ func TestRealAPIServerEntryRoute(t *testing.T) {
 		t.Errorf("a sync that changes nothing: %+v %v", res.Changes, err)
 	}
 
+	// With the client listener's port known the retry patch names both route
+	// configurations, six patches in one policy, which the CRD takes.
+	ported := fleetTestState(ns, site1, site2)
+	ported.ClientPort = 80
+	if res, err := c.Sync(ctx, ns, render.Objects(ported), nil); err != nil || len(res.Changes) != 1 {
+		t.Fatalf("both names: %+v %v", res.Changes, err)
+	}
+	patchGVR, _ := gvrFor("EnvoyPatchPolicy")
+	patch, err := c.dyn.Resource(patchGVR).Namespace(ns).Get(ctx, render.RetryPatchName("glm-5-3"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patches, _, _ := unstructured.NestedSlice(patch.Object, "spec", "jsonPatches"); len(patches) != 6 {
+		t.Errorf("patches stored: %d", len(patches))
+	}
+
 	// site2-a is drained out: it leaves the Backend and the zones together.
 	if _, err := c.Sync(ctx, ns, render.Objects(fleetTestState(ns, site1)), nil); err != nil {
 		t.Fatal(err)

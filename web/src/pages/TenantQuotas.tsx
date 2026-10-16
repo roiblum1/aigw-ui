@@ -133,8 +133,11 @@ export default function TenantQuotas(props: {
     ? 0
     : quotas.filter((q) => q.unit === "credits" && !q.shadow).reduce((n, q) => n + dailyMax(q.token_limit, q.window), 0);
   const usedAll = usage?.budgets.find((b) => b.tenant_id === tenant.id);
-  const priced = props.models.filter((m) => m.prices);
-  const uncounted = props.models.filter((m) => !m.prices || m.price_dry_run);
+  /** Whether the tenant may call the model: a tenant with a list of models may call those only. */
+  const callable = (modelId: string) => tenant.models == null || tenant.models.includes(modelId);
+  const itsModels = props.models.filter((m) => callable(m.id));
+  const priced = itsModels.filter((m) => m.prices);
+  const uncounted = itsModels.filter((m) => !m.prices || m.price_dry_run);
 
   const usageOf = (modelId: string) => usage?.quotas.find((u) => u.model_id === modelId);
   const withQuota = new Set(quotas.map((q) => q.model_id));
@@ -244,9 +247,9 @@ export default function TenantQuotas(props: {
               All models{allClosed ? ` (${allClosed})` : ""}
             </option>
             {free.map((m) => (
-              <option key={m.id} value={m.id} disabled={!m.quota_capable}>
+              <option key={m.id} value={m.id} disabled={!m.quota_capable || !callable(m.id)}>
                 {m.name}
-                {m.quota_capable ? "" : " (no quota possible)"}
+                {!callable(m.id) ? " (not in its models)" : m.quota_capable ? "" : " (no quota possible)"}
               </option>
             ))}
           </select>
@@ -269,8 +272,9 @@ export default function TenantQuotas(props: {
       )}
       {(addingAll || all) && (
         <p className="hint">
-          All models: one amount in dollars for every model with prices, counted together. The tenant chooses what to
-          spend it on, and a cheaper model spends it more slowly. Once it is spent the gateway refuses the tenant (HTTP
+          All models: one amount in dollars for every model with prices
+          {tenant.models != null && " that the tenant may call (its list of models)"}, counted together. The tenant
+          chooses what to spend it on, and a cheaper model spends it more slowly. Once it is spent the gateway refuses the tenant (HTTP
           429) on every model until the next {windowLabel[(all ?? added).window]}.
           {uncounted.length > 0 &&
             ` Models without prices, or with prices in a dry run, cost nothing from it, and are refused all the same once it is spent: ${uncounted.map((m) => m.name).join(", ")}.`}
@@ -394,6 +398,15 @@ export default function TenantQuotas(props: {
                             title="From before a tenant had one or the other. A tenant with a budget for all models has no quota per model: remove it."
                           >
                             from before: remove
+                          </span>
+                        )}
+                        {!all && !callable(q.model_id) && " "}
+                        {!all && !callable(q.model_id) && (
+                          <span
+                            className="tag warn"
+                            title="The tenant may not call this model, so the gateway refuses it before the quota is asked. Remove the quota, or add the model to the tenant's models."
+                          >
+                            not in its models
                           </span>
                         )}
                       </>

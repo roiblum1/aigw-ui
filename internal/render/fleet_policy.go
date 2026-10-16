@@ -1,6 +1,9 @@
 package render
 
 import (
+	"strconv"
+	"strings"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -51,7 +54,12 @@ func fleetTrafficPolicy(s State, m Model, name string, retryOn ...int64) *unstru
 		"mergeType":    "StrategicMerge",
 		"loadBalancer": loadBalancer,
 		// A site over its limit answers 503 at once; the request then goes
-		// to the next site.
+		// to the next site. So does a 500: a site whose scheduler (the
+		// endpoint picker) cannot be reached answers it to every request,
+		// because Envoy AI Gateway up to 1.2.0 sets failure_mode_allow to
+		// false on the pool's ext_proc filter and ignores the pool's
+		// FailOpen. A 500 from the model itself is tried elsewhere too,
+		// which costs at most one more try per other site.
 		"retry": map[string]any{
 			"numRetries": int64(len(sites) - 1),
 			"retryOn": map[string]any{
@@ -122,27 +130,31 @@ func sessionHeaders(f FleetConfig) []any {
 // Each route has a policy of its own: Envoy Gateway applies the patches of
 // one policy together, so in a shared policy one route that is not there
 // yet would take the settings away from every other.
+//
+// The route configuration has two names. Envoy Gateway names it after the
+// listener ("<namespace>/<gateway>/<listener>") and, with its runtime flag
+// XDSNameSchemeV2, after the port of a plain-HTTP listener ("http-<port>");
+// the flag is off up to 1.9 and is to be on by default from 1.10. With the
+// old name only, every patch would find nothing on such a gateway, and every
+// forwarded request would get a 404 for the lost Host. So the patches are
+// written for both names when the port is known: Envoy Gateway applies those
+// whose configuration exists and skips the others, which it reports as not
+// found (RouteConfigsAnnotation lets the sync tell that apart).
 func fleetRetryPatch(s State, name string) *unstructured.Unstructured {
 	// The route Envoy Gateway generates from the first rule of the
 	// AIGatewayRoute, which is its only one.
 	route := "..routes[?(@.name == 'httproute/" + s.Namespace + "/" + name + "/rule/0/match/0/*')].route"
-	patch := func(op, jsonPath, path string, value any) map[string]any {
-		operation := map[string]any{"op": op, "jsonPath": jsonPath, "path": path}
-		if value != nil {
-			operation["value"] = value
+	configs := RouteConfigNames(s)
+	var patches []any
+	for _, config := range configs {
+		patch := func(op, jsonPath, path string, value any) map[string]any {
+			operation := map[string]any{"op": op, "jsonPath": jsonPath, "path": path}
+			if value != nil {
+				operation["value"] = value
+			}
+			return map[string]any{"type": RouteConfigType, "name": config, "operation": operation}
 		}
-		return map[string]any{
-			"type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
-			// The route configuration of the listener the entry route is on.
-			"name":      s.Namespace + "/" + s.GatewayName + "/" + s.ClientListener,
-			"operation": operation,
-		}
-	}
-	u := object(egAPI, "EnvoyPatchPolicy", s.Namespace, name+"-retry")
-	u.Object["spec"] = map[string]any{
-		"targetRef": map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName},
-		"type":      "JSONPatch",
-		"jsonPatches": []any{
+		patches = append(patches,
 			// "add" also replaces a value that is there, so the patch still
 			// works if Envoy Gateway stops setting its own.
 			patch("add", route+".retry_policy", "host_selection_retry_max_attempts", fleetHostAttempts),
@@ -151,7 +163,36 @@ func fleetRetryPatch(s State, name string) *unstructured.Unstructured {
 			// it for Envoy.
 			patch("remove", route, "auto_host_rewrite", nil),
 			patch("add", route, "host_rewrite_literal", s.Fleet.PeerSNI),
-		},
+		)
+	}
+	u := object(egAPI, "EnvoyPatchPolicy", s.Namespace, name+"-retry")
+	if len(configs) > 1 {
+		u.SetAnnotations(map[string]string{RouteConfigsAnnotation: strings.Join(configs, ",")})
+	}
+	u.Object["spec"] = map[string]any{
+		"targetRef":   map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName},
+		"type":        "JSONPatch",
+		"jsonPatches": patches,
 	}
 	return u
+}
+
+const (
+	// RouteConfigType is the xDS type the retry patches change.
+	RouteConfigType = "type.googleapis.com/envoy.config.route.v3.RouteConfiguration"
+	// RouteConfigsAnnotation lists, on a retry patch written for both names
+	// of the route configuration, those names: only one of them exists on
+	// a gateway, and Envoy Gateway reports the others as not found.
+	RouteConfigsAnnotation = "aigw-ui.io/route-configurations"
+)
+
+// RouteConfigNames returns the names the client listener's route
+// configuration has under Envoy Gateway's xDS name schemes: the listener's
+// own, and with a known plain-HTTP port the one after the port.
+func RouteConfigNames(s State) []string {
+	names := []string{s.Namespace + "/" + s.GatewayName + "/" + s.ClientListener}
+	if s.ClientPort > 0 {
+		names = append(names, "http-"+strconv.FormatInt(s.ClientPort, 10))
+	}
+	return names
 }

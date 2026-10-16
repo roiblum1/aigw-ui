@@ -278,11 +278,20 @@ sum over the model's LLMInferenceServices on that cluster of
     ready instances x capacity of one instance
 ```
 
-- *Ready instances* is read from `status.workloads` of each
-  `LLMInferenceService`, which KServe 0.21 fills from the Deployment's
-  available replicas, or from the LeaderWorkerSet's ready groups for a
-  multi-node deployment. A multi-node instance therefore counts once, however
-  many nodes it spans.
+- *Ready instances* come from the workload that `status.workloads` of each
+  `LLMInferenceService` names: the Deployment's available replicas, or the
+  LeaderWorkerSet's ready groups for a multi-node deployment, read from that
+  object. A multi-node instance therefore counts once, however many nodes it
+  spans. The desired count is the object's `spec.replicas` too, which an
+  autoscaler sets when the service has `spec.scaling` and no replicas of its
+  own. KServe 0.21 copies the same counts into `status.workloads`, but only
+  when the rest of its reconcile succeeds, and it bumps `observedGeneration`
+  whatever happens (knative `PostProcessReconcile`), so after a router error
+  the copy is old and nothing says so. Without get on Deployments or
+  LeaderWorkerSets the copy is used. Only `v1alpha2` has `status.workloads`;
+  a cluster that serves `v1alpha1` alone reports no ready count.
+- `serving.kserve.io/stop` stops a service in any case of `true`, as KServe
+  reads it (`strings.EqualFold`).
 - With separate prefill and decode, an instance is a decode replica together
   with its share of the prefill replicas, in the ratio the spec asks for. Four
   decode and two prefill replicas are four instances; with one prefill replica
@@ -382,10 +391,21 @@ The policy holds the routing:
   [cache-aware routing between sites](how-it-works.md#cache-aware-routing-between-sites).
 - **Zones:** exactly the endpoints of the `Backend`, in the same order,
   sorted by cluster name. A zone with an endpoint and no weight would get a
-  weight of 1 from the gateway, and the hash table is built from the list, so
-  the order has to be the same everywhere.
-- **Retry:** on connect failure, reset and 503, once per other site. A site
-  over its limit answers 503 at once and the request goes to the next one.
+  weight of 1 from the gateway. The order keeps every cluster's objects and
+  fleet revision identical; the hash table does not depend on it. Envoy's
+  Maglev sorts the hosts by their resolved address and port, so a
+  conversation lands on the same site from every gateway only if **every
+  gateway resolves each peer host to the same address**. Split-horizon DNS
+  that gives a peer host a different address on each site breaks that.
+- **Retry:** on connect failure, reset, 500 and 503, once per other site. A
+  site over its limit answers 503 at once and the request goes to the next
+  one. A site whose scheduler (endpoint picker) cannot be reached answers
+  500 to every request: Envoy AI Gateway up to 1.2.0 sets
+  `failure_mode_allow: false` on the pool's ext_proc filter
+  (`internal/extensionserver/inferencepool.go:347` in v1.2.0) and ignores
+  the pool's `FailOpen`. A 500 from the model itself is tried on another site
+  too. A reset is retried as well: a site that drops the connection has lost
+  the request, since vLLM aborts a request whose connection closes.
 - **Health check:** `GET /healthz/<model>` on each site's peer listener
   every 3s, with `panicThreshold: 1`: a site that fails is not used while
   another site passes, and when every site fails the request is sent anyway.
@@ -416,6 +436,21 @@ The policy holds the routing:
     reports it in the task log, and the self-test fails on it.
   - It names the route as Envoy Gateway and the AI Gateway generate it
     today. Run the self-test on one cluster after every upgrade of either.
+  - **Two names of the route configuration.** Envoy Gateway names the
+    client listener's route configuration `<namespace>/<gateway>/<listener>`,
+    and under its runtime flag `XDSNameSchemeV2` `http-<port>` for a
+    plain-HTTP listener. The flag is off up to 1.9.2 and is to be on by
+    default from 1.10 (Envoy Gateway's EnvoyPatchPolicy task). Before each
+    sync the hub reads the listener's port from the `Gateway` and writes the
+    three patches for both names. Envoy Gateway applies the ones whose
+    configuration exists and reports the other name as not found
+    (`Programmed: False`, `ResourceNotFound`). The policy's annotation
+    `aigw-ui.io/route-configurations` lists both names, and the sync takes
+    that report as in effect while one of them is found. With both missing it
+    reports the patch as before. Envoy Gateway writes the not-found report
+    over any other error of the same policy, so an error in the patches of
+    the name that exists shows only in the self-test's stickiness step,
+    which then gets no answer.
   - The retry part can go when Envoy Gateway makes the number a setting.
 - **Circuit breaker:** as good as off (100000). Each site's own limit decides.
 
@@ -562,6 +597,19 @@ attaches to the whole Gateway unless the cluster has one; then it attaches to th
 (`sectionName`). A gateway that also has a listener for requests forwarded by
 other sites needs this: the entry gateway removes the key before forwarding,
 so a key check on that listener would refuse every cross-site request.
+
+**A route with its own policy.** A `SecurityPolicy` on a route of the client
+listener replaces the hub's on that route: Envoy Gateway reports the hub's
+policy `Overridden` and names the routes. Requests there are not checked for
+a tenant's key or token, carry no tenant header, and are charged to no
+tenant's budget or quota. Since 0.29.0 the sync reads the policy's status and
+adds a warning to the task message; it is not a rejection, since the route
+is the site's (a site export showed KServe's route of glm53 on the client
+listener with an internal key of its own, 2026-10-16). Discovery adds the
+same kind of warning to the cluster's discovery message when an
+`LLMInferenceService`'s `status.router.gateways[].listeners` holds the client
+listener: KServe's route there reaches the model without the entry route and
+without the AI gateway's processing.
 
 ## Audit log
 
@@ -726,6 +774,9 @@ server with cut-down CRDs but not against KServe or Envoy Gateway:
   `status.workloads.prefill.readyReplicas` as its 0.21 source says;
 - that `serving.kserve.io/stop: "true"` is how a stopped service is marked. It
   is what makes a stopped service count as zero and not as unknown;
+- that the available replicas of the Deployment `status.workloads.primary`
+  names match what KServe copies into the status on a live cluster (0.29.0
+  reads the Deployment; tested against a stand-in API only);
 - that Envoy Gateway accepts a zone weight of 0, and what it does with a zone
   that has no endpoint;
 - that Argo CD leaves the weights alone with the setting above.
@@ -738,7 +789,12 @@ removed.
 ## Requirements on each LLM cluster
 
 - Envoy Gateway with the `Backend` API enabled.
-- Envoy AI Gateway 1.1.0 or 1.2.0. This tool writes `AIGatewayRoute` and
+- Envoy AI Gateway 1.2.0 for quotas by amount and budgets across models.
+  1.1.0 charges a `QuotaPolicy` rule that counts per tenant (`Distinct`) to
+  one shared bucket ("Per-tenant token limits charge the right tenant" in
+  the 1.2.0 release notes), so every tenant with the same amount shares one
+  counter there; the self-test's tenant-header step fails on it and says
+  so. Shared pools and the entry route work on 1.1.0. This tool writes `AIGatewayRoute` and
   `AIServiceBackend` as `aigateway.envoyproxy.io/v1beta1`, and `QuotaPolicy`
   as `v1alpha1`, the only version it has. Up to 0.11.0 it wrote all three as
   `v1alpha1`, which both gateway versions still serve but call deprecated.

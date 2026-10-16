@@ -26,8 +26,11 @@ type Instance struct {
 	Namespace string
 	Pod       string
 	// URL reaches the pod's model server directly, past the gateway and
-	// the scheduler.
-	URL string
+	// the scheduler. URLs has one address per port the pod serves on: one
+	// per data-parallel rank of a pod that runs an API server for each
+	// (vLLM's --data-parallel-multi-port-external-lb), else just URL.
+	URL  string
+	URLs []string
 	// Model is the name the server serves the model under.
 	Model string
 	// MaxModelLen is what the deployment declares, or 0.
@@ -68,7 +71,7 @@ func (c *Client) Instance(ctx context.Context, namespace, name, pod string) (Ins
 		if p.GetName() != pod {
 			continue
 		}
-		url, err := serverURL(p)
+		urls, err := serverURLs(p, c.rankPorts(ctx, svc))
 		if err != nil {
 			return Instance{}, fmt.Errorf("%s: %w", pod, err)
 		}
@@ -77,7 +80,7 @@ func (c *Client) Instance(ctx context.Context, namespace, name, pod string) (Ins
 			model = svc.GetName()
 		}
 		maxLen, _ := strconv.Atoi(svc.GetAnnotations()[MaxModelLenAnnotation])
-		return Instance{Namespace: namespace, Pod: pod, URL: url, Model: model, MaxModelLen: maxLen}, nil
+		return Instance{Namespace: namespace, Pod: pod, URL: urls[0], URLs: urls, Model: model, MaxModelLen: maxLen}, nil
 	}
 	return Instance{}, fmt.Errorf("%s/%s has no ready pod called %s", namespace, name, pod)
 }
@@ -160,6 +163,57 @@ func isReady(p *unstructured.Unstructured) bool {
 		}
 	}
 	return false
+}
+
+// The InferencePool in its two generations, by API group.
+var poolGVRs = map[string]schema.GroupVersionResource{
+	"inference.networking.k8s.io":   {Group: "inference.networking.k8s.io", Version: "v1", Resource: "inferencepools"},
+	"inference.networking.x-k8s.io": {Group: "inference.networking.x-k8s.io", Version: "v1alpha2", Resource: "inferencepools"},
+}
+
+// rankPorts returns the ports the service's InferencePool sends requests to
+// on each pod, the ones the scheduler picks from. A pod that runs one API
+// server per data-parallel rank lists each: glm53 serves on 8000 to 8007
+// and answers health checks only on 8208, which its probes use. nil when
+// the service has no scheduler or its pool cannot be read.
+func (c *Client) rankPorts(ctx context.Context, svc *unstructured.Unstructured) []int64 {
+	p, ok := pool(svc)
+	gvr, known := poolGVRs[p.Group]
+	if !ok || !known {
+		return nil
+	}
+	obj, err := c.dyn.Resource(gvr).Namespace(p.Namespace).Get(ctx, p.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil
+	}
+	if n, found, _ := unstructured.NestedInt64(obj.Object, "spec", "targetPortNumber"); found {
+		return []int64{n}
+	}
+	ports, _, _ := unstructured.NestedSlice(obj.Object, "spec", "targetPorts")
+	var out []int64
+	for _, port := range ports {
+		if m, ok := port.(map[string]any); ok {
+			if n, ok := m["number"].(int64); ok && n > 0 {
+				out = append(out, n)
+			}
+		}
+	}
+	return out
+}
+
+// serverURLs returns an address of the pod's model server for each of the
+// given ports, or the one serverURL finds when there are none.
+func serverURLs(pod unstructured.Unstructured, ports []int64) ([]string, error) {
+	url, err := serverURL(pod)
+	if err != nil || len(ports) == 0 {
+		return []string{url}, err
+	}
+	base := url[:strings.LastIndex(url, ":")+1]
+	out := make([]string, 0, len(ports))
+	for _, p := range ports {
+		out = append(out, base+strconv.FormatInt(p, 10))
+	}
+	return out, nil
 }
 
 // serverURL reads where a pod's model server listens from the readiness

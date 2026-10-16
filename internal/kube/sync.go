@@ -25,6 +25,10 @@ type SyncResult struct {
 	Rejected []Change `json:"rejected"`
 	// Held says which models' objects were left as they are, and why.
 	Held []string `json:"held,omitempty"`
+	// Warnings say what the gateway reports that takes away part of what
+	// an accepted object is for, such as a route's own SecurityPolicy that
+	// replaces the hub's there.
+	Warnings []string `json:"warnings,omitempty"`
 	// Skipped lists the objects that were not written because the cluster
 	// does not have their kind, as "<kind> <namespace>/<name>".
 	Skipped []string `json:"skipped,omitempty"`

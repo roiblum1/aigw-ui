@@ -405,7 +405,14 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
         }
         resetBudget={() => action.run(async () => void (await api.resetBudget(tenant.id), await usage.reload()))}
       />
-      <TenantModelsCard tenant={tenant} models={data.models} identity={data.signing.identity} busy={action.busy} act={act} />
+      <TenantModelsCard
+        tenant={tenant}
+        models={data.models}
+        withQuota={quotas.map((q) => q.model_id)}
+        identity={data.signing.identity}
+        busy={action.busy}
+        act={act}
+      />
 
       {newKey && (
         <Modal

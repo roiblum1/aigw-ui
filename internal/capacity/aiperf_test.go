@@ -47,7 +47,7 @@ func TestRealAIPerf(t *testing.T) {
 	set.MaxOutputTokens = 64
 	set.TTFTMillis = 600_000
 	set.ITLMillis = 10_000
-	config, _ := json.Marshal(map[string]any{"url": "http://127.0.0.1:8000", "model": "m", "settings": set, "grace_seconds": 30, "agentic": Agentic(set),
+	config, _ := json.Marshal(map[string]any{"urls": []string{"http://127.0.0.1:8000"}, "model": "m", "settings": set, "grace_seconds": 30, "agentic": Agentic(set),
 		"quiet_seconds": 2})
 
 	cmd := exec.Command(tool, "run", "--rm", "--network", "none", "-v", dir+":/c:ro",

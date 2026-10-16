@@ -619,6 +619,13 @@ questions: the first is authorization (403), the second a budget (429). A
 model added later is closed to a tenant with a list until it is added, so
 nothing opens by accident.
 
+**With a budget or quotas.** A budget for all models is spent on the models
+of the list that have prices. A quota is only possible on a model in the
+list: the hub refuses one on another model (409), and refuses a list that
+leaves out a model the tenant has a quota on, since the gateway would refuse
+the model before the quota is asked. The usage of a tenant's budget per
+model is read only for the models it may call.
+
 ### Why a new quota needs the route to change
 
 **What it does.** Every route the server renders carries the annotation

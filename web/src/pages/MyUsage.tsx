@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { LogOut } from "lucide-react";
 import { api, Unauthorized, type MyBudget, type MyUsage as Report, type Unit } from "../api";
 import BrandMark from "../BrandMark";
+import { CreditsTrigger, Footer } from "../Credits";
 import { Bar } from "../charts";
 import { ErrorBanner, formatAmount, formatNumber, formatPrice, windowLabel } from "../components";
 import { HistoryView, Seg } from "./History";
@@ -98,10 +99,12 @@ function SignIn({ onKey }: { onKey: (key: string, report: Report) => void }) {
     }
   };
   return (
-    <div className="grid min-h-screen place-items-center bg-sidebar p-4">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-sidebar p-4">
       <form onSubmit={submit} className="w-full max-w-[400px] rounded-2xl border border-border bg-card p-7 shadow-2xl shadow-black/30">
         <div className="mb-6 flex items-center gap-3">
-          <BrandMark className="size-10" />
+          <CreditsTrigger>
+            <BrandMark className="size-10" />
+          </CreditsTrigger>
           <div>
             <h1 className="text-lg">Your usage</h1>
             <p className="text-[13px] text-muted-foreground">Budgets, usage and prices of your team</p>
@@ -120,6 +123,7 @@ function SignIn({ onKey }: { onKey: (key: string, report: Report) => void }) {
           {busy ? "Signing in…" : "Show my usage"}
         </button>
       </form>
+      <Footer className="on-dark" />
     </div>
   );
 }
@@ -184,7 +188,9 @@ export default function MyUsage() {
   return (
     <div className="min-h-screen">
       <header className="flex items-center gap-3 bg-sidebar px-4 py-3 md:px-9">
-        <BrandMark />
+        <CreditsTrigger>
+          <BrandMark />
+        </CreditsTrigger>
         <div className="min-w-0 flex-1 leading-tight">
           <div className="truncate text-sm font-semibold text-white">Your usage</div>
           <div className="text-xs text-sidebar-foreground">
@@ -334,6 +340,7 @@ export default function MyUsage() {
             )}
           </>
         )}
+        <Footer />
       </main>
     </div>
   );

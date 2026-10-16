@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -119,6 +120,35 @@ func (c *Client) Probe(ctx context.Context, namespace, gatewayName string) (Prob
 	_, err = c.dyn.Resource(gatewayGVR).Namespace(namespace).Get(ctx, gatewayName, metav1.GetOptions{})
 	p.GatewayFound = err == nil
 	return p, nil
+}
+
+// ClientPort returns the port of the gateway's listener when it serves plain
+// HTTP: Envoy Gateway's xDS names of version 2 name its route configuration
+// after it. 0 for an HTTPS listener, and for a gateway or listener that is
+// not there, which has no route configuration to patch. Any other failure is
+// an error: a sync without the port would take the patches of a gateway
+// that uses that name away.
+func (c *Client) ClientPort(ctx context.Context, namespace, gateway, listener string) (int64, error) {
+	gw, err := c.dyn.Resource(gatewayGVR).Namespace(namespace).Get(ctx, gateway, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read Gateway %s/%s: %w", namespace, gateway, describe(err))
+	}
+	listeners, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
+	for _, l := range listeners {
+		m, _ := l.(map[string]any)
+		if m["name"] != listener {
+			continue
+		}
+		if protocol, _ := m["protocol"].(string); protocol != "HTTP" {
+			return 0, nil
+		}
+		port, _, _ := unstructured.NestedInt64(m, "port")
+		return port, nil
+	}
+	return 0, nil
 }
 
 func missingKind(err error) bool {

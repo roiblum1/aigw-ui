@@ -104,6 +104,12 @@ Back up the encryption key straight away. See
 | `config.usageHistoryInterval` | `1m` | How often the usage counters are read to keep the usage history. At least `10s`; `0` keeps none. Needs `redis.url` |
 | `config.tenantPage` | `true` | Lets a tenant sign in at `/my-usage` with one of its API keys and see its own budgets and usage |
 | `config.bestEffortPriority` | `-1` | The priority of the request class `best-effort` the hub creates on the serving clusters. Below 0: a request without a class has 0. It has an effect only on a site whose scheduler acts on priorities |
+| `capacity.image` | empty | The AIPerf image a capacity measurement runs (`deploy/aiperf/`). Empty turns measurements off |
+| `capacity.window` | empty | When the hub measures by itself every LLMI that is not measured or whose result is stale, such as `Fri 22:00 - Sat 06:00 Asia/Jerusalem` or `01:00 - 05:00 UTC`. Empty never |
+| `capacity.peerMeasurements` | `false` | Measure prefill/decode LLMIs through the peer listener. Their Jobs run in the gateway's namespace with the peer client certificate; see [security](security.md) first |
+| `tokens.issuer`, `tokens.audience` | `aigw-ui`, `aigw-fleet` | What every token the hub signs says, and what the gateways require. A change refuses every token issued before |
+| `tokens.lifetimeDays` | `180` | How long a token created on a tenant's page lasts |
+| `tokens.renewedLifetimeHours` | `168` | How long a token a personal key gets lasts: how long users go on while the hub cannot be reached |
 | `fleet.domain` | empty | The sites' listener for other sites answers as `peers.llm.<domain>`. Empty, with `fleet.peerSNI` empty too: no entry route can be turned on |
 | `fleet.peerSNI` | empty | That server name, when it is not `peers.llm.<domain>` |
 | `fleet.peerCAConfigMap` | `llm-peer-ca` | ConfigMap in each gateway namespace with the CA of the sites' peer certificates |
@@ -267,8 +273,10 @@ have to be right on the serving side. None of them is set by the hub.
    --enable-prefix-caching --enable-prompt-tokens-details --enable-force-include-usage
    ```
 
-   On an `LLMInferenceService`, add them to the `VLLM_ADDITIONAL_ARGS`
-   variable of the `main` container, after what is already there.
+   On an `LLMInferenceService`, add them to the `args` of the `main`
+   container: KServe's preset runs `vllm serve /mnt/models … "$@"`, so
+   they are passed on after its own (the site's model charts do it this
+   way).
 2. A client must not be able to send `kv_transfer_params`. From vLLM 0.31 it
    sets the cached count of the answer (vLLM issue 58728, open), and up to
    0.29 a malformed one is reported to stop the server. The hub removes the field on
@@ -319,7 +327,12 @@ objects labelled `app.kubernetes.io/managed-by=aigw-ui` on each cluster.
 
 ## Tested on
 
-OpenShift 4.20 (Kubernetes 1.33) on AWS, chart version 0.1.1 (0.2.0 has not been deployed there):
+Every merge to `main` is deployed by CI with `helm upgrade` to a sandbox hub on
+OpenShift 4.20.35 (Kubernetes 1.33.13); chart 0.27.0 was running there on
+2026-10-16. That checks the upgrade path and that the pod starts with each
+release; it does not repeat the checks below.
+
+First install, on OpenShift 4.20 (Kubernetes 1.33) on AWS, chart version 0.1.1:
 
 - fresh install, both pods ready under `restricted-v2` with no restarts;
 - UI and API through the Route, HTTP redirected to HTTPS;

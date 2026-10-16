@@ -102,11 +102,11 @@ func TestBestEffortRoute(t *testing.T) {
 	own := find(t, objs, "BackendTrafficPolicy", "fleet-glm-5-3")
 	be := find(t, objs, "BackendTrafficPolicy", "fleetbe-glm-5-3")
 	codes, _, _ := unstructured.NestedSlice(be.Object, "spec", "retry", "retryOn", "httpStatusCodes")
-	if !reflect.DeepEqual(codes, []any{int64(503), int64(429)}) {
+	if !reflect.DeepEqual(codes, []any{int64(500), int64(503), int64(429)}) {
 		t.Errorf("best-effort retries on %v", codes)
 	}
 	ownCodes, _, _ := unstructured.NestedSlice(own.Object, "spec", "retry", "retryOn", "httpStatusCodes")
-	if !reflect.DeepEqual(ownCodes, []any{int64(503)}) {
+	if !reflect.DeepEqual(ownCodes, []any{int64(500), int64(503)}) {
 		t.Errorf("the entry route retries on %v", ownCodes)
 	}
 	targets, _, _ := unstructured.NestedSlice(be.Object, "spec", "targetRefs")

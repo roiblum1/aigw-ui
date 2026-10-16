@@ -2,6 +2,7 @@ package capacity
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -407,7 +408,7 @@ func TestAgenticScales(t *testing.T) {
 
 func TestJob(t *testing.T) {
 	set := Defaults(0)
-	job, err := Job(JobSpec{RunID: "0123", Name: "aigw-capacity-0123", Namespace: "llm", Image: "registry/aiperf:1", URL: "http://10.0.0.5:8000", Model: "glm", Settings: set})
+	job, err := Job(JobSpec{RunID: "0123", Name: "aigw-capacity-0123", Namespace: "llm", Image: "registry/aiperf:1", URLs: []string{"http://10.0.0.5:8000", "http://10.0.0.5:8001"}, Model: "glm", Settings: set})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +425,7 @@ func TestJob(t *testing.T) {
 	if err := json.Unmarshal([]byte(c["env"].([]any)[0].(map[string]any)["value"].(string)), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg["url"] != "http://10.0.0.5:8000" || cfg["model"] != "glm" || cfg["agentic"] == nil {
+	if fmt.Sprint(cfg["urls"]) != "[http://10.0.0.5:8000 http://10.0.0.5:8001]" || cfg["model"] != "glm" || cfg["agentic"] == nil {
 		t.Fatalf("config: %v", cfg)
 	}
 	if job.GetLabels()[RunLabel] != "0123" || pod["automountServiceAccountToken"] != false {

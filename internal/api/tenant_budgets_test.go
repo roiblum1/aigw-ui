@@ -16,6 +16,7 @@ import (
 
 	"aigw-ui/internal/secretbox"
 	"aigw-ui/internal/store"
+	"aigw-ui/internal/syncer"
 )
 
 // openStore gives a test a database of its own in the Postgres that
@@ -181,5 +182,65 @@ func TestBudgetOrQuotas(t *testing.T) {
 	}
 	if _, err := st.HasBudget(ctx, "00000000-0000-0000-0000-000000000000"); err != store.ErrNotFound {
 		t.Fatalf("an unknown tenant: %v", err)
+	}
+}
+
+// A tenant held to some models has quotas on those models only: a quota on
+// another would never be asked, since the gateway refuses the model first.
+func TestQuotasWithinModels(t *testing.T) {
+	st, ctx := openStore(t)
+	set := store.TokenSettings{Issuer: "aigw-ui", Audience: "aigw-fleet", Lifetime: 24 * time.Hour}
+	st.SetTokens(set)
+	// A change that passes is recorded and queued for a sync.
+	s := &Server{st: st, sy: syncer.New(st, false, time.Hour, time.Hour)}
+	a, err := st.CreateTenant(ctx, "team-a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.CreateToken(ctx, a.ID, "t", set, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	haiku, err := st.CreateModel(ctx, store.ModelInput{Name: "haiku", DefaultLimit: 1, DefaultWindow: "1d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opus, err := st.CreateModel(ctx, store.ModelInput{Name: "opus", DefaultLimit: 1, DefaultWindow: "1d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(h http.HandlerFunc, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPut, "/api/v1/tenants/"+a.ID, strings.NewReader(body))
+		r.SetPathValue("id", a.ID)
+		w := httptest.NewRecorder()
+		h(w, r)
+		return w
+	}
+	if err := st.UpsertQuota(ctx, a.ID, opus, 100, "1d", nil); err != nil {
+		t.Fatal(err)
+	}
+	// Taking opus off while it has a quota there is refused.
+	if w := put(s.setTenantModels, `{"models":["`+haiku+`"]}`); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "quotas on opus") {
+		t.Fatalf("models without a quota's model: %d %s", w.Code, w.Body)
+	}
+	if w := put(s.setTenantModels, `{"models":["`+haiku+`","`+opus+`"]}`); w.Code != http.StatusOK {
+		t.Fatalf("models with it: %d %s", w.Code, w.Body)
+	}
+	quotas, err := st.ListQuotas(ctx, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DeleteQuota(ctx, quotas[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if w := put(s.setTenantModels, `{"models":["`+haiku+`"]}`); w.Code != http.StatusOK {
+		t.Fatalf("models after the quota is gone: %d %s", w.Code, w.Body)
+	}
+	// Now a quota on opus is refused, and one on haiku passes this check
+	// (it then fails on having no backend, which the test does not set up).
+	if w := put(s.upsertQuota, `{"model_id":"`+opus+`","token_limit":5,"window":"1d"}`); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "add it to the tenant's models") {
+		t.Fatalf("a quota outside the list: %d %s", w.Code, w.Body)
+	}
+	if w := put(s.upsertQuota, `{"model_id":"`+haiku+`","token_limit":5,"window":"1d"}`); w.Code == http.StatusConflict {
+		t.Fatalf("a quota inside the list: %d %s", w.Code, w.Body)
 	}
 }

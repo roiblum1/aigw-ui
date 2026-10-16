@@ -49,6 +49,13 @@ func aiServiceBackend(s State, m Model) *unstructured.Unstructured {
 // gateway wrote to tell tenants apart: the model server has no use for them.
 // A backend that forwards to another site's gateway keeps them, since a
 // route there may count the request by its tenant too.
+//
+// The amount of each own quota (x-aigw-quota-<model>) is not removed: the
+// list takes 16 names at most (AIServiceBackend, AI gateway 1.2.0) and
+// names only, so one name per model with quotas by amount failed every
+// model server's backend from the eleventh such model on, and the whole sync
+// with it. An amount tells the model server nothing about who sent the
+// request.
 func backendHeaders(s State, objective string, modelServer bool) map[string]any {
 	var h map[string]any
 	if objective != "" {
@@ -59,7 +66,7 @@ func backendHeaders(s State, objective string, modelServer bool) map[string]any 
 		remove = append(remove, credentialsRemoved()["remove"].([]any)...)
 	}
 	if s.AuthEnabled && modelServer {
-		for _, name := range identityHeaders(s) {
+		for _, name := range identityHeaders() {
 			remove = append(remove, name)
 		}
 	}
@@ -72,15 +79,11 @@ func backendHeaders(s State, objective string, modelServer bool) map[string]any 
 	return h
 }
 
-// identityHeaders are the headers the gateway writes from a key or a token:
-// the tenant, the key, the client ID, the budget and the amount of each own
-// quota.
-func identityHeaders(s State) []string {
-	names := []string{TenantHeader, KeyHeader, ClientIDHeader, BudgetHeader}
-	for _, q := range QuotaClaimHeaders(s.Models) {
-		names = append(names, q["header"].(string))
-	}
-	return names
+// identityHeaders are the headers the gateway writes from a key or a token
+// that tell tenants apart: the tenant, the key, the client ID and the budget.
+// They are a fixed list, whatever the number of models.
+func identityHeaders() []string {
+	return []string{TenantHeader, KeyHeader, ClientIDHeader, BudgetHeader}
 }
 
 // serviceBackendSpec is the spec of an AIServiceBackend in front of the

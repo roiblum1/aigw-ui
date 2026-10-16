@@ -84,7 +84,7 @@ func TestRealAPIServerCapacityJob(t *testing.T) {
 	}
 
 	set := capacity.Defaults(8192)
-	job, err := capacity.Job(capacity.JobSpec{RunID: "run-1", Name: "aigw-capacity-test", Namespace: ns, Image: "registry/aiperf:0.13.0", URL: inst.URL, Model: inst.Model, Settings: set})
+	job, err := capacity.Job(capacity.JobSpec{RunID: "run-1", Name: "aigw-capacity-test", Namespace: ns, Image: "registry/aiperf:0.13.0", URLs: inst.URLs, Model: inst.Model, Settings: set})
 	if err != nil {
 		t.Fatal(err)
 	}

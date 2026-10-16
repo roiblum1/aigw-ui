@@ -132,7 +132,7 @@ Containerfile          image build
 
 How the packages depend on each other: `api` calls `store`, `syncer`,
 `usage` and `selftest`. `selftest` calls `store`, `syncer`, `usage` and
-`gateway`. `syncer` calls `store`, `render`, `kube`, `gateway` and `weights`. `usage` calls
+`gateway`. `syncer` calls `store`, `render`, `kube`, `gateway`, `capacity` and `llmi`. `usage` calls
 `store` and `render`. `render` depends on nothing, which keeps it easy to
 test.
 

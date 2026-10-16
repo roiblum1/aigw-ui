@@ -222,7 +222,11 @@ func TestBudgetPassRule(t *testing.T) {
 	m := &s.Models[0]
 	m.CostExpression, m.Priced, m.BudgetsHold = "input_tokens * 1u", true, true
 	// b has a quota of its own as well, from before a tenant had one or the other.
-	s.Budgets = []TenantBudget{{TenantSlug: "walletcheck-b", Limit: 500, Window: "1h"}, {TenantSlug: "walletcheck-d", Limit: 500, Window: "1h"}}
+	s.Budgets = []TenantBudget{{TenantSlug: "walletcheck-b", Limit: 500, Window: "1h"}, {TenantSlug: "walletcheck-d", Limit: 500, Window: "1h"},
+		{TenantSlug: "walletcheck-e", Limit: 500, Window: "1h"}}
+	// e may call another model only: the gateway refuses it this one, so it
+	// has no counter here.
+	s.Restricted = []TenantModels{{TenantSlug: "walletcheck-e", Models: []string{"other"}}, {TenantSlug: "walletcheck-d", Models: []string{m.Name}}}
 
 	p := quotaPolicies(s, *m)[0]
 	rules, _, _ := unstructured.NestedSlice(p.Object, "spec", "perModelQuotas")

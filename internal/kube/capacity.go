@@ -52,7 +52,10 @@ const (
 // stopAnnotation is how KServe is told to stop a service's workloads.
 const stopAnnotation = "serving.kserve.io/stop"
 
-// The versions of LLMInferenceService that carry status.workloads, newest first.
+// The versions of LLMInferenceService the hub reads, newest first. Only
+// v1alpha2 carries status.workloads (KServe 0.21): through v1alpha1, on a
+// cluster that serves no newer version, the ready counts are not reported and
+// the cluster's capacity stays unknown.
 var llmServiceGVRs = []schema.GroupVersionResource{
 	{Group: "serving.kserve.io", Version: "v1alpha2", Resource: "llminferenceservices"},
 	{Group: "serving.kserve.io", Version: "v1alpha1", Resource: "llminferenceservices"},
@@ -153,6 +156,7 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 			model = svc.GetName()
 		}
 		w, note := workload(svc)
+		c.liveWorkload(ctx, svc, &w)
 		instances, known := w.Instances()
 
 		mc := byModel[model]
@@ -174,6 +178,7 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 		d.Quantization, d.LMCache = Serving(svc)
 		d.DecodeReplicas = replicas(svc, "spec", "replicas")
 		d.MarketID = strings.TrimSpace(svc.GetAnnotations()[MarketIDAnnotation])
+		d.Listeners = routerListeners(svc)
 		mc.Deployments = append(mc.Deployments, d)
 		mc.Step = max(mc.Step, w.PerInstance)
 		if mc.Detail != "" {
@@ -216,7 +221,8 @@ func workload(svc *unstructured.Unstructured) (weights.Workload, string) {
 			note = fmt.Sprintf(" (declared capacity %q is not a number from %v to %v, so an instance counts as 1)", declared, minPerInstance, maxPerInstance)
 		}
 	}
-	stopped := svc.GetAnnotations()[stopAnnotation] == "true"
+	// KServe reads the annotation in any case (strings.EqualFold).
+	stopped := strings.EqualFold(svc.GetAnnotations()[stopAnnotation], "true")
 	w.Ready = readyReplicas(svc, "primary", stopped)
 	if _, separate, _ := unstructured.NestedMap(svc.Object, "spec", "prefill"); separate {
 		w.Prefill = &weights.Prefill{
@@ -225,6 +231,61 @@ func workload(svc *unstructured.Unstructured) (weights.Workload, string) {
 		}
 	}
 	return w, note
+}
+
+// The kinds KServe runs a service's pods with: a Deployment, or a
+// LeaderWorkerSet for a multi-node one.
+var (
+	deploymentsGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	lwsGVR         = schema.GroupVersionResource{Group: "leaderworkerset.x-k8s.io", Version: "v1", Resource: "leaderworkersets"}
+)
+
+// liveWorkload replaces the counts KServe copied into the service's status
+// with those of the Deployment or LeaderWorkerSet it names there, when the
+// hub can read them. KServe copies them only when the rest of its reconcile
+// succeeds, so after a failure (of the router, say) the status keeps old
+// counts, and it bumps observedGeneration anyway, so that does not tell.
+// The object's own spec.replicas is also what an autoscaler sets, where the
+// service's spec.replicas is left out (spec.scaling).
+func (c *Client) liveWorkload(ctx context.Context, svc *unstructured.Unstructured, w *weights.Workload) {
+	if ready, desired, ok := c.liveCounts(ctx, svc, "primary"); ok {
+		w.Ready, w.Desired = &ready, desired
+	}
+	if w.Prefill != nil {
+		if ready, desired, ok := c.liveCounts(ctx, svc, "prefill"); ok {
+			w.Prefill.Ready, w.Prefill.Desired = &ready, desired
+		}
+	}
+}
+
+// liveCounts reads the ready and desired replicas of one of the service's
+// workloads ("primary" or "prefill"), the way KServe counts them: available
+// pods of a Deployment, ready groups of a LeaderWorkerSet. ok is false when
+// the status names no such object or it cannot be read.
+func (c *Client) liveCounts(ctx context.Context, svc *unstructured.Unstructured, workload string) (ready, desired int64, ok bool) {
+	ref, found, _ := unstructured.NestedMap(svc.Object, "status", "workloads", workload)
+	if !found {
+		return 0, 0, false
+	}
+	kind, _ := ref["kind"].(string)
+	name, _ := ref["name"].(string)
+	gvr, readyField := deploymentsGVR, "availableReplicas"
+	switch kind {
+	case "Deployment":
+	case "LeaderWorkerSet":
+		gvr, readyField = lwsGVR, "readyReplicas"
+	default:
+		return 0, 0, false
+	}
+	if name == "" {
+		return 0, 0, false
+	}
+	obj, err := c.dyn.Resource(gvr).Namespace(svc.GetNamespace()).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return 0, 0, false
+	}
+	ready, _, _ = unstructured.NestedInt64(obj.Object, "status", readyField)
+	return ready, replicas(obj, "spec", "replicas"), true
 }
 
 // replicas returns a replica count from the spec, which is 1 when left out.
@@ -323,6 +384,31 @@ type Deployment struct {
 	// Instances is its ready instances; Known is false until it reports them.
 	Instances float64
 	Known     bool
+	// Listeners are the gateway listeners KServe put its route on, as
+	// "<namespace>/<gateway>/<listener>" (status.router.gateways).
+	Listeners []string
+}
+
+// routerListeners returns the gateway listeners an LLMInferenceService's
+// route is on, as KServe reports them.
+func routerListeners(svc *unstructured.Unstructured) []string {
+	gateways, _, _ := unstructured.NestedSlice(svc.Object, "status", "router", "gateways")
+	var out []string
+	for _, g := range gateways {
+		gw, _ := g.(map[string]any)
+		ns, _ := gw["namespace"].(string)
+		if ns == "" {
+			ns = svc.GetNamespace()
+		}
+		name, _ := gw["name"].(string)
+		listeners, _ := gw["listeners"].([]any)
+		for _, l := range listeners {
+			if l, ok := l.(string); ok {
+				out = append(out, ns+"/"+name+"/"+l)
+			}
+		}
+	}
+	return out
 }
 
 // gpuShapes holds what the workload pods ask for and where they run, read

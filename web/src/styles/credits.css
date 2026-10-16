@@ -1,0 +1,163 @@
+@layer components {
+  /* ---- credits ---- */
+  .credits-trigger {
+    display: inline-flex;
+    flex: none;
+    cursor: default;
+    user-select: none;
+  }
+  .credits {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: radial-gradient(ellipse at center, rgb(79 70 229 / 0.38), rgb(8 10 17 / 0.82) 70%);
+    backdrop-filter: blur(6px);
+    cursor: pointer;
+    animation: credits-fade 0.25s ease-out;
+  }
+  /* The card keeps its night colours in both themes. */
+  .credits-card {
+    position: relative;
+    overflow: hidden;
+    width: min(520px, 100%);
+    padding: 44px 32px 28px;
+    border-radius: 22px;
+    text-align: center;
+    color: #fff;
+    background: linear-gradient(160deg, #1a1f42, #0b0e1d 70%);
+    border: 1px solid rgb(255 255 255 / 0.12);
+    box-shadow:
+      0 30px 80px rgb(0 0 0 / 0.55),
+      0 0 70px rgb(129 140 248 / 0.35);
+    animation: credits-in 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.25);
+  }
+  /* A slow beam of light that turns behind the text. */
+  .credits-card::before {
+    content: "";
+    position: absolute;
+    inset: -60%;
+    background: conic-gradient(from 0deg, transparent 0 70%, rgb(165 180 252 / 0.22) 85%, transparent);
+    animation: credits-spin 7s linear infinite;
+  }
+  .credits-card > :not(.credits-spark) {
+    position: relative;
+  }
+  .credits-mark {
+    width: 60px;
+    height: 60px;
+    margin-inline: auto;
+    border-radius: 16px;
+    box-shadow: 0 0 0 6px rgb(129 140 248 / 0.18), 0 0 40px rgb(129 140 248 / 0.7);
+  }
+  .credits-mark svg {
+    width: 30px;
+    height: 30px;
+  }
+  .credits-kicker {
+    margin-top: 24px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: #a5b0fc;
+  }
+  .credits-pre {
+    margin-top: 16px;
+    font-size: 15px;
+    font-style: italic;
+    color: #c7cbe0;
+  }
+  .credits-name {
+    margin-top: 2px;
+    font-size: clamp(40px, 9vw, 60px);
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #a5b4fc, #f0abfc, #fcd34d, #a5b4fc);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: credits-shimmer 4s linear infinite;
+  }
+  .credits-hint {
+    margin-top: 22px;
+    font-size: 12px;
+    color: #8c95ad;
+  }
+  /* Twelve sparks around the card, each in its own place and time. */
+  .credits-spark {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #fde68a;
+    box-shadow: 0 0 10px #fde68a;
+    opacity: 0;
+    animation: credits-twinkle 2.4s ease-in-out infinite;
+  }
+  .credits-spark:nth-child(3n) {
+    background: #f0abfc;
+    box-shadow: 0 0 10px #f0abfc;
+  }
+  .credits-spark:nth-child(3n + 1) {
+    background: #a5b4fc;
+    box-shadow: 0 0 10px #a5b4fc;
+  }
+  @keyframes credits-fade {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes credits-in {
+    from {
+      opacity: 0;
+      transform: translateY(16px) scale(0.92);
+    }
+  }
+  @keyframes credits-spin {
+    to {
+      transform: rotate(1turn);
+    }
+  }
+  @keyframes credits-shimmer {
+    to {
+      background-position: 200% center;
+    }
+  }
+  @keyframes credits-twinkle {
+    0%,
+    100% {
+      opacity: 0;
+      transform: scale(0.4);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .credits,
+    .credits *,
+    .credits-card::before {
+      animation: none !important;
+    }
+    .credits-spark {
+      opacity: 0.8;
+    }
+  }
+
+  .app-footer {
+    margin-top: 48px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted-foreground);
+  }
+  .app-footer.on-dark {
+    margin-top: 20px;
+    color: var(--sidebar-foreground);
+  }
+}

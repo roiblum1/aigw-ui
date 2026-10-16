@@ -78,8 +78,11 @@ func FleetName(slug string) string { return "fleet-" + slug }
 
 func (m Model) fleetSites() []FleetSite {
 	sites := append([]FleetSite(nil), m.Fleet...)
-	// Every gateway builds its hash table from this list, so the order has
-	// to be the same on every cluster.
+	// Sorted so that every cluster gets the same objects and the same fleet
+	// revision. The hash table does not depend on it: Envoy's Maglev sorts
+	// the hosts by their resolved address and port. A conversation lands on
+	// the same site from every gateway only if every gateway resolves each
+	// peer host to the same address.
 	sort.Slice(sites, func(i, j int) bool { return sites[i].Name < sites[j].Name })
 	return sites
 }
@@ -91,7 +94,7 @@ func fleetObjects(s State, m Model) []*unstructured.Unstructured {
 	name := FleetName(m.Slug)
 	out := []*unstructured.Unstructured{
 		fleetBackend(s, m), fleetServiceBackend(s, m, name, ""), fleetRoute(s, m),
-		fleetTrafficPolicy(s, m, name, 503), fleetRetryPatch(s, name),
+		fleetTrafficPolicy(s, m, name, 500, 503), fleetRetryPatch(s, name),
 	}
 	if !m.BestEffort {
 		return out
@@ -101,7 +104,7 @@ func fleetObjects(s State, m Model) []*unstructured.Unstructured {
 	if tenants := m.OverageTenants(); len(tenants) > 0 {
 		// A 429 from a serving site says it has no room for best-effort
 		// work right now, so the next site gets a chance.
-		out = append(out, fleetOverageRoute(s, m, tenants), fleetTrafficPolicy(s, m, name, 503, 429), fleetRetryPatch(s, name))
+		out = append(out, fleetOverageRoute(s, m, tenants), fleetTrafficPolicy(s, m, name, 500, 503, 429), fleetRetryPatch(s, name))
 	}
 	return out
 }

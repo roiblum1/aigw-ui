@@ -26,16 +26,19 @@ type JobSpec struct {
 	Name      string
 	Namespace string
 	Image     string
-	// URL is the instance, for example http://10.0.0.5:8000, and Model the
-	// name it serves the model under. A prefill/decode deployment has Peer
-	// instead: it is measured through its scheduler on the gateway's peer
-	// listener, and the Job runs in the gateway's namespace.
-	URL      string
+	// URLs are the instance, for example http://10.0.0.5:8000, with one
+	// address per data-parallel rank of a pod that serves on several ports;
+	// the load is sent to them in turn. Model is the name it serves the
+	// model under. A prefill/decode deployment has Peer instead: it is
+	// measured through its scheduler on the gateway's peer listener, and the
+	// Job runs in the gateway's namespace.
+	URLs     []string
 	Model    string
 	Peer     *Peer
 	Settings Settings
-	// MetricsURLs are the pods whose vLLM counters the measurement reads:
-	// the pod measured, or every decode pod. Empty is URL.
+	// MetricsURLs are the servers whose vLLM counters the measurement adds
+	// up: the pod measured, each of its ranks, or every decode pod. Empty
+	// is URLs.
 	MetricsURLs []string
 }
 
@@ -53,7 +56,7 @@ type Peer struct {
 // try would measure a warm cache and a half-done step as if they were one.
 func Job(spec JobSpec) (*unstructured.Unstructured, error) {
 	cfg := map[string]any{
-		"url":               spec.URL,
+		"urls":              spec.URLs,
 		"model":             spec.Model,
 		"settings":          spec.Settings,
 		"grace_seconds":     stepGrace,

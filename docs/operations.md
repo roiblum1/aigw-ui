@@ -198,7 +198,23 @@ sign-in or API call.
 | Self-test: "A client cannot choose its tenant" fails | The gateway keeps an `x-aigw-client-id` header a client sends | Check that the `SecurityPolicy` `aigw-ui-api-key-auth` is attached to the listener clients use, and that no route in front of it sets the header |
 | A tenant past its budget still gets 429 on a best-effort model | The move takes up to one `config.overageInterval` plus a sync. Or: the quota's window is a second or a minute, the quota is a dry run, Redis is not configured, or more than 200 tenants are listed | See the warnings in the model's row and the Activity page for lines that start with "overage" |
 | Self-test: "did not show up on the best-effort route" | The route `fleetbe-<model>` is not accepted, or the model's entry route still takes the tenant's requests | `oc get aigatewayroute,envoypatchpolicy -n <namespace>`; both `fleetbe-<model>` objects must be accepted |
+| The task message warns that `SecurityPolicy aigw-ui-api-key-auth does not hold on some routes` | A `SecurityPolicy` on a route of the client listener replaces the hub's there. The message names the routes | Move the route to the peer listener, or remove its own policy. Requests on it are charged to no tenant's budget or quota |
+| The discovery message says an `LLMInferenceService` `has its route on the client listener` | KServe put the model's own route on the listener clients reach (`spec.router.gateway`) | Put its router on the peer listener: requests on KServe's route skip the entry route, the budgets and the quotas |
+| Self-test: "answered but not counted for the tenant of its token" | Envoy AI Gateway before 1.2.0 charges a rule that counts per tenant to one shared bucket | Upgrade the AI gateway to 1.2.0. Quotas by amount and budgets across models need it |
+| A capacity measurement of a data-parallel pod fails or measures one rank | The pod serves one API server per rank, and its probes reach a supervisor port | The hub sends the load to every port of the model's `InferencePool` (`targetPorts`) and adds up each rank's `/metrics`. It needs get on InferencePools in the model's namespace; without it, it uses the readiness probe's port |
 | Requests are rejected with 429 for a tenant that has no quota | The model has quotas for other tenants, so this one only has the shared pool | Give the tenant a quota |
+
+## Upgrading Envoy Gateway to 1.10
+
+Envoy Gateway 1.10 is to turn on version 2 of its xDS names, which renames
+the route configuration of a plain-HTTP listener to `http-<port>`. The entry
+routes' retry patches are written for both names since 0.29.0, with the port
+read from the cluster's `Gateway` before each sync. After the upgrade:
+
+1. Sync the cluster and check that no `fleet-…-retry` patch is reported.
+2. Run the self-test on the cluster. Its first step fails when a patch is
+   not in effect, and its stickiness step gets no answer when requests
+   through the entry route lose their Host (404 from the peer listener).
 
 ## Site maintenance
 

@@ -207,5 +207,7 @@ func (t *test) tenantHeader() (string, string) {
 			break
 		}
 	}
-	return Failed, fmt.Sprintf("The request was answered but not counted for the tenant of its token within %d seconds.", int(counterWait.Seconds()))
+	return Failed, fmt.Sprintf("The request was answered but not counted for the tenant of its token within %d seconds. "+
+		"Envoy AI Gateway before 1.2.0 charges a rule that counts per tenant to one shared bucket instead: quotas by amount "+
+		"and budgets across models need 1.2.0 or later.", int(counterWait.Seconds()))
 }
