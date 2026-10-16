@@ -318,7 +318,7 @@ gateway URL send `"gateway_url": ""`; that removes the token too.
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| GET | `/models` | | List with endpoints. `standard` is the budget every tenant has on the model (`{"limit", "window"}`, in its unit) or `null`; `standard_next` a change that starts at `at`; `rules` the bucket rules of its QuotaPolicy and `rules_per_tenant` how many a rule per enabled tenant would take instead of the standard and the amounts; `quota_rules` the positions the tenants' own quotas take while API keys are taken, `quota_amounts` the positions their amounts take with tokens only; `standard_held` why a standard is not rendered |
+| GET | `/models` | | List with endpoints. `rules` the bucket rules of its QuotaPolicy and `rules_per_tenant` how many a rule per tenant quota would take instead of one per amount; `quota_rules` the positions the tenants' own quotas take while API keys are taken, `quota_amounts` the positions their amounts take with tokens only |
 | POST | `/models` | model | `{"id": "..."}` |
 | PUT | `/models/{id}` | model; `name` is ignored, fields left out keep their stored value | `{"id": "..."}` |
 | DELETE | `/models/{id}` | | 204 |
@@ -383,8 +383,6 @@ revision or request length between the sites. These fields are read-only.
 |---|---|---|---|
 | PUT | `/models/{id}/sites/{cluster_id}/drain` | `{"drained": true}` or `false` | 204. 409 when no other site has capacity for the model |
 | PUT | `/models/{id}/fleet` | `{"enabled": true}` or `false` | 204. 409 when no fleet cluster serves the model, the model has manual endpoints, the server has no `FLEET_DOMAIN`, or the model is in best-effort mode and is being turned off |
-| PUT | `/models/{id}/standard` | `{"limit", "window"}`, or `{"limit": null}` to remove it | 204. Starts at the next 00:00 UTC. 409 while the gateways take API keys too: a standard needs every tenant on tokens |
-| DELETE | `/models/{id}/standard/pending` | | 204, the change waiting for its day dropped; 404 when there is none |
 | PUT | `/models/{id}/spent` | `{"mode": "best-effort", "best_effort_unlimited": false, "best_effort_limit": null}` | 204. `mode` is `refuse` or `best-effort`. `best_effort_limit` is the most a tenant may use as best-effort in one period of its quota, in the model's unit, or `null`. It is not kept from the last call: send it every time. 409 when the model has no entry route |
 | GET | `/overage?limit=100` | | The periods in which a tenant was served as best-effort, newest first: `model_id`, `model_name`, `tenant_id`, `tenant_slug`, `since`, `until`, `active`, `capped_at`. `limit` is at most 500 |
 

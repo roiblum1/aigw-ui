@@ -257,11 +257,10 @@ prices a tenant is held one way or the other, never both:
 
 - **A budget across models**: one amount in dollars, any amount ($10, $20,
   $26), for every model with prices together. The tenant chooses what to
-  spend it on, and the models' standards and pools do not hold it there.
+  spend it on, and the models' pools do not hold it there.
 - **A budget per model**: a quota of its own on each model it should have,
-  each with its own amount. $5 on Opus and $5 on Sonnet are two budgets of
-  $5, not one of $10. On a model it has no quota on, it is held by the
-  model's standard, or its pool.
+  each with its own amount: $10 on two models and $11 on a third is fine.
+  $5 on Opus and $5 on Sonnet are two budgets of $5, not one of $10.
 
 While a tenant has one, the hub refuses the other (HTTP 409) and says what
 to remove first. Models without prices are not in a budget across models:
@@ -270,31 +269,14 @@ tenant that had both before 0.25.0 is marked on its page: its budget holds
 it, and its quotas on models with prices hold nothing until they are
 removed.
 
-A model needs no standard when every tenant gets dollars of its own: a
-tenant with neither a budget across models nor a quota on the model is
-then held by the model's pool, and a pool of the smallest amount closes the
-model to it.
-
-**A standard budget.** **Standard budget** in a model's row on the Models
-page gives every tenant the same budget on the model, each with a count of
-its own, through one rule on the gateway in place of a rule per tenant. A
-tenant's own quota on that model is then an **exception** that adds to the
-standard: a request passes while either has room, so no tenant can be held
-below the standard. To give a tenant less, lower the standard and give the
-others exceptions; a standard of the smallest amount closes the model to
-everyone without one. The model's row shows how many rules its QuotaPolicy
-has, and how many a rule per tenant would take.
-
-- It starts at the next 00:00 UTC, when every count starts anew, so nobody's
-  count is lost. Removing it waits for that too.
-- It needs every tenant on tokens: the gateway reads the tenant from the
-  token. Until the last API key is revoked it cannot be set, and while a
-  model has one, no API key can be created and no tenant with one enabled.
-- Giving a tenant an exception, or taking it away, mid-window: the
-  exception's count starts at 0, while the standard's has counted the
-  tenant all along. A new exception can therefore let the tenant use up to
-  the exception's limit more in that window. Make such changes near the
-  start of a window when it matters.
+**A tenant with neither.** There is no amount every tenant gets by default
+(the standard budget of 0.19 to 0.25 is gone): a tenant has what it is
+given. On a model where it has neither a budget across models nor a quota
+of its own, it draws from the model's **pool**, which all such tenants
+share. A pool of the smallest amount (1), what a new model has, closes the
+model to them. While any tenant has a budget across models, a model with
+prices gets its `QuotaPolicy` even without a quota, so that its pool holds
+the tenants with neither.
 
 **Quotas of their own, with tokens only.** Once every tenant is on tokens,
 the tenants with the same quota of their own on a model share one rule on
@@ -306,22 +288,15 @@ travels in the tenant's tokens, as a budget across models does:
   minutes. A token created before the change keeps the old amount until it
   is replaced; the Keys card marks it **older limits**.
 - A changed amount starts the tenant's count on that model again.
-- **A model with prices and no standard** is marked on the Models page:
-  its tenants without a quota of their own or a budget across models have
-  no budget of their own there and share the model's pool. A pool of the
-  smallest amount (1) closes the model to them, which is what a new model
-  has: a quota, a standard or a budget across models is how a tenant gets
-  in. While any tenant has a budget across models, a model with prices gets
-  its `QuotaPolicy` even with no quota and no standard, so that its pool
-  holds the tenants with neither.
 
 **A budget across models.** **Budget across models** on a tenant's page
 gives it one amount in dollars per minute, hour or day for every model with
 prices, counted together: a cheaper model spends it more slowly. On those
 models it is the tenant's only limit: the tenant has no quota of its own
-there, and the model's standard and pool do not hold it. Each such model's
-`QuotaPolicy` has one more rule, which lets a token with a budget through. The gateway refuses the tenant (HTTP 429) once
-it is spent, on every model, until the next period. It is enforced by
+there, and the model's pool does not hold it. Each such model's
+`QuotaPolicy` has one more rule, which lets a token with a budget through
+and counts what the tenant used of the model. The gateway refuses the
+tenant (HTTP 429) once it is spent, on every model, until the next period. It is enforced by
 the gateways themselves: the amount travels in the tenant's tokens, one
 rule that every cluster gets holds each tenant to the amount in its token,
 and it is counted in the one Redis the gateways share, so a tenant has one
@@ -329,7 +304,7 @@ budget wherever its requests land. Models without prices, and models whose
 prices are in a dry run, cost nothing from it; once it is spent they are
 refused all the same.
 
-- It needs every tenant on tokens, like a standard budget, and global rate
+- It needs every tenant on tokens, like quotas by amount, and global rate
   limiting enabled in each cluster's Envoy Gateway with the Redis the gateways share
   (see [deployment](deployment.md#before-the-first-budget-across-models)).
   Until then the tenant's page says it is not enforced.

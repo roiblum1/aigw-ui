@@ -26,33 +26,30 @@ type Counter struct {
 	// Overage marks a counter of the model's best-effort route: what was
 	// used after the budget was spent. It never refuses a request.
 	Overage bool
-	// Standard marks a tenant's counter under the model's standard, for a
-	// tenant without a quota of its own on the model.
-	Standard bool
 	// Budget marks a counter of a tenant with a budget across models, on a
 	// model the budget is charged on: the budget holds the tenant there, so
 	// the counter only counts (Shadow).
 	Budget bool
 	// stem is the Redis key without the key prefix and the window start;
-	// prefix is the part of it every counter of the model's QuotaPolicy on
-	// the backend shares, and std the model's standard, if any.
-	stem, prefix string
-	std          *Budget
+	// byTenant is the stem without the tenant, for a rule that counts each
+	// tenant by the tenant header.
+	stem, byTenant string
 }
 
-// StandardFor returns the counter the model's standard keeps for the tenant
-// slug on the same backend, from any counter of the model there: for a slug
-// that has no quota, such as one a client made up. ok is false when the
-// model has no standard.
-func (c Counter) StandardFor(slug string) (Counter, bool) {
-	if c.std == nil {
+// For returns the counter the same rule keeps for another tenant slug, such
+// as one a client made up: ok is false when the rule does not count by the
+// tenant header.
+func (c Counter) For(slug string) (Counter, bool) {
+	if c.byTenant == "" {
 		return Counter{}, false
 	}
-	return Counter{ModelSlug: c.ModelSlug, TenantSlug: slug, Backend: c.Backend, Limit: c.std.Limit, Window: c.std.Window,
-		Overage: c.Overage, Standard: true, stem: c.prefix + "rule-0-" + TenantHeader + "-match-0_" + slug + "_", prefix: c.prefix, std: c.std}, true
+	c.TenantSlug, c.stem = slug, c.byTenant+slug+"_"
+	return c, true
 }
 
-// Counters lists the counter of every tenant quota the state renders.
+// Counters lists every counter the given state creates, in the order of
+// s.Models and their targets. A model with its best-effort route has the
+// counters of that route too, marked Overage.
 func Counters(s State) []Counter {
 	var out []Counter
 	budgeted := map[string]bool{}
@@ -83,35 +80,33 @@ func Counters(s State) []Counter {
 			}
 			seen[backend+"\x00"+t.Model] = true
 			prefix := quotaDomain + "_backend_name_" + backend + "_model_name_override_" + t.Model + "_"
-			st := m.standard()
 			if m.ruleCount() > 0 || overage {
 				// The default bucket is named after the number of rules before it.
 				limit, window := m.defaultBucket(overage)
 				pool := "rule-" + strconv.Itoa(m.ruleCount()) + "-match--1"
 				out = append(out, Counter{
 					ModelSlug: m.Slug, Backend: backend, Limit: limit, Window: window, Pool: true, Overage: overage,
-					stem: prefix + pool + "_" + pool + "_", prefix: prefix, std: st,
+					stem: prefix + pool + "_" + pool + "_",
 				})
 			}
-			first := 0
-			if st != nil {
-				// The standard's rule is the first. The gateway names a
-				// bucket of it after the rule and the tenant the header
-				// held: one counter per tenant. A tenant with a quota is
-				// counted there too, and is read where its quota counts.
-				first = 1
+			if m.passesBudgets() {
+				// Each tenant with a budget across models is counted on its own
+				// under the last rule, which never refuses: what it used of
+				// the model inside its budget. A tenant with a quota of its own
+				// from before is read there too.
 				own := map[string]bool{}
-				for _, q := range rules {
+				for _, q := range m.Quotas {
 					own[q.TenantSlug] = true
 				}
-				for _, slug := range s.Tenants {
-					if own[slug] {
+				stem := budgetPassStem(prefix, m.ruleCount()-1)
+				for _, b := range s.budgets() {
+					if own[b.TenantSlug] {
 						continue
 					}
 					out = append(out, Counter{
-						ModelSlug: m.Slug, TenantSlug: slug, Backend: backend,
-						Limit: st.Limit, Window: st.Window, Shadow: overage || m.DryRun || held(slug), Overage: overage, Standard: true,
-						Budget: held(slug), stem: prefix + "rule-0-" + TenantHeader + "-match-0_" + slug + "_", prefix: prefix, std: st,
+						ModelSlug: m.Slug, TenantSlug: b.TenantSlug, Backend: backend,
+						Limit: budgetPassLimit, Window: budgetPassWindow, Shadow: true, Overage: overage, Budget: true,
+						stem: stem + b.TenantSlug + "_", byTenant: stem,
 					})
 				}
 			}
@@ -122,10 +117,11 @@ func Counters(s State) []Counter {
 					if q.TenantSlug == "" || !ok {
 						continue
 					}
+					stem := amountStem(prefix, slot, m, a)
 					out = append(out, Counter{
 						ModelSlug: m.Slug, TenantSlug: q.TenantSlug, Backend: backend,
 						Limit: q.Limit, Window: q.Window, Shadow: q.Shadow || overage || m.DryRun || held(q.TenantSlug), Overage: overage,
-						Budget: held(q.TenantSlug), stem: amountStem(prefix, first+slot, m, a, q.TenantSlug), prefix: prefix, std: st,
+						Budget: held(q.TenantSlug), stem: stem + q.TenantSlug + "_", byTenant: stem,
 					})
 				}
 				continue
@@ -137,14 +133,11 @@ func Counters(s State) []Counter {
 				// The gateway names the descriptor of a rule after its position,
 				// header and pattern or value, and sends the same string as its
 				// value.
-				rule := "rule-" + strconv.Itoa(first+i) + "-" + ClientIDHeader + "|" + TenantClientIDPattern(q.TenantSlug) + "-match-0"
-				if st != nil {
-					rule = "rule-" + strconv.Itoa(first+i) + "-" + TenantHeader + "|" + q.TenantSlug + "-match-0"
-				}
+				rule := "rule-" + strconv.Itoa(i) + "-" + ClientIDHeader + "|" + TenantClientIDPattern(q.TenantSlug) + "-match-0"
 				out = append(out, Counter{
 					ModelSlug: m.Slug, TenantSlug: q.TenantSlug, Backend: backend,
 					Limit: q.Limit, Window: q.Window, Shadow: q.Shadow || overage || m.DryRun || held(q.TenantSlug), Overage: overage,
-					Budget: held(q.TenantSlug), stem: prefix + rule + "_" + rule + "_", prefix: prefix, std: st,
+					Budget: held(q.TenantSlug), stem: prefix + rule + "_" + rule + "_",
 				})
 			}
 		}

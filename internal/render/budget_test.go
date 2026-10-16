@@ -16,7 +16,6 @@ func budgetState() State {
 	s := State{
 		Namespace: "envoy-ai-gateway-system", GatewayName: "envoy-ai-gateway", ClientListener: "http", AuthEnabled: true,
 		Identity: Identity{Mode: IdentityTokens, Issuer: "aigw-ui", Audience: "aigw-fleet", JWKS: "{}"},
-		Tenants:  []string{"tenant-x", "tenant-y", "tenant-z"},
 		Models: []Model{
 			{Name: "opus", Slug: "opus", Host: "opus.models", Port: 8000, UpstreamModel: "opus", DefaultLimit: 1, DefaultWindow: "1d",
 				CostExpression: "input_tokens * 15u", Priced: true},
@@ -214,37 +213,39 @@ func TestDeniedClients(t *testing.T) {
 
 // A tenant with a budget across models is held by it alone on a model it is
 // charged on: the model's QuotaPolicy ends with a rule that matches the
-// budget header and never runs out, so in Shared mode neither the standard,
-// the pool nor a quota of the tenant's own refuses it. The positions before
-// it stay, and the tenant's counters there only count.
+// budget header and never runs out, so in Shared mode neither the pool nor a
+// quota of the tenant's own refuses it. The positions before it stay. Each
+// such tenant is counted on its own there, in the key the gateway writes
+// (seen in the shared Redis, 2026-10-16), and its counters only count.
 func TestBudgetPassRule(t *testing.T) {
 	s := amountState()
 	m := &s.Models[0]
 	m.CostExpression, m.Priced, m.BudgetsHold = "input_tokens * 1u", true, true
-	s.Tenants = append(s.Tenants, "walletcheck-d")
 	// b has a quota of its own as well, from before a tenant had one or the other.
 	s.Budgets = []TenantBudget{{TenantSlug: "walletcheck-b", Limit: 500, Window: "1h"}, {TenantSlug: "walletcheck-d", Limit: 500, Window: "1h"}}
 
 	p := quotaPolicies(s, *m)[0]
 	rules, _, _ := unstructured.NestedSlice(p.Object, "spec", "perModelQuotas")
 	got := rules[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
-	want := "map[clientSelectors:[map[headers:[map[name:x-aigw-budget type:RegularExpression value:.+] map[name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1m limit:4294967295]]"
-	if len(got) != 5 || fmt.Sprint(got[4]) != want || !strings.Contains(fmt.Sprint(got[1]), "66-1h") {
+	want := "map[clientSelectors:[map[headers:[map[name:x-aigw-budget type:RegularExpression value:.+] map[name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:4294967295]]"
+	if len(got) != 4 || fmt.Sprint(got[3]) != want || !strings.Contains(fmt.Sprint(got[0]), "66-1h") {
 		t.Fatalf("rules: %v", got)
 	}
-	if now, _ := RuleCount(*m, 4); now != 5 {
-		t.Fatalf("rule count %d", now)
+	if n := RuleCount(*m); n != 4 {
+		t.Fatalf("rule count %d", n)
 	}
 	// On the best-effort route it only counts, as every rule there does.
 	be := quotaPolicy(s.Namespace, *m, []Target{{Backend: "x", Model: "wallet-cheap"}}, true)
-	if r := fmt.Sprint(be.Object["spec"]); strings.Count(r, "shadowMode:true") != 4 {
+	if r := fmt.Sprint(be.Object["spec"]); strings.Count(r, "shadowMode:true") != 3 {
 		t.Fatalf("best-effort: %s", r)
 	}
 
+	day := time.Unix(1792022400+60, 0)
+	prefix := "ai-gateway-quota_backend_name_envoy-ai-gateway-system/walletcheck-cheap_model_name_override_wallet-cheap_"
 	held := map[string]bool{}
 	for _, c := range Counters(s) {
 		if c.Pool {
-			if key := c.RedisKey("", time.Unix(0, 0)); !strings.Contains(key, "rule-5-match--1") {
+			if key := c.RedisKey("", day); !strings.Contains(key, "rule-4-match--1") {
 				t.Fatalf("pool after the last rule: %s", key)
 			}
 			continue
@@ -253,6 +254,15 @@ func TestBudgetPassRule(t *testing.T) {
 			t.Fatalf("a counter the budget holds refuses: %+v", c)
 		}
 		held[c.TenantSlug] = c.Budget
+		if c.TenantSlug == "walletcheck-d" {
+			want := prefix + "rule-3-x-aigw-budget|.+-match-0_rule-3-x-aigw-budget|.+-match-0_rule-3-x-aigw-tenant-match-1_walletcheck-d_1792022400"
+			if key := c.RedisKey("", day); key != want {
+				t.Fatalf("key\n%s\nwant\n%s", key, want)
+			}
+			if other, ok := c.For("nobody"); !ok || other.RedisKey("", day) != strings.Replace(want, "walletcheck-d", "nobody", 1) {
+				t.Fatalf("another tenant's counter: %v %s", ok, other.RedisKey("", day))
+			}
+		}
 	}
 	if fmt.Sprint(held) != "map[walletcheck-a:false walletcheck-b:true walletcheck-c:false walletcheck-d:true]" {
 		t.Fatalf("held by the budget: %v", held)
@@ -277,7 +287,7 @@ func TestBudgetPassRule(t *testing.T) {
 	}
 }
 
-// A priced model without a quota or a standard gets its QuotaPolicy while
+// A priced model without a quota gets its QuotaPolicy while
 // tenants have budgets, so that its pool holds the tenants with neither a
 // budget nor a quota of their own; without budgets it has none, as before.
 func TestBudgetPolicyOnModelWithoutQuotas(t *testing.T) {

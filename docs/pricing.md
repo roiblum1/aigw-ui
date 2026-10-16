@@ -221,7 +221,7 @@ OpenAI-style clients only.
 
 ## A budget per day
 
-The standard budget is per day. A tenant gets an amount for the day on a
+A budget is per day by default. A tenant gets an amount for the day on a
 model, and a new day starts at 00:00 UTC with the counter at 0. New quotas
 and a model's shared pool are per day unless you choose otherwise.
 
@@ -230,7 +230,7 @@ budget is kept and reset while the hub is down.
 
 | Period | When to use it |
 |---|---|
-| Day | The standard. One amount for the day, which suits teams that work in bursts |
+| Day | The default. One amount for the day, which suits teams that work in bursts |
 | Hour | For a tenant that should never wait longer than an hour after overspending. It can then spend 24 times the amount in a day |
 | Minute | A rate limit more than a budget |
 

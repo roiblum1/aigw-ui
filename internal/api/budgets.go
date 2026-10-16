@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -19,9 +20,21 @@ var errBudgetNeedsTokens = errors.New("a budget across models, and a list of mod
 // such model, so a quota there would hold nothing.
 var errBudgetOrQuotas = errors.New("a tenant has either one budget across models, for every model with prices, or a budget per model, not both")
 
+// keepsTokensOnly refuses what would make the gateways take API keys again
+// while a tenant has a budget across models or may call only some models:
+// their rules read the tenant header a token sets, and would leave every
+// request with an API key unheld.
+func (s *Server) keepsTokensOnly(ctx context.Context) error {
+	any, err := s.st.AnyBudget(ctx)
+	if err != nil || !any {
+		return err
+	}
+	return errors.New("a tenant has a budget across models or a list of models it may call, which need every tenant on tokens; a request with an API key would be held by neither. Create a token instead")
+}
+
 // tokensOnly answers 409 and returns false unless the gateways take tokens
 // only. It asks what the gateways take now, not what a new key would change:
-// a model's standard or another tenant's budget does not stand in the way.
+// another tenant's budget does not stand in the way.
 func (s *Server) tokensOnly(w http.ResponseWriter, r *http.Request) bool {
 	mode, err := s.st.IdentityMode(r.Context())
 	if err != nil {

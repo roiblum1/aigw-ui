@@ -9,30 +9,36 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// The model of standardState with its quotas by amount: a and b have 66 an
-// hour, c 100 a day counted only; position 1 was freed by an amount nobody
-// has any more.
+// A model as lab check A had it, the walletcheck-cheap backend in the
+// gateway's namespace, with its quotas by amount: a and b have 66 an hour,
+// c 100 a day counted only; position 1 was freed by an amount nobody has any
+// more.
 func amountState() State {
-	s := standardState()
-	m := &s.Models[0]
-	m.Quotas = []TenantQuota{
-		{TenantSlug: "walletcheck-a", Slot: 0, Limit: 66, Window: "1h"},
-		{TenantSlug: "walletcheck-b", Slot: 1, Limit: 66, Window: "1h"},
-		{TenantSlug: "walletcheck-c", Slot: 2, Limit: 100, Window: "1d", Shadow: true},
+	return State{
+		Namespace: "envoy-ai-gateway-system", GatewayName: "envoy-ai-gateway", AuthEnabled: true,
+		Identity: Identity{Mode: IdentityTokens},
+		Models: []Model{{
+			Name: "wallet-cheap", Slug: "wallet-cheap", DefaultLimit: 1, DefaultWindow: "1d",
+			Existing: []Target{{Backend: "walletcheck-cheap", Model: "wallet-cheap"}},
+			Quotas: []TenantQuota{
+				{TenantSlug: "walletcheck-a", Slot: 0, Limit: 66, Window: "1h"},
+				{TenantSlug: "walletcheck-b", Slot: 1, Limit: 66, Window: "1h"},
+				{TenantSlug: "walletcheck-c", Slot: 2, Limit: 100, Window: "1d", Shadow: true},
+			},
+			ByAmount: true,
+			Amounts:  []QuotaAmount{{Slot: 0, Limit: 66, Window: "1h"}, {Slot: 2, Limit: 100, Window: "1d", Shadow: true}},
+		}},
 	}
-	m.ByAmount = true
-	m.Amounts = []QuotaAmount{{Slot: 0, Limit: 66, Window: "1h"}, {Slot: 2, Limit: 100, Window: "1d", Shadow: true}}
-	return s
 }
 
-// The standard, then one rule per amount at its position, with a
-// placeholder for the free one, then the default bucket.
+// One rule per amount at its position, with a placeholder for the free one,
+// then the default bucket.
 func TestAmountPolicy(t *testing.T) {
 	s := amountState()
 	p := quotaPolicies(s, s.Models[0])[0]
 	rules, _, _ := unstructured.NestedSlice(p.Object, "spec", "perModelQuotas")
 	got := fmt.Sprint(rules[0].(map[string]any)["quota"].(map[string]any)["bucketRules"])
-	want := "[map[clientSelectors:[map[headers:[map[name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1h limit:33]] " +
+	want := "[" +
 		"map[clientSelectors:[map[headers:[map[name:x-aigw-quota-wallet-cheap type:Exact value:66-1h] map[name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1h limit:66]] " +
 		"map[clientSelectors:[map[headers:[map[name:x-aigw-client-id type:Exact value:aigw-ui-unused-position]]]] quota:map[duration:1d limit:1]] " +
 		"map[clientSelectors:[map[headers:[map[name:x-aigw-quota-wallet-cheap type:Exact value:100-1d-shadow] map[name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:100] shadowMode:true]]"
@@ -41,11 +47,11 @@ func TestAmountPolicy(t *testing.T) {
 	}
 	// On the best-effort route nobody is refused.
 	be := quotaPolicy(s.Namespace, s.Models[0], []Target{{Backend: "x", Model: "wallet-cheap"}}, true)
-	if r := fmt.Sprint(be.Object["spec"]); strings.Count(r, "shadowMode:true") != 3 {
+	if r := fmt.Sprint(be.Object["spec"]); strings.Count(r, "shadowMode:true") != 2 {
 		t.Fatalf("best-effort: %s", r)
 	}
-	if now, perTenant := RuleCount(s.Models[0], 200); now != 4 || perTenant != 200 {
-		t.Fatalf("rule count %d %d", now, perTenant)
+	if n := RuleCount(s.Models[0]); n != 3 {
+		t.Fatalf("rule count %d", n)
 	}
 }
 
@@ -58,18 +64,16 @@ func TestAmountCounters(t *testing.T) {
 		name := c.TenantSlug
 		if c.Pool {
 			name = "pool"
-		} else if c.Standard {
-			name += " (standard)"
 		}
 		keys[name] = c.RedisKey("", now)
 	}
 	prefix := "ai-gateway-quota_backend_name_envoy-ai-gateway-system/walletcheck-cheap_model_name_override_wallet-cheap_"
 	hour, day := "1792065600", "1792022400"
 	want := map[string]string{
-		"walletcheck-a": prefix + "rule-1-x-aigw-quota-wallet-cheap|66-1h-match-0_rule-1-x-aigw-quota-wallet-cheap|66-1h-match-0_rule-1-x-aigw-tenant-match-1_walletcheck-a_" + hour,
-		"walletcheck-b": prefix + "rule-1-x-aigw-quota-wallet-cheap|66-1h-match-0_rule-1-x-aigw-quota-wallet-cheap|66-1h-match-0_rule-1-x-aigw-tenant-match-1_walletcheck-b_" + hour,
-		"walletcheck-c": prefix + "rule-3-x-aigw-quota-wallet-cheap|100-1d-shadow-match-0_rule-3-x-aigw-quota-wallet-cheap|100-1d-shadow-match-0_rule-3-x-aigw-tenant-match-1_walletcheck-c_" + day,
-		"pool":          prefix + "rule-4-match--1_rule-4-match--1_" + day,
+		"walletcheck-a": prefix + "rule-0-x-aigw-quota-wallet-cheap|66-1h-match-0_rule-0-x-aigw-quota-wallet-cheap|66-1h-match-0_rule-0-x-aigw-tenant-match-1_walletcheck-a_" + hour,
+		"walletcheck-b": prefix + "rule-0-x-aigw-quota-wallet-cheap|66-1h-match-0_rule-0-x-aigw-quota-wallet-cheap|66-1h-match-0_rule-0-x-aigw-tenant-match-1_walletcheck-b_" + hour,
+		"walletcheck-c": prefix + "rule-2-x-aigw-quota-wallet-cheap|100-1d-shadow-match-0_rule-2-x-aigw-quota-wallet-cheap|100-1d-shadow-match-0_rule-2-x-aigw-tenant-match-1_walletcheck-c_" + day,
+		"pool":          prefix + "rule-3-match--1_rule-3-match--1_" + day,
 	}
 	if fmt.Sprint(keys) != fmt.Sprint(want) {
 		t.Fatalf("keys:\n%v\nwant\n%v", keys, want)
@@ -148,5 +152,17 @@ func TestModelServerLosesIdentityHeaders(t *testing.T) {
 		if got != "map[remove:[authorization x-api-key x-aigw-tenant x-aigw-key x-aigw-client-id x-aigw-budget x-aigw-quota-glm5-3]]" {
 			t.Fatalf("backend %s: %s", name, got)
 		}
+	}
+}
+
+// While the gateways take API keys too, a tenant's quota is its own rule on
+// its client IDs, which a key sets: the tenant header is not read.
+func TestQuotaRulesOnClientID(t *testing.T) {
+	s := amountState()
+	s.Identity.Mode = IdentityBoth
+	s.Models[0].ByAmount, s.Models[0].Amounts = false, nil
+	p := fmt.Sprint(quotaPolicies(s, s.Models[0])[0].Object["spec"])
+	if strings.Contains(p, TenantHeader) || !strings.Contains(p, `^walletcheck-a\.[a-f0-9]+$`) {
+		t.Fatalf("policy: %s", p)
 	}
 }

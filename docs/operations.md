@@ -108,7 +108,7 @@ The gateways keep answering, without limits: both rate limit services let a
 request through when they cannot reach Redis (the AI gateway's quota service,
 `quotaRateLimitFailureModeDeny: false`, and Envoy Gateway's, which the budget
 across models uses, without `failClosed`). This is on purpose: a prompt does
-not wait on anything outside the gateway. Budgets, quotas and standards hold
+not wait on anything outside the gateway. Budgets and quotas hold
 again as soon as Redis is back; what was used meanwhile was not counted.
 
 Watch for it rather than refuse:

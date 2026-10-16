@@ -37,7 +37,7 @@ export function UsageMeter({ q }: { q: UsageQuota }) {
         <div className="detail">{formatNumber(q.used, q.unit)} used</div>
         <span
           className="tag"
-          title="The tenant has a budget across models, which holds it on this model in place of the model's standard and pool."
+          title="The tenant has a budget across models, which holds it on this model in place of the model's pool."
         >
           in its budget across models
         </span>

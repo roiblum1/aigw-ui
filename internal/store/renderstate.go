@@ -34,7 +34,7 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 
 	rows, err := s.db.Query(ctx,
 		`SELECT m.id, m.name, m.slug, e.host, e.port, e.upstream_model, m.default_limit, m.default_window, m.cost_expression, e.source, e.backends,
-		        e.pools, m.fleet AND m.spent_mode = 'best-effort', m.standard_limit, m.standard_window
+		        e.pools, m.fleet AND m.spent_mode = 'best-effort'
 		 FROM model_endpoints e JOIN models m ON m.id = e.model_id WHERE e.cluster_id = $1`, clusterID)
 	if err != nil {
 		return st, err
@@ -47,14 +47,11 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 		var backends []BackendRef
 		var pools []Pool
 		var bestEffort bool
-		var standardLimit *int64
-		var standardWindow *string
 		if err := rows.Scan(&id, &m.Name, &m.Slug, &m.Host, &m.Port, &m.UpstreamModel, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &source, &backends,
-			&pools, &bestEffort, &standardLimit, &standardWindow); err != nil {
+			&pools, &bestEffort); err != nil {
 			rows.Close()
 			return st, err
 		}
-		m.Standard = renderedStandard(st, standardOf(standardLimit, standardWindow))
 		// The class is needed where the model runs, which may be a cluster
 		// that has no entry route itself.
 		if bestEffort {
@@ -81,12 +78,6 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 	}
 
 	if err := s.addPrices(ctx, &st, index); err != nil {
-		return st, err
-	}
-	if st.Tenants, err = list(ctx, s, func(r scanner) (string, error) {
-		var slug string
-		return slug, r.Scan(&slug)
-	}, `SELECT slug FROM tenants WHERE enabled ORDER BY slug`); err != nil {
 		return st, err
 	}
 	if err := s.addTenantBudgets(ctx, &st); err != nil {
@@ -171,20 +162,9 @@ func (s *Store) addQuotaAmounts(ctx context.Context, st *render.State, index map
 	return rows.Err()
 }
 
-// renderedStandard is a model's standard as the gateway gets it: only while
-// it takes tokens only, since the standard's rule reads the tenant header a
-// token sets and a request with an API key has none. Until then the model
-// keeps its rules per tenant (StandardHeld).
-func renderedStandard(st render.State, std *Standard) *render.Budget {
-	if std == nil || !tokensOnly(st) {
-		return nil
-	}
-	return &render.Budget{Limit: std.Limit, Window: std.Window}
-}
-
 // tokensOnly reports whether the gateway reads the tenant header a token
 // sets, which the budgets across models, the models a tenant may call and
-// a model's standard are enforced through.
+// the quotas by amount are enforced through.
 func tokensOnly(st render.State) bool {
 	return st.AuthEnabled && st.Identity.Mode == render.IdentityTokens
 }
@@ -275,7 +255,7 @@ func (s *Store) addFleetModels(ctx context.Context, st *render.State, index map[
 	}
 
 	rows, err = s.db.Query(ctx,
-		`SELECT id, name, slug, default_limit, default_window, cost_expression, fleet_zones, spent_mode, standard_limit, standard_window FROM models WHERE fleet ORDER BY name`)
+		`SELECT id, name, slug, default_limit, default_window, cost_expression, fleet_zones, spent_mode FROM models WHERE fleet ORDER BY name`)
 	if err != nil {
 		return err
 	}
@@ -284,12 +264,9 @@ func (s *Store) addFleetModels(ctx context.Context, st *render.State, index map[
 		var id, mode string
 		var m render.Model
 		var zones []weights.Zone
-		var standardLimit *int64
-		var standardWindow *string
-		if err := rows.Scan(&id, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &zones, &mode, &standardLimit, &standardWindow); err != nil {
+		if err := rows.Scan(&id, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &zones, &mode); err != nil {
 			return err
 		}
-		m.Standard = renderedStandard(*st, standardOf(standardLimit, standardWindow))
 		i, ok := index[id]
 		if !ok {
 			i = len(st.Models)

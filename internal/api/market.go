@@ -54,12 +54,10 @@ type marketPrices struct {
 type modelOut struct {
 	store.Model
 	// Rules is how many bucket rules the model's QuotaPolicy has, and
-	// RulesPerTenant how many it would have with a rule for every enabled
-	// tenant in place of its standard. StandardHeld says why a standard is
-	// not rendered.
+	// RulesPerTenant how many the tenants' own quotas would take with a rule
+	// each, which they do while the gateways take API keys too.
 	Rules          int         `json:"rules"`
 	RulesPerTenant int         `json:"rules_per_tenant"`
-	StandardHeld   string      `json:"standard_held,omitempty"`
 	Market         *marketInfo `json:"market"`
 	// MarketNote says why a model has no market price when it is not for
 	// want of a match, such as an annotation the snapshot does not have.

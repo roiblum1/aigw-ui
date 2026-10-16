@@ -45,11 +45,10 @@ func quotaRevision(m Model) string {
 		Window string
 		Cost   string
 		// Left out when unset, so a model keeps the revision it had.
-		DryRun   bool          `json:",omitempty"`
-		Standard *Budget       `json:",omitempty"`
-		Amounts  []QuotaAmount `json:",omitempty"`
-		Budgets  bool          `json:",omitempty"`
-	}{rules, limit, window, m.CostExpression, m.DryRun, m.standard(), amounts, m.passesBudgets()})
+		DryRun  bool          `json:",omitempty"`
+		Amounts []QuotaAmount `json:",omitempty"`
+		Budgets bool          `json:",omitempty"`
+	}{rules, limit, window, m.CostExpression, m.DryRun, amounts, m.passesBudgets()})
 	if err != nil {
 		return ""
 	}
@@ -101,19 +100,6 @@ func quotaPolicies(s State, m Model) []*unstructured.Unstructured {
 func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *unstructured.Unstructured {
 	quotas := tenantRules(m)
 	rules := make([]any, 0, len(quotas)+1)
-	if st := m.standard(); st != nil {
-		// One bucket per tenant, whatever its name: the rule names none.
-		rule := map[string]any{
-			"clientSelectors": []any{
-				map[string]any{"headers": []any{map[string]any{"name": TenantHeader, "type": "Distinct"}}},
-			},
-			"quota": map[string]any{"limit": st.Limit, "duration": st.Window},
-		}
-		if overage || m.DryRun {
-			rule["shadowMode"] = true
-		}
-		rules = append(rules, rule)
-	}
 	if m.ByAmount {
 		quotas = nil
 		for _, a := range amountRules(m) {
@@ -131,7 +117,7 @@ func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *uns
 		}
 		rule := map[string]any{
 			"clientSelectors": []any{
-				map[string]any{"headers": []any{tenantMatch(m, q.TenantSlug)}},
+				map[string]any{"headers": []any{tenantMatch(q.TenantSlug)}},
 			},
 			"quota": map[string]any{"limit": q.Limit, "duration": q.Window},
 		}
@@ -202,33 +188,18 @@ func (m Model) defaultBucket(overage bool) (int64, string) {
 	return limit, window
 }
 
-// standard returns the model's standard when it can be rendered, else nil.
-func (m Model) standard() *Budget {
-	if m.Standard == nil || !validQuota(m.Standard.Limit, m.Standard.Window) {
-		return nil
-	}
-	return m.Standard
-}
-
-// tenantMatch matches the requests of one tenant: by its client IDs, or,
-// under a standard, by the tenant header a token sets.
-func tenantMatch(m Model, slug string) map[string]any {
-	if m.standard() != nil {
-		return map[string]any{"name": TenantHeader, "type": "Exact", "value": slug}
-	}
+// tenantMatch matches the requests of one tenant by its client IDs.
+func tenantMatch(slug string) map[string]any {
 	return map[string]any{"name": ClientIDHeader, "type": "RegularExpression", "value": TenantClientIDPattern(slug)}
 }
 
 // ruleCount is how many bucket rules the model's QuotaPolicy has before its
-// default bucket: the standard's, then one per position of the tenant
-// quotas, or of the amounts, then the one for budgets across models.
+// default bucket: one per position of the tenant quotas, or of the amounts,
+// then the one for budgets across models.
 func (m Model) ruleCount() int {
 	n := len(tenantRules(m))
 	if m.ByAmount {
 		n = len(amountRules(m))
-	}
-	if m.standard() != nil {
-		n++
 	}
 	if m.passesBudgets() {
 		n++
@@ -236,16 +207,8 @@ func (m Model) ruleCount() int {
 	return n
 }
 
-// RuleCount is how many bucket rules the model's QuotaPolicy has, and how
-// many it would have with a rule for every one of tenants enabled tenants
-// instead of the standard: the figure the standard saves.
-func RuleCount(m Model, tenants int) (now, perTenant int) {
-	now = m.ruleCount()
-	if m.standard() == nil {
-		return now, now
-	}
-	return now, max(tenants, now-1)
-}
+// RuleCount is how many bucket rules the model's QuotaPolicy has.
+func RuleCount(m Model) int { return m.ruleCount() }
 
 // tenantRules returns the bucket rules of a model in order: the rule at
 // index i belongs to the tenant quota with Slot i. The position of a rule is
