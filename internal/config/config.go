@@ -19,7 +19,11 @@ type Config struct {
 	AdminToken    string
 	EncryptionKey []byte
 	UIDir         string
-	AutoSync      bool
+	// UpstreamDocsDir holds the documentation of the projects the platform
+	// is built on, which the image carries (cmd/upstream-docs). Empty or
+	// missing: the Docs page has none.
+	UpstreamDocsDir string
+	AutoSync        bool
 	// DiscoverEvery is how often clusters are polled for models. 0 turns polling off.
 	DiscoverEvery time.Duration
 	// SyncEvery is how often every cluster is synced again even though nothing
@@ -82,7 +86,9 @@ func Load() (*Config, error) {
 		ListenAddr:  envOr("LISTEN_ADDR", ":8080"),
 		AdminToken:  os.Getenv("ADMIN_TOKEN"),
 		UIDir:       envOr("UI_DIR", "web/dist"),
-		AutoSync:    envOr("AUTO_SYNC", "true") == "true",
+		// The image sets it; a checkout has none unless it was fetched there.
+		UpstreamDocsDir: envOr("UPSTREAM_DOCS_DIR", "upstream-docs"),
+		AutoSync:        envOr("AUTO_SYNC", "true") == "true",
 
 		RedisURL:         os.Getenv("REDIS_URL"),
 		RedisCAFile:      os.Getenv("REDIS_CA_FILE"),

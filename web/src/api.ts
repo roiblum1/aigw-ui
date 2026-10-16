@@ -854,6 +854,52 @@ export interface DocEntry {
 export class Unauthorized extends Error {}
 export class NotFound extends Error {}
 
+/** A page of an upstream project's documentation, by its path in the project's repository. */
+export interface UpstreamPage {
+  path: string;
+  title: string;
+  weight?: number;
+}
+
+/** A project whose documentation the image carries. */
+export interface UpstreamProject {
+  id: string;
+  name: string;
+  repo: string;
+  ref: string;
+  version: string;
+  site: string;
+  /** The license of the documentation, when the image knows it; its LICENSE file is served with it. */
+  license?: string;
+  /** The folders the pages are under: the top of the project's tree. */
+  roots: string[];
+  pages: UpstreamPage[];
+}
+
+export interface UpstreamIndex {
+  generated: string;
+  projects: UpstreamProject[];
+}
+
+/** A document a search found: a guide, a release note or an upstream page ("upstream/<project>/<path>"). */
+export interface DocHit {
+  name: string;
+  title: string;
+  group: string;
+  snippet: string;
+}
+
+/**
+ * Upstream documentation is public and served without a token, from the
+ * image; null when the image carries none.
+ */
+async function upstream<T>(path: string, as: "json" | "text"): Promise<T | null> {
+  const res = await fetch("/upstream-docs/" + path);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return (as === "json" ? res.json() : res.text()) as Promise<T>;
+}
+
 async function request<T>(method: string, path: string, body?: unknown, token = getToken()): Promise<T> {
   const res = await fetch("/api/v1" + path, {
     method,
@@ -886,6 +932,9 @@ export const api = {
   /** The guides and release notes built into the server. */
   docs: () => request<DocEntry[]>("GET", "/docs"),
   doc: (name: string) => request<{ name: string; title: string; markdown: string }>("GET", "/docs/text/" + name),
+  docSearch: (q: string) => request<DocHit[]>("GET", "/docs/search?q=" + encodeURIComponent(q)),
+  upstreamIndex: () => upstream<UpstreamIndex>("index.json", "json"),
+  upstreamPage: (project: string, path: string) => upstream<string>(`${project}/${path}.md`, "text"),
   tasks: () => request<Task[]>("GET", "/tasks"),
   audit: (before?: number) => request<AuditEntry[]>("GET", "/audit" + (before ? `?before=${before}` : "")),
   startSelfTest: (clusterId: string, model_id: string) =>

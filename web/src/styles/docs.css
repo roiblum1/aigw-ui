@@ -38,6 +38,41 @@
     color: var(--primary);
     font-weight: 600;
   }
+  .docs-filter {
+    margin-bottom: 14px;
+  }
+  .docs-filter input {
+    width: 100%;
+  }
+  /* An upstream project and its folders fold up. */
+  .docs-nav summary {
+    padding: 5px 10px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    cursor: pointer;
+    list-style-position: inside;
+  }
+  .docs-nav summary:hover {
+    background: var(--muted);
+  }
+  .docs-folder {
+    margin-left: 10px;
+    padding-left: 6px;
+    border-left: 1px solid var(--border);
+  }
+  .docs-page {
+    min-width: 0;
+  }
+  .docs-source {
+    margin: 0 0 8px;
+  }
+  .docs-hit {
+    margin: 0 0 14px;
+  }
+  .doc img {
+    max-width: 100%;
+    height: auto;
+  }
 
   .doc {
     min-width: 0;

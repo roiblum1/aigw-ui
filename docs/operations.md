@@ -35,6 +35,14 @@ tag. It waits until the new pod is ready. If it is not ready within five
 minutes, Helm rolls the release back to what was running, and the job
 fails.
 
+**Tested once.** A pull request's run notes the tree it tested as the
+status `ci/tested-tree` on the pull request's head. After the merge, the
+job `seen` compares it with the merge commit's tree: when they are the same
+(`main` did not move in between), the tests and AIPerf do not run again
+and the image is built at once, about nine minutes sooner. A merge after
+`main` moved, a squash or rebase merge, a tag, and a pull request from a
+fork, which may not write the status, are tested again.
+
 **Set it up once.**
 
 1. On the hub's cluster, create an account that may change the release's
@@ -95,6 +103,32 @@ copy of OpenRouter's public catalog built into the server
   `MARKET_SNAPSHOT`.
 - **Releases.** A version tag fails CI when the snapshot is more than 60
   days old (`hack/check-market.sh`).
+
+## The upstream documentation
+
+The image carries the documentation of Envoy AI Gateway, Envoy Gateway,
+KServe, vLLM and llm-d, which the Docs page shows under **Upstream** where
+there is no internet. `docs/upstream/projects.json` pins each project's
+version; `cmd/upstream-docs` fetches it while the image is built.
+
+- **Weekly.** The workflow `upstream-docs` moves every project to its newest
+  release every Monday, fetches the docs to check they are still where the
+  converter looks for them, and opens or updates the pull request
+  "Upstream docs YYYY-MM-DD" on the branch `upstream-docs-bump`, with the
+  new versions and what the image will carry. Like the market snapshot's,
+  it starts no CI by itself.
+- **What goes in.** Each project's Markdown pages under its roots, the
+  images they show, and its `LICENSE` (all five are Apache 2.0). The pages
+  are turned into plain Markdown: Hugo shortcodes, Docusaurus admonitions
+  and components, and MkDocs admonitions and tabs; links between pages stay
+  in the hub, other links go to the project's site or GitHub. About 57 MB,
+  most of it vLLM's and llm-d's images.
+- **By hand.** `go run ./cmd/upstream-docs fetch -out upstream-docs` on any
+  machine with access to GitHub; a hub started from the checkout reads
+  `upstream-docs` (`UPSTREAM_DOCS_DIR`).
+- **A project that moved its docs** fails the fetch ("no pages under …"),
+  in the weekly workflow before a pull request and in the image build: fix
+  its `roots` in the file.
 
 ## If the hub is down
 

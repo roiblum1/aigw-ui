@@ -1,0 +1,56 @@
+# Once a week, moves every project in docs/upstream/projects.json to its
+# newest release (cmd/upstream-docs latest), fetches the docs to check that
+# they are still where the converter looks for them, and opens a pull
+# request with the change. The image built after the merge carries the new
+# docs; the Docs page shows them under Upstream.
+#
+# A pull request opened with GITHUB_TOKEN does not start other workflows, so
+# CI runs on it once someone pushes to it or closes and reopens it.
+name: upstream-docs
+
+on:
+  schedule:
+    - cron: "37 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Move every project to its newest release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: go run ./cmd/upstream-docs latest -projects docs/upstream/projects.json | tee "$RUNNER_TEMP/changes.txt"
+
+      - name: The docs are where the converter looks for them
+        run: go run ./cmd/upstream-docs fetch -projects docs/upstream/projects.json -out "$RUNNER_TEMP/upstream-docs" | tee "$RUNNER_TEMP/sizes.txt"
+
+      - name: Open or update the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- docs/upstream/projects.json; then
+            echo "every project is at its newest release"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c upstream-docs-bump
+          git commit -am "Upstream docs: $(paste -sd ';' "$RUNNER_TEMP/changes.txt")"
+          git push --force origin upstream-docs-bump
+          body="$(printf 'New releases, read by cmd/upstream-docs:\n\n```\n%s\n```\n\nWhat the image will carry:\n\n```\n%s\n```\n\nMerging it changes no limit or route: the image built after the merge carries these docs.' "$(cat "$RUNNER_TEMP/changes.txt")" "$(cat "$RUNNER_TEMP/sizes.txt")")"
+          if gh pr view upstream-docs-bump --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit upstream-docs-bump --title "Upstream docs $(date -u +%F)" --body "$body"
+          else
+            gh pr create --head upstream-docs-bump --base main --title "Upstream docs $(date -u +%F)" --body "$body"
+          fi
