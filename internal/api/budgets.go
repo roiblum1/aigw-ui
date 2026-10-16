@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -59,6 +60,10 @@ func (s *Server) setTenantBudget(w http.ResponseWriter, r *http.Request) {
 		budget = &store.TenantBudget{Credits: *b.Credits, Window: b.Window}
 	}
 	t, err := s.st.SetTenantBudget(r.Context(), r.PathValue("id"), budget)
+	if errors.Is(err, store.ErrBudgetsFull) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("%d tenants have a budget across models, the most one rate limit policy of the gateway takes. Remove one first.", render.MaxBudgets))
+		return
+	}
 	if err != nil {
 		fail(w, err)
 		return

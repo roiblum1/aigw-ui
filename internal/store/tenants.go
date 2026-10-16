@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"aigw-ui/internal/render"
 )
 
 const tenantSelect = `SELECT t.id, t.slug, t.display_name, t.enabled, t.created_at,
@@ -55,10 +57,14 @@ func (s *Store) SetTenantBudget(ctx context.Context, id string, b *TenantBudget)
 	for range 5 {
 		tag, err = s.db.Exec(ctx,
 			`UPDATE tenants SET budget_credits = $2, budget_window = $3, budget_slot = COALESCE(budget_slot, (
-			     SELECT min(free) FROM generate_series(0, (SELECT count(*) FROM tenants WHERE budget_slot IS NOT NULL)::int) free
+			     SELECT min(free) FROM generate_series(0, LEAST((SELECT count(*) FROM tenants WHERE budget_slot IS NOT NULL)::int, $4 - 1)) free
 			     WHERE NOT EXISTS (SELECT 1 FROM tenants o WHERE o.budget_slot = free)))
-			 WHERE id = $1`, id, b.Credits, b.Window)
+			 WHERE id = $1`, id, b.Credits, b.Window, render.MaxBudgets)
 		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.ConstraintName == "tenants_budget_has_slot" {
+			// Every position is taken.
+			return Tenant{}, ErrBudgetsFull
+		}
 		if !errors.As(err, &pg) || pg.ConstraintName != "tenants_budget_slot" {
 			break
 		}

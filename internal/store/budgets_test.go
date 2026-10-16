@@ -1,6 +1,8 @@
 package store
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -146,5 +148,28 @@ func TestTenantBudgetSlots(t *testing.T) {
 	set(a.ID, 100)
 	if *slot(a.ID) != 2 {
 		t.Fatalf("a came back at %d", *slot(a.ID))
+	}
+}
+
+// Past the gateway's 256 rules a new budget is refused; a tenant that has
+// one can still change it.
+func TestTenantBudgetsFull(t *testing.T) {
+	s, ctx := open(t)
+	var first string
+	for i := 0; i < render.MaxBudgets; i++ {
+		tn := tenant(t, s, ctx, fmt.Sprintf("team-%03d", i))
+		if _, err := s.SetTenantBudget(ctx, tn.ID, &TenantBudget{Credits: 1, Window: "1d"}); err != nil {
+			t.Fatalf("budget %d: %v", i, err)
+		}
+		if i == 0 {
+			first = tn.ID
+		}
+	}
+	extra := tenant(t, s, ctx, "one-too-many")
+	if _, err := s.SetTenantBudget(ctx, extra.ID, &TenantBudget{Credits: 1, Window: "1d"}); !errors.Is(err, ErrBudgetsFull) {
+		t.Fatalf("budget %d: %v", render.MaxBudgets+1, err)
+	}
+	if got, err := s.SetTenantBudget(ctx, first, &TenantBudget{Credits: 5, Window: "1h"}); err != nil || got.Budget.Credits != 5 {
+		t.Fatalf("changing a budget when full: %v", err)
 	}
 }

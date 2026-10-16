@@ -61,6 +61,11 @@ type TenantModels struct {
 	Models []string
 }
 
+// MaxBudgets is how many rules Envoy Gateway's CRD takes in one global rate
+// limit (maxItems 256, v1.9.1 and v1.9.2): the most positions there are.
+// One more and the API server refuses the policy, and with it the sync.
+const MaxBudgets = 256
+
 // budgetUnits is the rate limit unit of each window.
 var budgetUnits = map[string]string{"1s": "Second", "1m": "Minute", "1h": "Hour", "1d": "Day"}
 
@@ -72,7 +77,7 @@ var budgetUnits = map[string]string{"1s": "Second", "1m": "Minute", "1h": "Hour"
 func (s State) budgets() []TenantBudget {
 	var out []TenantBudget
 	for _, b := range s.Budgets {
-		if b.Slot < 0 || b.TenantSlug == "" || b.Limit <= 0 || budgetUnits[b.Window] == "" {
+		if b.Slot < 0 || b.Slot >= MaxBudgets || b.TenantSlug == "" || b.Limit <= 0 || budgetUnits[b.Window] == "" {
 			continue
 		}
 		for len(out) <= b.Slot {

@@ -26,6 +26,9 @@ var migrations embed.FS
 var (
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("already exists")
+	// ErrBudgetsFull: every position of the gateways' budget policy is
+	// taken (render.MaxBudgets).
+	ErrBudgetsFull = errors.New("every tenant budget position is taken")
 )
 
 type Store struct {

@@ -190,6 +190,19 @@ both, for a Redis about 33 ms away; the model rule adds nothing measurable.
 Up to 1,700 requests a second the rate limit services kept that pace. So the
 Redis belongs near the gateways (see [deployment](deployment.md)).
 
+How far it scales. Envoy Gateway takes at most 256 rules in one global rate
+limit (`maxItems` in the CRD of 1.9.1 and 1.9.2), so 256 tenants can have a
+budget; the hub refuses the next one (409) rather than render a policy the
+API server would refuse with the whole sync. And Envoy Gateway writes every
+rule into every route of the listener, twice (the check before the request
+and the charge after it): about 1.25 KB per tenant per route, measured on the
+lab. 256 tenants on 7 routes are about 2.2 MB of route configuration, sent
+to every proxy on any budget change and to the AI gateway's controller in the
+extension message, which is capped at 4 MB by default. Past a few hundred
+tenants, or with many routes on the client listener, the way on is one rule
+per amount instead of per tenant, with a `Distinct` match on the tenant
+(tiers): its size does not grow with the tenants.
+
 A tenant held to some models gets one `Deny` rule in the `SecurityPolicy`,
 a CEL expression on the tenant header and `x-ai-eg-model`, which the AI
 gateway sets from the request body before the authorization filter runs. A
