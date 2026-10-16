@@ -12,9 +12,10 @@ function held(identity: SigningKeys["identity"] | undefined): string | null {
 }
 
 /**
- * A tenant's budget across every priced model. One rule per tenant on the
- * gateway, charged with what each answer cost at the model's prices; the
- * tenant's quotas per model hold alongside it.
+ * A tenant's budget across every priced model. The amount travels in the
+ * tenant's tokens and one gateway rule holds every tenant to its own, charged
+ * with what each answer cost at the model's prices; the tenant's quotas per
+ * model hold alongside it.
  */
 export function TenantBudgetCard(props: {
   tenant: Tenant;
@@ -53,7 +54,9 @@ export function TenantBudgetCard(props: {
       <p className="hint">
         One amount in dollars for every model with prices, counted together: a cheaper model spends it more slowly.
         Once it is spent the gateway refuses the tenant (HTTP 429) on every model, until the next{" "}
-        {tenant.budget ? windowLabel[tenant.budget.window] : "period"}. A quota per model holds alongside it.
+        {tenant.budget ? windowLabel[tenant.budget.window] : "period"}. A quota per model holds alongside it. The
+        amount travels in the tenant's tokens: tokens created after a change carry the new one, older tokens the one
+        they were created with.
         {unpriced.length > 0 &&
           ` Models without prices, or with prices in a dry run, cost nothing from it, and are refused all the same once it is spent: ${unpriced.map((m) => m.name).join(", ")}.`}
       </p>
@@ -165,7 +168,8 @@ export function TenantModelsCard(props: {
       <h2>Models</h2>
       <p className="hint">
         Which models the tenant may call. Any other is refused by the gateway (HTTP 403) before a model or a quota is
-        asked. A model added later is closed to a tenant with a list until it is added here.
+        asked. A model added later is closed to a tenant with a list until it is added here. The list travels in the
+        tenant's tokens: tokens created after a change carry the new one.
       </p>
       {allowed && why && <div className="banner warn">{why}</div>}
       {picked ? (

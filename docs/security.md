@@ -102,14 +102,17 @@ Since 0.18, a new key is a **token**: a JSON Web Token the hub signs with
 ES256, which the client pastes where it takes an API key. It says who the
 tenant is (`sub`, its slug) and which key it is (`jti`), for whom
 (`iss` `tokens.issuer`, `aud` `tokens.audience`), and until when (`exp`,
-`tokens.lifetimeDays` after it was made, 180 by default). It holds no budget
-or limit: those change daily, and a token lives for months.
+`tokens.lifetimeDays` after it was made, 180 by default). Since 0.23 it
+also carries the tenant's budget across models (`requests_per_unit`,
+`unit`) and its list of models (`models`) as they were when it was signed,
+which the gateway holds the tenant to. A holder can read them but not change
+them: any change breaks the signature. Quotas per model are not in it.
 
 **The gateways check tokens themselves.** Every sync writes the hub's public
 keys into the SecurityPolicy `aigw-ui-api-key-auth` inline, so no cluster
 calls the hub at runtime, and tokens keep working while the hub is down. The
-gateway then sets `x-aigw-tenant` from `sub` and `x-aigw-key` from `jti`,
-replacing what a client sent (lab check C, Envoy Gateway 1.9.2: a client's
+gateway then sets `x-aigw-tenant` from `sub`, `x-aigw-key` from `jti` and
+`x-aigw-budget` from `requests_per_unit`, replacing what a client sent (lab check C, Envoy Gateway 1.9.2: a client's
 own `x-aigw-tenant` never reaches the model server, even with a key that is
 not a token).
 

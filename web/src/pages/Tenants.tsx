@@ -19,6 +19,11 @@ import { TenantBudgetCard, TenantModelsCard } from "./TenantBudget";
 import TenantQuotas from "./TenantQuotas";
 import { REFRESH_MS } from "./Usage";
 
+/** A live token created before the tenant's budget or models last changed: it carries the old ones. */
+function olderLimits(k: ApiKey, t: Tenant): boolean {
+  return k.kind === "token" && !k.revoked_at && !expired(k) && !!t.limits_changed_at && new Date(k.created_at) < new Date(t.limits_changed_at);
+}
+
 export default function Tenants() {
   const { data: tenants, error, reload } = useLoad(api.tenants);
   const signing = useLoad(api.signingKeys);
@@ -314,7 +319,19 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
                   </td>
                   <td className="mono">{keyText(k)}</td>
                   <td className="mono">{k.client_id}</td>
-                  <td>{formatTime(k.created_at)}</td>
+                  <td>
+                    {formatTime(k.created_at)}
+                    {olderLimits(k, tenant) && (
+                      <div>
+                        <span
+                          className="tag warn"
+                          title="The token carries the budget and the list of models the tenant had when it was created. Create a new token and revoke this one."
+                        >
+                          older budget or models
+                        </span>
+                      </div>
+                    )}
+                  </td>
                   <td className="row-actions">
                     {k.revoked_at ? (
                       <span className="badge pending">Revoked</span>

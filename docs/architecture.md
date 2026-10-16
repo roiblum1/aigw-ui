@@ -75,7 +75,7 @@ back an object that someone edited or deleted by hand.
 | Model added by hand | `Backend`, `AIServiceBackend`, `AIGatewayRoute` |
 | Tenant quota | one `QuotaPolicy` per model in each namespace that holds one of the model's `AIServiceBackend`s |
 | Tenant API keys, with "Enforce API keys" on | one `Secret` (`aigw-ui-api-keys`) and one `SecurityPolicy` on the gateway |
-| Tenant budgets across models | one `BackendTrafficPolicy` (`aigw-ui-tenant-budgets`) on the gateway, with one rule per tenant |
+| Tenant budgets across models | one `BackendTrafficPolicy` (`aigw-ui-tenant-budgets`) on the gateway, with one rule for every tenant; each tenant's amount is in its tokens |
 | A tenant held to some models | one rule per such tenant in the `SecurityPolicy` |
 
 The Secret holds one entry per active key, the client ID and the key, under
@@ -146,29 +146,46 @@ what it last applied.
    (`model == 'a' ? (…) : model == 'b' ? (…) : 0u`). Other costs the route has
    stay. A model whose prices are in a dry run writes no cost: it refuses
    nobody for them.
-2. One `BackendTrafficPolicy`, `aigw-ui-tenant-budgets`, on the client
-   listener: a global rate limit with one rule per tenant that has a budget,
-   `shared: true`, the amount in credits for the window, a request cost of 0
-   and a response cost from that metadata. Shared makes it one bucket across
+2. The amount is in the tenant's tokens. When the hub signs a token it
+   writes the tenant's budget as two claims, `requests_per_unit` (credits)
+   and `unit` (`MINUTE`, `HOUR` or `DAY`, as Envoy names its rate limit
+   units), and its list of models, when it has one, as `models`. The
+   gateway's JWT filter checks the token and puts its claims into the
+   request's metadata (`envoy.filters.http.jwt_authn`, under the provider
+   `aigw-hub`), and copies `requests_per_unit` into the header
+   `x-aigw-budget`, which a client cannot set.
+3. One `BackendTrafficPolicy`, `aigw-ui-tenant-budgets`, on the client
+   listener, with one global rate limit rule for every tenant: it matches a
+   request with `x-aigw-budget` (a token with a budget), counts per tenant
+   (`Distinct` on `x-aigw-tenant`), takes its limit from the token's claims
+   (`limit.fromMetadata`), and is charged nothing for the request and the
+   credits metadata for the answer. It is `shared: true`, one bucket across
    every route of the listener; without it Envoy Gateway keys the bucket by
-   route, which is by model (seen on the lab, 2026-10-16).
-3. Each tenant's rule sits at a fixed position (`tenants.budget_slot`, the
-   lowest free one when its first budget is set). The tenant keeps it when
-   the budget is removed, so a budget set again in the same period comes
-   back with its count; a position held without a budget goes to another
-   tenant only when all 256 are held, and deleting the tenant frees it. A
-   position with no budget is a placeholder rule that matches no tenant. The
-   rule matches `x-aigw-tenant` twice: `Exact` to select the tenant, and
-   `Distinct` to put the tenant into the counter's name. The counter's name
-   is the policy, the rule's position, the tenant and the window start
-   (`render.BudgetCounters`), and nothing of the cluster, so every cluster
-   that renders the same policy counts in the same key of the Redis the
-   gateways share. Ordered by slug, as 0.22.0 rendered them, a tenant added
-   before others moved each later one onto its neighbour's counter; on the
-   lab a tenant's first request ever was refused with another tenant's spend.
-   A reset deletes the tenant's key of the running window in that Redis
-   (`POST /tenants/{id}/budget/reset`, behind `redis.allowReset` like a
-   quota's).
+   route, which is by model (seen on the lab, 2026-10-16). Envoy Gateway
+   puts the same limit on the charge after the answer, so both count in the
+   same window. When the limit cannot be read from the token the rule's own
+   applies, the most the gateway counts, so the budget does not hold, as
+   when the shared Redis cannot be reached: with an Envoy Gateway before
+   1.9.0, whose CRD drops `fromMetadata`, or a unit Envoy does not know,
+   which the hub never signs. The self-test's budget step then fails. This
+   is the upstream
+   way to give each tenant its own number without a rule per tenant (Agent
+   Router, formerly Envoy AI Gateway, "Per-Tenant Limits Without Per-Tenant
+   Policies"; their example has `ext_authz` return the number, which puts a
+   service in every request: here the token carries it).
+
+   The counter's name is the policy, the rule, the tenant and the window
+   start (`render.BudgetCounters`): nothing of the cluster and nothing of
+   the amount. So every cluster counts a tenant in the same key of the Redis
+   the gateways share; a token with a new amount counts on in the same key,
+   and so does a budget removed and set again in the same period; a new
+   window starts a new count. A reset deletes the tenant's key of the
+   running window in that Redis (`POST /tenants/{id}/budget/reset`, behind
+   `redis.allowReset` like a quota's).
+
+   A change of budget reaches the gateway with the tenant's next token:
+   tokens signed before it carry the amount from before. The tenant's page
+   marks them (`limits_changed_at`).
 4. The policy is merged with the policy of each entry and best-effort route
    (`mergeType: StrategicMerge` on those). A policy on a route otherwise
    replaces the listener's on that route: Envoy Gateway reports the budget
@@ -196,25 +213,26 @@ both, for a Redis about 33 ms away; the model rule adds nothing measurable.
 Up to 1,700 requests a second the rate limit services kept that pace. So the
 Redis belongs near the gateways (see [deployment](deployment.md)).
 
-How far it scales. Envoy Gateway takes at most 256 rules in one global rate
-limit (`maxItems` in the CRD of 1.9.1 and 1.9.2), so 256 tenants can have a
-budget; the hub refuses the next one (409) rather than render a policy the
-API server would refuse with the whole sync. And Envoy Gateway writes every
-rule into every route of the listener, twice (the check before the request
-and the charge after it): about 1.25 KB per tenant per route, measured on the
-lab. 256 tenants on 7 routes are about 2.2 MB of route configuration, sent
-to every proxy on any budget change and to the AI gateway's controller in the
-extension message, which is capped at 4 MB by default. Past a few hundred
-tenants, or with many routes on the client listener, the way on is one rule
-per amount instead of per tenant, with a `Distinct` match on the tenant
-(tiers): its size does not grow with the tenants.
+How far it scales. The policy and the models rule are the same size for a
+thousand tenants as for one, and the hub changes neither when a budget
+changes: only the tokens do. With a rule per tenant, as 0.22 rendered it,
+Envoy Gateway wrote every rule into every route of the listener, twice,
+about 1.2 KB per tenant per route; it took at most 256 rules, and the
+configuration a change pushed grew with them (3.2 MB of routes and 11 to 19
+seconds per change at 256 tenants on a listener of 10 routes, measured on
+the lab; see [performance](performance.md#many-tenants)). The time a request
+takes did not depend on the number of tenants either way.
 
-A tenant held to some models gets one `Deny` rule in the `SecurityPolicy`,
-a CEL expression on the tenant header and `x-ai-eg-model`, which the AI
-gateway sets from the request body before the authorization filter runs. A
-model not in the list is refused with 403 before any quota is asked. `GET
-/v1/models` is answered by the AI gateway itself and is not refused; it lists
-every model.
+A tenant held to some models has the list in its tokens, and one `Deny`
+rule in the `SecurityPolicy` holds every such tenant to its own: a CEL
+expression that refuses a request whose `x-ai-eg-model`, which the AI
+gateway sets from the request body before the authorization filter runs, is
+not in the token's `models`. A token without the claim may call every model;
+an empty list refuses every model. The gateway counts an error in a CEL
+expression as no match, which for a `Deny` rule would let the request
+through, so every lookup in it is guarded. A model not in the list is
+refused with 403 before any quota is asked. `GET /v1/models` is answered by
+the AI gateway itself and is not refused; it lists every model.
 
 ## Task log
 

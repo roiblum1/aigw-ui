@@ -43,6 +43,9 @@ func (t *test) budget() (string, string) {
 	if _, err := t.r.st.SetTenantBudget(t.ctx, t.tenant.ID, &store.TenantBudget{Credits: 1, Window: testWindow}); err != nil {
 		return Failed, err.Error()
 	}
+	if err := t.reissue("self-test, with a budget"); err != nil {
+		return Failed, err.Error()
+	}
 	res, err := t.sync("Self-test of " + t.cluster.Name + ": gave " + t.tenant.Slug + " a budget of 1 credit across models")
 	if err != nil {
 		return Failed, "The cluster refused the objects: " + err.Error()
@@ -132,7 +135,18 @@ func (t *test) budget() (string, string) {
 			break
 		}
 	}
-	return Failed, counted + ", yet requests are still answered (last: " + last + "): the rate limit rule charges nothing, or the gateway does not hold the tenant to it."
+	return Failed, counted + ", yet requests are still answered (last: " + last + "): the gateway does not take the limit from the token (limit.fromMetadata needs Envoy Gateway 1.9.0 or later), or it does not hold the tenant to the rule."
+}
+
+// reissue gives the temporary tenant a new token, signed with its budget
+// and its models as they are now: both travel in the token, so the token
+// it had says what they were before.
+func (t *test) reissue(name string) error {
+	_, key, err := t.r.st.CreateToken(t.ctx, t.tenant.ID, name, t.tokenSettings(), time.Now())
+	if err == nil && t.cluster.AuthEnabled {
+		t.key = key
+	}
+	return err
 }
 
 // budgetReset resets the spent budget, where the server may, and expects
@@ -171,9 +185,11 @@ func (t *test) budgetReset(refused string) (string, string) {
 // models holds the temporary tenant first to the model under test, which
 // it must still be served, then to no model at all, so that its next
 // request is refused with HTTP 403 before any model or quota is asked. The
-// first proves the rule with a list matches the model header; the second
-// that the rule refuses. The refusal comes from the authorization rule on
-// the tenant header and the model header the gateway sets, so the budget
+// first proves the rule matches the model header against the list in the
+// tenant's token; the second that the rule refuses. The tenant gets a new
+// token each time, since the list travels in it. The refusal comes from the
+// authorization rule on the token's list and the model header the gateway
+// sets, so the budget
 // of the step before is taken away first, and the quota raised, so that
 // neither can refuse instead.
 func (t *test) models() (string, string) {
@@ -190,6 +206,9 @@ func (t *test) models() (string, string) {
 		return Failed, err.Error()
 	}
 	if _, err := t.r.st.SetTenantModels(t.ctx, t.tenant.ID, []string{t.model.ID}); err != nil {
+		return Failed, err.Error()
+	}
+	if err := t.reissue("self-test, held to " + t.model.Name); err != nil {
 		return Failed, err.Error()
 	}
 	if _, err := t.sync("Self-test of " + t.cluster.Name + ": held " + t.tenant.Slug + " to " + t.model.Name); err != nil {
@@ -214,10 +233,13 @@ func (t *test) models() (string, string) {
 		}
 	}
 	if !served {
-		return Failed, fmt.Sprintf("Held to %s alone, the tenant was not served that model within %d seconds (last: %s): the rule with a list refuses the model it lists.", t.model.Name, int(keyWait.Seconds()), last)
+		return Failed, fmt.Sprintf("Held to %s alone, the tenant was not served that model within %d seconds (last: %s): the models rule refuses a model the token lists.", t.model.Name, int(keyWait.Seconds()), last)
 	}
 
 	if _, err := t.r.st.SetTenantModels(t.ctx, t.tenant.ID, []string{}); err != nil {
+		return Failed, err.Error()
+	}
+	if err := t.reissue("self-test, held to no model"); err != nil {
 		return Failed, err.Error()
 	}
 	if _, err := t.sync("Self-test of " + t.cluster.Name + ": held " + t.tenant.Slug + " to no model"); err != nil {

@@ -11,8 +11,7 @@ import (
 
 // Two priced models, one rendered here and one discovered, tenants x and y
 // with budgets, and tenant-x held to one model; as the lab budget check had
-// it (2026-10-16). tenant-y got its budget first; the tenant that held the
-// position between them has none any more.
+// it (2026-10-16).
 func budgetState() State {
 	s := State{
 		Namespace: "envoy-ai-gateway-system", GatewayName: "envoy-ai-gateway", ClientListener: "http", AuthEnabled: true,
@@ -25,15 +24,16 @@ func budgetState() State {
 				Existing: []Target{{Backend: "sonnet", Model: "sonnet"}},
 				Quotas:   []TenantQuota{{TenantSlug: "tenant-y", Slot: 0, Limit: 10, Window: "1d"}}},
 		},
-		Budgets:    []TenantBudget{{TenantSlug: "tenant-y", Slot: 0, Limit: 300_000, Window: "1d"}, {TenantSlug: "tenant-x", Slot: 2, Limit: 100_000, Window: "1h"}},
+		Budgets:    []TenantBudget{{TenantSlug: "tenant-y", Limit: 300_000, Window: "1d"}, {TenantSlug: "tenant-x", Limit: 100_000, Window: "1h"}},
 		Restricted: []TenantModels{{TenantSlug: "tenant-x", Models: []string{"opus"}}},
 	}
 	return s
 }
 
-// One policy on the client listener, one shared rule per tenant at its
-// position and a placeholder where nobody is, charged from the credits
-// metadata; a priced model's route writes that metadata.
+// One policy on the client listener with one shared rule for every tenant:
+// it matches a token with a budget, counts per tenant, takes the limit from
+// the token's claims and is charged from the credits metadata; a priced
+// model's route writes that metadata. The amounts are in no rule.
 func TestBudgetPolicy(t *testing.T) {
 	s := budgetState()
 	objs := Objects(s)
@@ -43,30 +43,29 @@ func TestBudgetPolicy(t *testing.T) {
 		t.Fatalf("targets %s", got)
 	}
 	rules, _, _ := unstructured.NestedSlice(p.Object, "spec", "rateLimit", "global", "rules")
-	if len(rules) != 3 {
+	if len(rules) != 1 {
 		t.Fatalf("%d rules", len(rules))
 	}
-	for i, r := range rules {
-		if r.(map[string]any)["shared"] != true {
-			t.Fatalf("rule %d is not shared: one bucket per route would be one per model, and the positions would move", i)
-		}
+	rule := rules[0].(map[string]any)
+	if rule["shared"] != true {
+		t.Fatal("the rule is not shared: one bucket per route would be one per model")
 	}
-	first := rules[0].(map[string]any)
-	if got := fmt.Sprint(first["clientSelectors"]); got != "[map[headers:[map[name:x-aigw-tenant type:Exact value:tenant-y] map[name:x-aigw-tenant type:Distinct]]]]" {
-		t.Fatalf("first rule matches %s", got)
+	if got := fmt.Sprint(rule["clientSelectors"]); got != "[map[headers:[map[name:x-aigw-budget type:RegularExpression value:.+] map[name:x-aigw-tenant type:Distinct]]]]" {
+		t.Fatalf("the rule matches %s", got)
 	}
-	if got := fmt.Sprint(first["limit"]); got != "map[requests:300000 unit:Day]" {
-		t.Fatalf("first limit %s", got)
+	if got := fmt.Sprint(rule["limit"]); got != "map[fromMetadata:map[key:aigw-hub namespace:envoy.filters.http.jwt_authn] requests:4294967295 unit:Day]" {
+		t.Fatalf("limit %s", got)
 	}
-	if got := fmt.Sprint(first["cost"]); got != "map[request:map[from:Number number:0] response:map[from:Metadata metadata:map[key:aigw_ui_credits namespace:io.envoy.ai_gateway]]]" {
+	if got := fmt.Sprint(rule["cost"]); got != "map[request:map[from:Number number:0] response:map[from:Metadata metadata:map[key:aigw_ui_credits namespace:io.envoy.ai_gateway]]]" {
 		t.Fatalf("cost %s", got)
 	}
-	placeholder := rules[1].(map[string]any)
-	if got := fmt.Sprint(placeholder["clientSelectors"]); got != "[map[headers:[map[name:x-aigw-tenant type:Exact value:aigw-ui.unused-position]]]]" {
-		t.Fatalf("placeholder matches %s", got)
+	if spec := fmt.Sprint(p.Object["spec"]); strings.Contains(spec, "tenant-") || strings.Contains(spec, "300000") {
+		t.Fatalf("a tenant or an amount in the policy: %s", spec)
 	}
-	if got := fmt.Sprint(rules[2].(map[string]any)["limit"]); got != "map[requests:100000 unit:Hour]" {
-		t.Fatalf("third limit %s", got)
+	// The token's budget reaches the rule as a header.
+	a := find(t, objs, "SecurityPolicy", AuthPolicyName)
+	if claims := fmt.Sprint(a.Object["spec"].(map[string]any)["jwt"]); !strings.Contains(claims, "map[claim:requests_per_unit header:x-aigw-budget]") {
+		t.Fatalf("no budget header from the token: %s", claims)
 	}
 	// Server-side apply sends the object as JSON.
 	p.DeepCopy()
@@ -83,29 +82,18 @@ func TestBudgetPolicy(t *testing.T) {
 	}
 }
 
-// A tenant keeps its rule's position, and with it its counter, whatever
-// happens to the budgets of others: a new tenant that sorts first, one that
-// is disabled or loses its budget.
-func TestBudgetPositionsStay(t *testing.T) {
-	position := func(s State, tenant string) int {
-		p := find(t, Objects(s), "BackendTrafficPolicy", BudgetPolicyName)
-		rules, _, _ := unstructured.NestedSlice(p.Object, "spec", "rateLimit", "global", "rules")
-		for i, r := range rules {
-			if strings.Contains(fmt.Sprint(r.(map[string]any)["clientSelectors"]), "value:"+tenant+"]") {
-				return i
-			}
-		}
-		return -1
-	}
+// A thousand tenants with budgets render the same policy as two.
+func TestBudgetPolicySize(t *testing.T) {
 	s := budgetState()
-	before := position(s, "tenant-x")
-	s.Budgets = append(s.Budgets, TenantBudget{TenantSlug: "aaa", Slot: 1, Limit: 5, Window: "1d"})
-	if got := position(s, "tenant-x"); got != before || position(s, "aaa") != 1 {
-		t.Fatalf("tenant-x moved from %d to %d", before, got)
+	two := fmt.Sprint(find(t, Objects(s), "BackendTrafficPolicy", BudgetPolicyName).Object)
+	for i := range 1000 {
+		s.Budgets = append(s.Budgets, TenantBudget{TenantSlug: fmt.Sprintf("team-%04d", i), Limit: int64(i + 1), Window: "1h"})
 	}
-	s.Budgets = s.Budgets[1:] // tenant-y disabled or without a budget
-	if got := position(s, "tenant-x"); got != before {
-		t.Fatalf("tenant-x moved from %d to %d", before, got)
+	if many := fmt.Sprint(find(t, Objects(s), "BackendTrafficPolicy", BudgetPolicyName).Object); many != two {
+		t.Fatalf("the policy changed with the tenants:\n%s\n%s", two, many)
+	}
+	if n := len(BudgetCounters(s)); n != 1002 {
+		t.Fatalf("%d counters", n)
 	}
 }
 
@@ -145,17 +133,17 @@ func TestBudgetPolicyHeld(t *testing.T) {
 	}
 }
 
-// The counters are named as Envoy Gateway names a shared rule with an
-// Exact and a Distinct match: the policy's domain, the rule's generic key
-// twice, the Exact descriptor twice, the Distinct one with the tenant, then
-// the window start. The Exact part is what the lab's shared Redis had
-// (2026-10-16).
+// The counters are named as Envoy Gateway names a shared rule with a header
+// match and a Distinct match: the policy's domain, the rule's generic key
+// twice, the first match's descriptor twice, the Distinct one with the
+// tenant, then the window start, which is the tenant's.
 func TestBudgetCounters(t *testing.T) {
 	cs := BudgetCounters(budgetState())
 	now := time.Date(2026, 10, 15, 21, 30, 0, 0, time.UTC)
+	stem := "p_envoy-ai-gateway-system/aigw-ui-tenant-budgets_envoy-ai-gateway-system/aigw-ui-tenant-budgets/rule/0_envoy-ai-gateway-system/aigw-ui-tenant-budgets/rule/0_rule-0-match-0_rule-0-match-0_rule-0-match-1_"
 	want := map[string]string{
-		"tenant-y": "p_envoy-ai-gateway-system/aigw-ui-tenant-budgets_envoy-ai-gateway-system/aigw-ui-tenant-budgets/rule/0_envoy-ai-gateway-system/aigw-ui-tenant-budgets/rule/0_rule-0-match-0_rule-0-match-0_rule-0-match-1_tenant-y_1792022400",
-		"tenant-x": "p_envoy-ai-gateway-system/aigw-ui-tenant-budgets_envoy-ai-gateway-system/aigw-ui-tenant-budgets/rule/2_envoy-ai-gateway-system/aigw-ui-tenant-budgets/rule/2_rule-2-match-0_rule-2-match-0_rule-2-match-1_tenant-x_1792098000",
+		"tenant-y": stem + "tenant-y_1792022400",
+		"tenant-x": stem + "tenant-x_1792098000",
 	}
 	if len(cs) != len(want) {
 		t.Fatalf("%d counters", len(cs))
@@ -179,10 +167,11 @@ func TestModelCredits(t *testing.T) {
 	}
 }
 
-// A restricted tenant gets a Deny rule in the SecurityPolicy that matches
-// its requests for any model but its own; a tenant that may call every
-// model gets none.
-func TestModelRules(t *testing.T) {
+// While some tenant is held to some models, one Deny rule refuses a model
+// its token does not list, whoever the tenant; every lookup is guarded,
+// since an error would let the request through. Without such a tenant
+// there is no rule.
+func TestModelsRule(t *testing.T) {
 	s := budgetState()
 	p := find(t, Objects(s), "SecurityPolicy", AuthPolicyName)
 	rules, _, _ := unstructured.NestedSlice(p.Object, "spec", "authorization", "rules")
@@ -190,23 +179,23 @@ func TestModelRules(t *testing.T) {
 		t.Fatalf("rules %v", rules)
 	}
 	rule := rules[0].(map[string]any)
-	want := "'x-aigw-tenant' in request.headers && request.headers['x-aigw-tenant'] == 'tenant-x' && " +
-		"!('x-ai-eg-model' in request.headers && request.headers['x-ai-eg-model'] in ['opus'])"
-	if rule["action"] != "Deny" || rule["name"] != "models-tenant-x" || rule["cel"] != want {
+	claims := "metadata.filter_metadata['envoy.filters.http.jwt_authn']['aigw-hub']"
+	want := "'envoy.filters.http.jwt_authn' in metadata.filter_metadata && 'aigw-hub' in metadata.filter_metadata['envoy.filters.http.jwt_authn']" +
+		" && 'models' in " + claims + " && !('x-ai-eg-model' in request.headers && request.headers['x-ai-eg-model'] in " + claims + "['models'])"
+	if rule["action"] != "Deny" || rule["name"] != "models" || rule["cel"] != want {
 		t.Fatalf("rule %v", rule)
 	}
-	// No model at all: every request of the tenant is refused.
-	s.Restricted = []TenantModels{{TenantSlug: "o'neil"}}
-	p = find(t, Objects(s), "SecurityPolicy", AuthPolicyName)
-	rules, _, _ = unstructured.NestedSlice(p.Object, "spec", "authorization", "rules")
-	if cel := rules[0].(map[string]any)["cel"]; cel != `'x-aigw-tenant' in request.headers && request.headers['x-aigw-tenant'] == 'o\'neil'` {
-		t.Fatalf("cel %v", cel)
+	// A thousand restricted tenants: still the one rule.
+	for i := range 1000 {
+		s.Restricted = append(s.Restricted, TenantModels{TenantSlug: fmt.Sprintf("team-%04d", i), Models: []string{"opus"}})
 	}
-	// With API keys still taken, a request with one has no tenant header:
-	// the rule is rendered all the same, and holds the tokens.
-	s.Identity.Mode = IdentityBoth
 	p = find(t, Objects(s), "SecurityPolicy", AuthPolicyName)
-	if spec := fmt.Sprint(p.Object["spec"]); !strings.Contains(spec, "models-o'neil") {
-		t.Fatalf("no model rule while both are taken: %s", spec)
+	if rules, _, _ = unstructured.NestedSlice(p.Object, "spec", "authorization", "rules"); len(rules) != 1 {
+		t.Fatalf("%d rules for 1001 tenants", len(rules))
+	}
+	s.Restricted = nil
+	p = find(t, Objects(s), "SecurityPolicy", AuthPolicyName)
+	if spec := fmt.Sprint(p.Object["spec"]); strings.Contains(spec, "models") {
+		t.Fatalf("a models rule without a restricted tenant: %s", spec)
 	}
 }

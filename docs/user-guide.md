@@ -271,8 +271,9 @@ gives it one amount in dollars per minute, hour or day for every model with
 prices, counted together: a cheaper model spends it more slowly. Its quotas
 per model hold alongside it. The gateway refuses the tenant (HTTP 429) once
 it is spent, on every model, until the next period. It is enforced by
-the gateways themselves, through one rule per tenant in one policy that
-every cluster gets, and counted in the one Redis the gateways share, so a tenant has one
+the gateways themselves: the amount travels in the tenant's tokens, one
+rule that every cluster gets holds each tenant to the amount in its token,
+and it is counted in the one Redis the gateways share, so a tenant has one
 budget wherever its requests land. Models without prices, and models whose
 prices are in a dry run, cost nothing from it; once it is spent they are
 refused all the same.
@@ -281,6 +282,10 @@ refused all the same.
   limiting enabled in each cluster's Envoy Gateway with the Redis the gateways share
   (see [deployment](deployment.md#before-the-first-budget-across-models)).
   Until then the tenant's page says it is not enforced.
+- **A change reaches the gateway with the tenant's next token.** A token
+  carries the budget and the list of models the tenant had when it was
+  created; the Keys card marks the tokens that carry older ones. Create new
+  tokens for the tenant's users and revoke the old ones.
 - A new amount holds what the tenant already used in the running period; a
   new period length starts a new count. Another tenant's budget coming or
   going changes nothing for this one. A budget removed and set again in the
@@ -293,14 +298,15 @@ refused all the same.
   answer that has started is never cut off.
 - A request passes while the budget's counter cannot be read: if a cluster
   cannot reach the shared Redis, the budget does not hold there. The hub is
-  not in the path: it only renders the policy, and while it is down every
-  budget holds as it is.
+  not in the path: it signs the tokens and renders the policy, and while it
+  is down every budget holds as it is.
 
 **Which models.** **Models** on a tenant's page limits it to some of the
 models. Any other is refused by the gateway (HTTP 403) before a model or a
 quota is asked, including a model added later, until it is added to the
 tenant's list. By default a tenant may call every model. It needs every
-tenant on tokens too.
+tenant on tokens too, and like the budget it travels in the tenant's
+tokens: a change reaches the gateway with the tenant's next token.
 
 **Tokens and API keys.** Before 0.18 a key was an API key (`sk-...`) that
 every gateway had to list. Now a new key is a token the hub signs, which the

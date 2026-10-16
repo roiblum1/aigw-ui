@@ -81,7 +81,7 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	// policy and the route's cost as the Envoy Gateway and AI Gateway CRDs
 	// take them, and the CEL rule in the policy.
 	s.Models[0].Priced, s.Models[0].CostExpression = true, "input_tokens * 15u"
-	s.Budgets = []render.TenantBudget{{TenantSlug: "team-b", Slot: 0, Limit: 300_000, Window: "1d"}, {TenantSlug: "team-a", Slot: 2, Limit: 100_000, Window: "1h"}}
+	s.Budgets = []render.TenantBudget{{TenantSlug: "team-b", Limit: 300_000, Window: "1d"}, {TenantSlug: "team-a", Limit: 100_000, Window: "1h"}}
 	s.Restricted = []render.TenantModels{{TenantSlug: "team-a", Models: []string{"GLM5.3"}}}
 	if _, err := c.Sync(ctx, ns, render.Objects(s), nil); err != nil {
 		t.Fatalf("budgets: the API server refused a rendered object: %v", err)
@@ -91,11 +91,10 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// team-b at 0, a placeholder at 1, team-a at 2; a tenant's rule matches
-	// its header twice, Exact and Distinct.
+	// One rule for every tenant, its limit from the token: the CRD keeps
+	// fromMetadata, which one without the field would have pruned.
 	rl, _, _ := unstructured.NestedSlice(bp.Object, "spec", "rateLimit", "global", "rules")
-	if len(rl) != 3 || fmt.Sprint(rl[2].(map[string]any)["limit"]) != "map[requests:100000 unit:Hour]" ||
-		!strings.Contains(fmt.Sprint(rl[1]), "aigw-ui.unused-position") ||
+	if len(rl) != 1 || fmt.Sprint(rl[0].(map[string]any)["limit"]) != "map[fromMetadata:map[key:aigw-hub namespace:envoy.filters.http.jwt_authn] requests:4294967295 unit:Day]" ||
 		!strings.Contains(fmt.Sprint(rl[0].(map[string]any)["clientSelectors"]), "type:Distinct") {
 		t.Fatalf("budget rules: %v", rl)
 	}
@@ -119,7 +118,7 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	if live, err = c.dyn.Resource(pol).Namespace(ns).Get(ctx, render.AuthPolicyName, metav1.GetOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if rules, _, _ := unstructured.NestedSlice(live.Object, "spec", "authorization", "rules"); len(rules) != 4 || rules[3].(map[string]any)["name"] != "models-team-a" {
+	if rules, _, _ := unstructured.NestedSlice(live.Object, "spec", "authorization", "rules"); len(rules) != 4 || rules[3].(map[string]any)["name"] != "models" {
 		t.Fatalf("tokens: %d rules, want 2 revoked, 1 disabled, 1 models: %v", len(rules), rules)
 	}
 	// Without budgets the policy goes.

@@ -216,6 +216,10 @@ type Tenant struct {
 	// Models is the IDs of the models the tenant may call, or nil when it
 	// may call every model. An empty list closes every model to it.
 	Models []string `json:"models"`
+	// LimitsChangedAt is when the budget or the list of models last
+	// changed: both travel in the tenant's tokens, so a token signed before
+	// carries the ones from before.
+	LimitsChangedAt *time.Time `json:"limits_changed_at"`
 }
 
 // TenantBudget is a tenant's budget across models: credits for each window.

@@ -225,6 +225,8 @@ export interface Tenant {
   budget: TenantBudget | null;
   /** The IDs of the models the tenant may call; null for every model. */
   models: string[] | null;
+  /** When the budget or the list of models last changed: a token created before carries the ones from before. */
+  limits_changed_at: string | null;
 }
 
 export interface TenantBudget {

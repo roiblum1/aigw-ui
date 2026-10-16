@@ -11,18 +11,21 @@ import (
 
 // A tenant's budget across every priced model is enforced by the gateway,
 // not by the hub: one BackendTrafficPolicy on the client listener with one
-// global rate limit rule per tenant, charged after each response with the
-// credits the model's prices make of it, which the routes write into the
+// global rate limit rule for every tenant, charged after each response with
+// the credits the model's prices make of it, which the routes write into the
 // request's metadata. Every cluster renders the same policy, and the rate
 // limit services count in one shared Redis, so a tenant has one counter
 // wherever its requests land (lab budget check, 2026-10-16).
 //
-// The name of a counter holds the position of its rule and the tenant, so
-// each tenant keeps one position for as long as it has a budget (Slot), and
-// a position nobody holds is filled with a rule that matches nothing.
-// Without that, a tenant added before others moved every later one onto its
-// neighbour's counter: on the lab a tenant's first request ever was refused
-// with another tenant's spend (2026-10-16).
+// The amount is not in the policy: it is in the tenant's token. The hub
+// writes it there when it signs the token (requests_per_unit and unit), the
+// gateway's JWT filter puts the token's claims into the request's metadata,
+// and the rule takes its limit from there (limit.fromMetadata). It is the
+// upstream way to give each tenant its own number without a rule per
+// tenant, so the policy is the same size for 1,000 tenants as for one; a
+// rule per tenant cost 1.2 KB on every route of the listener, and Envoy
+// Gateway takes 256 at most (lab, 2026-10-16). A tenant's list of models
+// travels in its token the same way.
 const (
 	// BudgetPolicyName is the one policy that holds every tenant's budget.
 	BudgetPolicyName = "aigw-ui-tenant-budgets"
@@ -46,12 +49,8 @@ const (
 // TenantBudget is one tenant's budget across models: credits for each window.
 type TenantBudget struct {
 	TenantSlug string
-	// Slot is the fixed position of the tenant's rule in the policy. It is
-	// unique and kept while the tenant has a budget, because the position
-	// is part of the name of the rule's counter in Redis.
-	Slot   int
-	Limit  int64
-	Window string
+	Limit      int64
+	Window     string
 }
 
 // TenantModels is a tenant that may call only the named models.
@@ -61,103 +60,96 @@ type TenantModels struct {
 	Models []string
 }
 
-// MaxBudgets is how many rules Envoy Gateway's CRD takes in one global rate
-// limit (maxItems 256, v1.9.1 and v1.9.2): the most positions there are.
-// One more and the API server refuses the policy, and with it the sync.
-const MaxBudgets = 256
+const (
+	// BudgetClaim and UnitClaim are the claims of a token that carry its
+	// tenant's budget across models: the credits and the window, as Envoy
+	// names its rate limit units. ModelsClaim lists the models the tenant
+	// may call, when it is held to some.
+	BudgetClaim = "requests_per_unit"
+	UnitClaim   = "unit"
+	ModelsClaim = "models"
+	// BudgetHeader is where the gateway puts a token's budget, so that the
+	// budget rule matches the requests of a tenant that has one and no other.
+	BudgetHeader = "x-aigw-budget"
+	// jwtMetadata is where the gateway's JWT filter puts a token's claims,
+	// under the provider's name.
+	jwtMetadata = "envoy.filters.http.jwt_authn"
+)
 
-// budgetUnits is the rate limit unit of each window.
-var budgetUnits = map[string]string{"1s": "Second", "1m": "Minute", "1h": "Hour", "1d": "Day"}
+// BudgetUnits is the rate limit unit a token names for each window, as
+// Envoy parses it (envoy.type.v3.RateLimitUnit, upper case).
+var BudgetUnits = map[string]string{"1s": "SECOND", "1m": "MINUTE", "1h": "HOUR", "1d": "DAY"}
 
-// budgets returns the rules of the policy in order: the budget at index i
-// is the one with Slot i. A position no budget holds, or holds with a value
-// the gateway would refuse, comes back with an empty TenantSlug and is
-// rendered as a placeholder, so the rules after it keep their position.
-// Positions after the last budget are left out.
+// budgets returns the budgets a gateway can hold a tenant to.
 func (s State) budgets() []TenantBudget {
 	var out []TenantBudget
 	for _, b := range s.Budgets {
-		if b.Slot < 0 || b.Slot >= MaxBudgets || b.TenantSlug == "" || b.Limit <= 0 || budgetUnits[b.Window] == "" {
-			continue
+		if b.TenantSlug != "" && b.Limit > 0 && BudgetUnits[b.Window] != "" {
+			out = append(out, b)
 		}
-		for len(out) <= b.Slot {
-			out = append(out, TenantBudget{Slot: len(out)})
-		}
-		out[b.Slot] = b
 	}
 	return out
 }
 
-// placeholderTenant is a tenant header no token can carry: a slug has no dot.
-const placeholderTenant = "aigw-ui.unused-position"
-
-// budgetPolicy renders the tenants' budgets. The policy is only rendered
-// while the gateway takes tokens only: its rules read the tenant header a
-// token sets. It attaches where the API-key policy does.
+// budgetPolicy renders the rule of every tenant's budget. It matches the
+// requests whose token carries a budget, one counter per tenant (Distinct on
+// the tenant header), and takes the limit from the token's claims.
+//
+// When the limit cannot be read from the token the rule's own applies: the
+// most the gateway counts in a window, so the budget does not hold, as when
+// the shared Redis cannot be reached. That is the case with an Envoy Gateway
+// before 1.9.0, whose CRD drops limit.fromMetadata, and with a unit Envoy does
+// not know, which the hub never signs. The self-test's budget step then fails;
+// a small fallback would have refused every tenant with a budget, the
+// self-test's own included, so it could not have told.
+//
+// The policy is only rendered while the gateway takes tokens only: the
+// headers it reads are the ones a token sets. It attaches where the API-key
+// policy does.
 func budgetPolicy(s State) *unstructured.Unstructured {
 	target := map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName}
 	if s.ClientListener != "" {
 		target["sectionName"] = s.ClientListener
 	}
-	var rules []any
-	for _, b := range s.budgets() {
-		if b.TenantSlug == "" {
-			rules = append(rules, map[string]any{
-				"clientSelectors": []any{
-					map[string]any{"headers": []any{map[string]any{"name": TenantHeader, "type": "Exact", "value": placeholderTenant}}},
-				},
-				// Shared like every other rule: Envoy Gateway numbers shared
-				// and unshared rules apart.
-				"shared": true,
-				"limit":  map[string]any{"requests": int64(1), "unit": "Day"},
-			})
-			continue
-		}
-		rules = append(rules, map[string]any{
-			"clientSelectors": []any{
-				map[string]any{"headers": []any{
-					map[string]any{"name": TenantHeader, "type": "Exact", "value": b.TenantSlug},
-					// The same header again, as Distinct: it puts the tenant
-					// into the counter's name, so a position that passes to
-					// another tenant does not pass its count on with it.
-					map[string]any{"name": TenantHeader, "type": "Distinct"},
-				}},
+	rule := map[string]any{
+		"clientSelectors": []any{
+			map[string]any{"headers": []any{
+				map[string]any{"name": BudgetHeader, "type": "RegularExpression", "value": ".+"},
+				map[string]any{"name": TenantHeader, "type": "Distinct"},
+			}},
+		},
+		// One bucket across every route of the listener. Without it the
+		// gateway keys the bucket by route, which is by model.
+		"shared": true,
+		"limit": map[string]any{
+			"requests":     int64(MaxLimit),
+			"unit":         "Day",
+			"fromMetadata": map[string]any{"namespace": jwtMetadata, "key": TokenProvider},
+		},
+		"cost": map[string]any{
+			// A request costs nothing by itself; what its answer cost is
+			// charged once the stream ends.
+			"request": map[string]any{"from": "Number", "number": int64(0)},
+			"response": map[string]any{
+				"from":     "Metadata",
+				"metadata": map[string]any{"namespace": costMetadataNamespace, "key": CreditsKey},
 			},
-			// One bucket across every route of the listener. Without it the
-			// gateway keys the bucket by route, which is by model.
-			"shared": true,
-			"limit":  map[string]any{"requests": b.Limit, "unit": budgetUnits[b.Window]},
-			"cost": map[string]any{
-				// A request costs nothing by itself; what its answer cost is
-				// charged once the stream ends.
-				"request": map[string]any{"from": "Number", "number": int64(0)},
-				"response": map[string]any{
-					"from":     "Metadata",
-					"metadata": map[string]any{"namespace": costMetadataNamespace, "key": CreditsKey},
-				},
-			},
-		})
+		},
 	}
 	u := object(egAPI, "BackendTrafficPolicy", s.Namespace, BudgetPolicyName)
 	u.Object["spec"] = map[string]any{
 		"targetRefs": []any{target},
-		"rateLimit":  map[string]any{"type": "Global", "global": map[string]any{"rules": rules}},
+		"rateLimit":  map[string]any{"type": "Global", "global": map[string]any{"rules": []any{rule}}},
 	}
 	return u
 }
 
 // hasBudgets reports whether the budget policy is rendered: while the
-// gateway takes tokens only, and some budget holds a position.
+// gateway takes tokens only, and some tenant has a budget. Without one the
+// policy is left out, so a cluster without global rate limiting in its
+// Envoy Gateway is not asked for it.
 func (s State) hasBudgets() bool {
-	if !s.AuthEnabled || s.Identity.Mode != IdentityTokens {
-		return false
-	}
-	for _, b := range s.budgets() {
-		if b.TenantSlug != "" {
-			return true
-		}
-	}
-	return false
+	return s.AuthEnabled && s.Identity.Mode == IdentityTokens && len(s.budgets()) > 0
 }
 
 // chargesBudgets reports whether the model's routes write what a request
@@ -198,12 +190,14 @@ func ModelCredits(byModel map[string]string) string {
 
 // BudgetCounter is where the gateway's rate limit service keeps what a
 // tenant used of its budget. The name follows what Envoy Gateway makes of a
-// shared rule with an Exact and a Distinct match on the tenant header: the
-// policy's domain, its generic key (the policy and the rule's position)
-// twice, the Exact match's descriptor twice, the Distinct one and the
-// tenant, and the window start (Envoy Gateway v1.9.2,
-// internal/xds/translator/ratelimit.go; the Exact part seen in the lab's
-// shared Redis, 2026-10-16).
+// shared rule with a header match and a Distinct match on the tenant
+// header: the policy's domain, its generic key (the policy and the rule's
+// position, 0) twice, the first match's descriptor twice, the Distinct one
+// and the tenant, and the window start (Envoy Gateway v1.9.2,
+// internal/xds/translator/ratelimit.go; seen in the lab's shared Redis,
+// 2026-10-16). The amount is not part of it, so a token with a new amount
+// counts on in the same key, and the window is the one the hub signs into
+// the tenant's tokens.
 type BudgetCounter struct {
 	TenantSlug string
 	Limit      int64
@@ -216,17 +210,12 @@ func BudgetCounters(s State) []BudgetCounter {
 	if !s.hasBudgets() {
 		return nil
 	}
-	var out []BudgetCounter
 	policy := s.Namespace + "/" + BudgetPolicyName
-	for i, b := range s.budgets() {
-		if b.TenantSlug == "" {
-			continue
-		}
-		rule := policy + "/rule/" + strconv.Itoa(i)
-		exact := "rule-" + strconv.Itoa(i) + "-match-0"
-		distinct := "rule-" + strconv.Itoa(i) + "-match-1"
-		out = append(out, BudgetCounter{TenantSlug: b.TenantSlug, Limit: b.Limit, Window: b.Window,
-			stem: policy + "_" + rule + "_" + rule + "_" + exact + "_" + exact + "_" + distinct + "_" + b.TenantSlug + "_"})
+	rule := policy + "/rule/0"
+	stem := policy + "_" + rule + "_" + rule + "_rule-0-match-0_rule-0-match-0_rule-0-match-1_"
+	var out []BudgetCounter
+	for _, b := range s.budgets() {
+		out = append(out, BudgetCounter{TenantSlug: b.TenantSlug, Limit: b.Limit, Window: b.Window, stem: stem + b.TenantSlug + "_"})
 	}
 	return out
 }
@@ -237,28 +226,21 @@ func (c BudgetCounter) RedisKey(prefix string, now time.Time) string {
 	return prefix + c.stem + strconv.FormatInt(WindowStart(c.Window, now).Unix(), 10)
 }
 
-// modelRules returns the authorization rules that hold a restricted tenant
-// to its models: one Deny rule per tenant, which matches its requests for
-// any other model. The model is read from the header the AI gateway sets
-// from the request body, after it has checked the token; a client cannot
-// set either. A model not in the list, such as one added since, is refused.
-func modelRules(restricted []TenantModels) []any {
-	sorted := append([]TenantModels(nil), restricted...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].TenantSlug < sorted[j].TenantSlug })
-	var rules []any
-	for _, t := range sorted {
-		models := make([]string, 0, len(t.Models))
-		for _, m := range t.Models {
-			models = append(models, celString(m))
-		}
-		sort.Strings(models)
-		cel := "'" + TenantHeader + "' in request.headers && request.headers['" + TenantHeader + "'] == " + celString(t.TenantSlug)
-		if len(models) > 0 {
-			cel += " && !('" + ModelHeader + "' in request.headers && request.headers['" + ModelHeader + "'] in [" + strings.Join(models, ", ") + "])"
-		}
-		rules = append(rules, map[string]any{"name": "models-" + t.TenantSlug, "action": "Deny", "cel": cel})
-	}
-	return rules
+// modelsRule is the authorization rule that holds a tenant to the models its
+// token lists: it refuses a request for any other (HTTP 403). The model is
+// read from the header the AI gateway sets from the request body, after the
+// token was checked, and the list from the token's claims; a client can set
+// neither. A token without the claim may call every model.
+//
+// The gateway counts an error in the expression as no match, which for a
+// Deny rule lets the request through, so every lookup is guarded.
+func modelsRule() map[string]any {
+	claims := "metadata.filter_metadata['" + jwtMetadata + "']['" + TokenProvider + "']"
+	cel := "'" + jwtMetadata + "' in metadata.filter_metadata" +
+		" && '" + TokenProvider + "' in metadata.filter_metadata['" + jwtMetadata + "']" +
+		" && '" + ModelsClaim + "' in " + claims +
+		" && !('" + ModelHeader + "' in request.headers && request.headers['" + ModelHeader + "'] in " + claims + "['" + ModelsClaim + "'])"
+	return map[string]any{"name": "models", "action": "Deny", "cel": cel}
 }
 
 // celString quotes s as a CEL string literal.

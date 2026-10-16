@@ -539,10 +539,12 @@ with the keys it should hold and removes any other entry.
 model with prices, counted together. The gateway refuses the tenant on
 every model once it is spent.
 
-**How.** One rule per tenant in one `BackendTrafficPolicy` on the client
-listener, a global rate limit of Envoy Gateway charged with what each
-answer cost at the model's prices; every route of a priced model writes that
-cost, and the entry routes' own policies merge with it. See
+**How.** The amount travels in the tenant's tokens: the hub signs it into
+each token as it issues it. One rule in one `BackendTrafficPolicy` on the
+client listener holds every tenant to the amount in its token, a global
+rate limit of Envoy Gateway charged with what each answer cost at the
+model's prices; every route of a priced model writes that cost, and the
+entry routes' own policies merge with it. See
 [architecture](architecture.md#a-budget-across-models).
 
 **Why.**
@@ -554,14 +556,17 @@ cost, and the entry routes' own policies merge with it. See
   every budget holds as it is, and only changes and the Usage page wait. An earlier version
   (0.20.0) added up the spend in the hub and closed tenants by a rule; that
   was a minute late and depended on the hub.
-- *A tenant keeps its rule's position.* The gateway names the counter after
-  the rule's position, so each tenant keeps the position it got, and the
-  rule names the tenant into the counter too. A new amount keeps what was
-  used, and so does a budget removed and set again in the same period;
-  another tenant's budget coming or going changes nothing. **Reset usage**
-  deletes the counter to start the period over. In 0.22.0
-  the rules were in slug order, and a tenant added before others moved every
-  later one onto its neighbour's counter.
+- *The amount is in the token, not in a rule per tenant.* It is the
+  upstream way to give each tenant its own number: the policy is the same
+  size for a thousand tenants as for one. With a rule per tenant (0.22) the
+  gateway took 256 at most, and every rule cost 1.2 KB on every route of the
+  listener. The price is that a new amount reaches the gateway with the
+  tenant's next token; the tenant's page marks the tokens that carry an
+  older one.
+- *The counter is named after the tenant and the window.* A new amount
+  keeps what was used, and so does a budget removed and set again in the
+  same period; a new window starts a new count. **Reset usage** deletes the
+  counter to start the period over.
 - *It costs a round trip to Redis per request.* The rate limit service asks
   the shared Redis before the request goes on, after the quota's own check:
   the Redis belongs near the gateways.
@@ -573,8 +578,9 @@ cost, and the entry routes' own policies merge with it. See
 **What it does.** A tenant may call only the models on its list; any other
 is refused with 403.
 
-**How.** One `Deny` rule per such tenant in the `SecurityPolicy`, on the
-tenant header and the model header the gateway sets from the request body.
+**How.** The list travels in the tenant's tokens, and one `Deny` rule in
+the `SecurityPolicy` refuses a request whose model, which the gateway reads
+from the request body, is not in the token's list.
 
 **Why.** Which models a tenant may call and how much it may spend are two
 questions: the first is authorization (403), the second a budget (429). A
