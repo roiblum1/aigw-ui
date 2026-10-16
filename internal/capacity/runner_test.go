@@ -68,6 +68,12 @@ type instance struct {
 	// ranks is how many API servers it runs, each on its own port with its
 	// own counters, as a data-parallel pod does; 0 is one.
 	ranks int
+	// beforeVLLM16 publishes the counters of vLLM before 0.16: no
+	// prompt_tokens_cached, the local prefix cache's hits and a KV
+	// connector's (LMCache) as two counters over the same queried prompts.
+	// Of the 80% cached, 50% comes from the local cache and 30% from the
+	// connector.
+	beforeVLLM16 bool
 	// served is what each rank was sent, filled in by runRunner.
 	served []*atomic.Int64
 }
@@ -111,9 +117,18 @@ func runRunner(t *testing.T, set Settings, in *instance) string {
 			if busy.Load() && in.busyAfterFirst > 0 {
 				running = in.busyAfterFirst
 			}
+			p := prompt.Load() + n*in.foreignPerRead
+			if in.beforeVLLM16 {
+				local := cached.Load() * 5 / 8
+				fmt.Fprintf(w, "vllm:prompt_tokens_total{engine=\"0\",model_name=\"m\"} %d\nvllm:prefix_cache_queries_total{engine=\"0\",model_name=\"m\"} %d\n"+
+					"vllm:prefix_cache_hits_total{engine=\"0\",model_name=\"m\"} %d\nvllm:external_prefix_cache_queries_total{engine=\"0\",model_name=\"m\"} %d\n"+
+					"vllm:external_prefix_cache_hits_total{engine=\"0\",model_name=\"m\"} %d\nvllm:generation_tokens_total{engine=\"0\"} %d\n"+
+					"vllm:num_requests_running{engine=\"0\",model_name=\"m\"} %d\n", p, p, local, p, cached.Load()-local, output.Load(), running)
+				return
+			}
 			fmt.Fprintf(w, "# HELP vllm:prompt_tokens_total x\nvllm:prompt_tokens_total{engine=\"0\",model_name=\"m\"} %d\n"+
 				"vllm:prompt_tokens_cached_total{engine=\"0\",model_name=\"m\"} %d\nvllm:generation_tokens_total{engine=\"0\"} %d\n"+
-				"vllm:num_requests_running{engine=\"0\",model_name=\"m\"} %d\n", prompt.Load()+n*in.foreignPerRead, cached.Load(), output.Load(), running)
+				"vllm:num_requests_running{engine=\"0\",model_name=\"m\"} %d\n", p, cached.Load(), output.Load(), running)
 		})
 		server := httptest.NewServer(mux)
 		defer server.Close()
@@ -189,6 +204,26 @@ func TestRunnerRanks(t *testing.T) {
 		if served.Load() == 0 {
 			t.Fatalf("rank %d was sent nothing", i)
 		}
+	}
+}
+
+// Before vLLM 0.16 the cache share comes from the prefix cache's counters,
+// and what a KV connector such as LMCache loaded counts as cached too: 50%
+// from the local cache and 30% from the connector make 80%, as
+// prompt_tokens_cached says from 0.16 on.
+func TestRunnerCacheBeforeVLLM16(t *testing.T) {
+	set := Defaults(0)
+	set.TTFTMillis = 3000
+	l := ParseLog(runRunner(t, set, &instance{maxModelLen: 200000, beforeVLLM16: true}))
+	if !l.Done || len(l.Steps) != 4 {
+		t.Fatalf("not done: %+v", l)
+	}
+	share := l.Steps[1].CachedShare()
+	if share == nil {
+		t.Fatal("no cached share")
+	}
+	if *share != 0.8 {
+		t.Fatalf("cached share = %v, want 0.8", *share)
 	}
 }
 

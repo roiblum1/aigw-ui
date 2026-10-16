@@ -1,7 +1,14 @@
 # A stand-in for vLLM's OpenAI server: streams a short answer, reports usage
-# with cached tokens, and keeps vLLM's token counters on /metrics.
-import asyncio, json, time
+# with cached tokens, and keeps vLLM's token counters on /metrics. It listens
+# on the port given as its argument, 8000 by default, one per data-parallel
+# rank, and with MOCK_LOG set writes a line per request there: its port,
+# AIPerf's X-Correlation-ID (one per session) and a hash of the session's
+# first message, which is the same in every step.
+import asyncio, hashlib, json, os, sys, time
 from aiohttp import web
+
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+LOG = os.environ.get("MOCK_LOG")
 
 counters = {"vllm:prompt_tokens_total": 0.0, "vllm:prompt_tokens_cached_total": 0.0, "vllm:generation_tokens_total": 0.0,
             "vllm:num_requests_running": 0.0}
@@ -20,6 +27,10 @@ def words(messages):
 async def chat(req):
     body = await req.json()
     requests["n"] += 1
+    if LOG:
+        opening = hashlib.sha1(json.dumps(body.get("messages", [])[:1]).encode()).hexdigest()[:12]
+        with open(LOG, "a") as f:
+            f.write("RANK %d %s %s\n" % (PORT, req.headers.get("X-Correlation-ID", ""), opening))
     prompt = max(words(body.get("messages", [])), 1)
     first = json.dumps(body.get("messages", [])[:1])
     cached = int(prompt * 0.8) if first in seen else 0
@@ -55,4 +66,4 @@ async def models(_):
 
 app = web.Application(client_max_size=64 << 20)
 app.add_routes([web.post("/v1/chat/completions", chat), web.get("/metrics", metrics), web.get("/v1/models", models)])
-web.run_app(app, host="127.0.0.1", port=8000, print=None)
+web.run_app(app, host="127.0.0.1", port=PORT, print=None)

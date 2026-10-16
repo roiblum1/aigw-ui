@@ -65,9 +65,14 @@ run.
 (`spec.targetPorts`), the ones its scheduler sends requests to. A pod that
 runs one API server per data-parallel rank (vLLM's
 `--data-parallel-multi-port-external-lb`, as glm53 does on 8000 to 8007)
-gets the load on every rank in turn (AIPerf's `--url` given once per port,
-round robin), and the counters of all ranks are added up: the pod is one
-instance. Without a pool, or one the hub may not read, the load goes to the
+gets the load on every rank (AIPerf's `--url` given once per port), and the
+counters of all ranks are added up: the pod is one instance. AIPerf gives
+each session a rank in turn when the session starts, and sends all its turns
+there, so a conversation finds its own earlier turns in that rank's prefix
+cache, as it would behind the scheduler's prefix-aware routing. Each step
+starts the turn over in the same order of sessions, so a session has the same
+rank in every step (AIPerf 0.13.0, `aiperf/credit/issuer.py`; checked by the
+real-AIPerf test with two ranks). Without a pool, or one the hub may not read, the load goes to the
 port of the main container's readiness probe, or 8000. glm53's probes go to
 a supervisor on 8208 that answers health checks only, so before 0.29.0 its
 measurement could not reach the model.
@@ -166,7 +171,7 @@ reads every 20 seconds:
 | Requests answered and failed | AIPerf |
 | Prompt and output tokens | The model server's `usage`, as AIPerf records it |
 | Time to first token, time between tokens: p50 and p95 | AIPerf |
-| Share of prompt tokens from the cache | The pod's own counters over the step: `vllm:prompt_tokens_cached_total` over `vllm:prompt_tokens_total`, or `vllm:prefix_cache_hits_total` over `vllm:prefix_cache_queries_total` |
+| Share of prompt tokens from the cache | The pod's own counters over the step: `vllm:prompt_tokens_cached_total` over `vllm:prompt_tokens_total`, which since vLLM 0.16 counts the local prefix cache and what a KV connector such as LMCache loaded; before 0.16, `vllm:prefix_cache_hits_total` plus `vllm:external_prefix_cache_hits_total` (LMCache) over `vllm:prefix_cache_queries_total` |
 | Prompt and generated tokens the pod counted, and over what time | `vllm:prompt_tokens_total`, `vllm:generation_tokens_total`, read every 2 seconds and taken over AIPerf's profiling: its first request to its last answer and, since AIPerf 0.13 exports only the profiling's start and end, a few seconds more (3 in 255 in a sample) |
 | Drained: prompt tokens the pod counted in the quiet spell before the step, and its length | `vllm:prompt_tokens_total` |
 
