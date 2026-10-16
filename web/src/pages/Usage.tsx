@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Activity } from "lucide-react";
-import { api, type UsageQuota } from "../api";
+import { api, type UsageBudget, type UsageQuota } from "../api";
 import {
   Empty,
   ErrorBanner,
@@ -81,6 +81,15 @@ export function UsageMeter({ q }: { q: UsageQuota }) {
   );
 }
 
+/** Asks first, like a quota's reset. */
+export function confirmBudgetReset(b: UsageBudget): boolean {
+  return confirm(
+    `Reset the usage of ${b.tenant_slug} across models?\n\n` +
+      `${formatAmount(b.used, "credits")} used in this ${windowLabel[b.window]} go back to 0 on every cluster. ` +
+      `The budget stays at ${formatAmount(b.limit, "credits")}.`,
+  );
+}
+
 /** Asks first: a reset cannot be undone and applies on every site at once. */
 export function confirmReset(q: UsageQuota): boolean {
   return confirm(
@@ -115,6 +124,13 @@ export default function Usage() {
     if (!confirmReset(q)) return;
     action.run(async () => {
       await api.resetUsage(q.tenant_id, q.model_id);
+      await reload();
+    });
+  };
+  const resetBudget = (b: UsageBudget) => {
+    if (!confirmBudgetReset(b)) return;
+    action.run(async () => {
+      await api.resetBudget(b.tenant_id);
       await reload();
     });
   };
@@ -178,6 +194,7 @@ export default function Usage() {
                   <th>Used</th>
                   <th>Window</th>
                   <th>Resets in</th>
+                  {data.can_reset && <th />}
                 </tr>
               </thead>
               <tbody>
@@ -193,6 +210,13 @@ export default function Usage() {
                       </td>
                       <td>per {windowLabel[b.window]}</td>
                       <td className="mono">{resetsIn(b.resets_at, now)}</td>
+                      {data.can_reset && (
+                        <td className="row-actions">
+                          <button disabled={action.busy || b.used === 0} onClick={() => resetBudget(b)}>
+                            Reset usage
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
               </tbody>

@@ -47,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/usage", s.getUsage)
 	api.HandleFunc("GET /api/v1/usage/history", s.usageHistory)
 	api.HandleFunc("POST /api/v1/tenants/{id}/quotas/{model_id}/reset", s.resetUsage)
+	api.HandleFunc("POST /api/v1/tenants/{id}/budget/reset", s.resetBudget)
 
 	api.HandleFunc("GET /api/v1/clusters", s.listClusters)
 	api.HandleFunc("POST /api/v1/clusters", s.createCluster)

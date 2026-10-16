@@ -131,6 +131,7 @@ Request bodies are never stored.
 | GET | `/usage/history?step=day&days=30` | What every tenant used of every model per day or hour |
 | GET | `/my/usage` | A tenant's own budgets, usage and prices. Takes one of the tenant's API keys as the bearer token, not the admin token |
 | POST | `/tenants/{id}/quotas/{model_id}/reset` | `{"counters": 1, "deleted": 1}`. The tenant's usage on that model is back to zero |
+| POST | `/tenants/{id}/budget/reset` | `{"counters": 1, "deleted": 1}`. The tenant's use of its budget across models is back to zero for the running period; 404 without a budget applied to a cluster |
 
 ```json
 {

@@ -153,8 +153,11 @@ what it last applied.
    every route of the listener; without it Envoy Gateway keys the bucket by
    route, which is by model (seen on the lab, 2026-10-16).
 3. Each tenant's rule sits at a fixed position (`tenants.budget_slot`, the
-   lowest free one when the budget is set, kept while it exists), and a
-   position nobody holds is a placeholder rule that matches no tenant. The
+   lowest free one when its first budget is set). The tenant keeps it when
+   the budget is removed, so a budget set again in the same period comes
+   back with its count; a position held without a budget goes to another
+   tenant only when all 256 are held, and deleting the tenant frees it. A
+   position with no budget is a placeholder rule that matches no tenant. The
    rule matches `x-aigw-tenant` twice: `Exact` to select the tenant, and
    `Distinct` to put the tenant into the counter's name. The counter's name
    is the policy, the rule's position, the tenant and the window start
@@ -163,6 +166,9 @@ what it last applied.
    gateways share. Ordered by slug, as 0.22.0 rendered them, a tenant added
    before others moved each later one onto its neighbour's counter; on the
    lab a tenant's first request ever was refused with another tenant's spend.
+   A reset deletes the tenant's key of the running window in that Redis
+   (`POST /tenants/{id}/budget/reset`, behind `redis.allowReset` like a
+   quota's).
 4. The policy is merged with the policy of each entry and best-effort route
    (`mergeType: StrategicMerge` on those). A policy on a route otherwise
    replaces the listener's on that route: Envoy Gateway reports the budget

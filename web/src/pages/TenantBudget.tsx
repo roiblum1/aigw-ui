@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { api, type Model, type SigningKeys, type Tenant, type UsageReport, type Window } from "../api";
 import { LimitInput, WindowSelect, formatDollars, limitText, limitValue, windowLabel } from "../components";
-import { UsageMeter } from "./Usage";
+import { UsageMeter, confirmBudgetReset } from "./Usage";
 
 /** Why a budget or a list of models cannot be enforced yet, or null. */
 function held(identity: SigningKeys["identity"] | undefined): string | null {
@@ -23,6 +23,7 @@ export function TenantBudgetCard(props: {
   identity: SigningKeys["identity"] | undefined;
   busy: boolean;
   act: (fn: () => Promise<unknown>) => void;
+  resetBudget: () => void;
 }) {
   const { tenant, usage, busy, act } = props;
   const [edit, setEdit] = useState<{ limit: string; window: Window } | null>(null);
@@ -40,7 +41,10 @@ export function TenantBudgetCard(props: {
     });
   };
   const remove = () =>
-    confirm(`Remove the budget across models of ${tenant.slug}? Its quotas per model stay.`) &&
+    confirm(
+      `Remove the budget across models of ${tenant.slug}? Its quotas per model stay. ` +
+        "Set again in the same period, it comes back with what was used.",
+    ) &&
     act(() => api.setTenantBudget(tenant.id, null, "1d"));
 
   return (
@@ -89,6 +93,14 @@ export function TenantBudgetCard(props: {
                 </td>
               )}
               <td className="row-actions">
+                {usage?.can_reset && used && (
+                  <button
+                    disabled={busy || used.used === 0}
+                    onClick={() => confirmBudgetReset(used) && props.resetBudget()}
+                  >
+                    Reset usage
+                  </button>
+                )}
                 <button
                   disabled={busy}
                   onClick={() => setEdit({ limit: limitText(tenant.budget!.credits, "credits"), window: tenant.budget!.window })}
@@ -119,7 +131,7 @@ export function TenantBudgetCard(props: {
       {edit && (
         <p className="hint">
           A new amount holds what the tenant already used in the running {windowLabel[edit.window]}. A new period
-          length starts a new count.
+          length starts a new count. Reset usage starts it over.
         </p>
       )}
     </section>

@@ -284,9 +284,10 @@ refused all the same.
 - A new amount holds what the tenant already used in the running period; a
   new period length starts a new count. Another tenant's budget coming or
   going changes nothing for this one. A budget removed and set again in the
-  same period usually comes back with what was used: the tenant gets its old
-  position back unless another tenant took it in between. To give a tenant
-  more, raise the amount.
+  same period comes back with what was used. **Reset usage**, on the Usage
+  page and the tenant's page, sets what was used back to 0 for the running
+  period on every cluster; the amount stays. Like a quota's reset it needs
+  `redis.allowReset`.
 - A request is charged once its answer is complete, so a tenant can go
   past its budget by the requests in flight when it is reached, and an
   answer that has started is never cut off.

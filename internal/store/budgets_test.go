@@ -107,9 +107,9 @@ func TestTenantBudgetAndModels(t *testing.T) {
 	}
 }
 
-// A budget takes the lowest free position and keeps it while it exists: a
-// new amount keeps it, and another tenant's budget coming or going moves
-// nobody. Its position goes with the budget.
+// A tenant's first budget takes the lowest free position and the tenant
+// keeps it: a new amount keeps it, removing the budget keeps it, and another
+// tenant's budget coming or going moves nobody.
 func TestTenantBudgetSlots(t *testing.T) {
 	s, ctx := open(t)
 	a, b, c := tenant(t, s, ctx, "team-a"), tenant(t, s, ctx, "team-b"), tenant(t, s, ctx, "aaa-new")
@@ -134,42 +134,71 @@ func TestTenantBudgetSlots(t *testing.T) {
 	if *slot(b.ID) != 1 {
 		t.Fatalf("a new amount moved b to %d", *slot(b.ID))
 	}
-	if _, err := s.SetTenantBudget(ctx, a.ID, nil); err != nil {
-		t.Fatal(err)
+	if got, err := s.SetTenantBudget(ctx, a.ID, nil); err != nil || got.Budget != nil {
+		t.Fatalf("removed = %+v, %v", got.Budget, err)
 	}
-	if slot(a.ID) != nil || *slot(b.ID) != 1 {
-		t.Fatal("removing a moved b or kept a's position")
+	if slot(a.ID) == nil || *slot(a.ID) != 0 || *slot(b.ID) != 1 {
+		t.Fatal("removing a's budget moved b or took a's position")
 	}
-	// A tenant that sorts first takes the free position, not b's.
+	// A tenant that sorts first takes the next free position, not a's.
 	set(c.ID, 300)
-	if *slot(c.ID) != 0 || *slot(b.ID) != 1 {
-		t.Fatalf("slots c=%d b=%d", *slot(c.ID), *slot(b.ID))
+	if *slot(c.ID) != 2 {
+		t.Fatalf("c took %d", *slot(c.ID))
 	}
 	set(a.ID, 100)
-	if *slot(a.ID) != 2 {
+	if *slot(a.ID) != 0 {
 		t.Fatalf("a came back at %d", *slot(a.ID))
+	}
+	// Deleting a tenant frees its position.
+	if err := s.DeleteTenant(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	d := tenant(t, s, ctx, "team-d")
+	set(d.ID, 1)
+	if *slot(d.ID) != 0 {
+		t.Fatalf("d took %d", *slot(d.ID))
 	}
 }
 
 // Past the gateway's 256 rules a new budget is refused; a tenant that has
-// one can still change it.
+// one can still change it. A position held without a budget goes to a new
+// budget when every other one is held.
 func TestTenantBudgetsFull(t *testing.T) {
 	s, ctx := open(t)
-	var first string
+	var first, second string
 	for i := 0; i < render.MaxBudgets; i++ {
 		tn := tenant(t, s, ctx, fmt.Sprintf("team-%03d", i))
 		if _, err := s.SetTenantBudget(ctx, tn.ID, &TenantBudget{Credits: 1, Window: "1d"}); err != nil {
 			t.Fatalf("budget %d: %v", i, err)
 		}
-		if i == 0 {
+		switch i {
+		case 0:
 			first = tn.ID
+		case 1:
+			second = tn.ID
 		}
 	}
 	extra := tenant(t, s, ctx, "one-too-many")
-	if _, err := s.SetTenantBudget(ctx, extra.ID, &TenantBudget{Credits: 1, Window: "1d"}); !errors.Is(err, ErrBudgetsFull) {
+	budget := &TenantBudget{Credits: 1, Window: "1d"}
+	if _, err := s.SetTenantBudget(ctx, extra.ID, budget); !errors.Is(err, ErrBudgetsFull) {
 		t.Fatalf("budget %d: %v", render.MaxBudgets+1, err)
 	}
 	if got, err := s.SetTenantBudget(ctx, first, &TenantBudget{Credits: 5, Window: "1h"}); err != nil || got.Budget.Credits != 5 {
 		t.Fatalf("changing a budget when full: %v", err)
+	}
+	// The second tenant's budget is removed: the extra one takes its
+	// position, and the second one is then refused.
+	if _, err := s.SetTenantBudget(ctx, second, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetTenantBudget(ctx, extra.ID, budget); err != nil {
+		t.Fatalf("the extra one with a position held without a budget: %v", err)
+	}
+	var slot *int
+	if err := s.db.QueryRow(ctx, `SELECT budget_slot FROM tenants WHERE id = $1`, second).Scan(&slot); err != nil || slot != nil {
+		t.Fatalf("the second one still holds %v, %v", slot, err)
+	}
+	if _, err := s.SetTenantBudget(ctx, second, budget); !errors.Is(err, ErrBudgetsFull) {
+		t.Fatalf("the second one again: %v", err)
 	}
 }

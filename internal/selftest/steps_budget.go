@@ -123,7 +123,8 @@ func (t *test) budget() (string, string) {
 		case err != nil:
 			last = err.Error()
 		case res.Status == http.StatusTooManyRequests:
-			return Passed, counted + "; the next request was refused with HTTP 429, with the model's own quota raised so that only the budget could refuse."
+			refused := counted + "; the next request was refused with HTTP 429, with the model's own quota raised so that only the budget could refuse"
+			return t.budgetReset(refused)
 		default:
 			last = answer(res)
 		}
@@ -132,6 +133,39 @@ func (t *test) budget() (string, string) {
 		}
 	}
 	return Failed, counted + ", yet requests are still answered (last: " + last + "): the rate limit rule charges nothing, or the gateway does not hold the tenant to it."
+}
+
+// budgetReset resets the spent budget, where the server may, and expects
+// the next request to be answered: the reset deletes the counter the
+// gateways count in, so it must have found the right one.
+func (t *test) budgetReset(refused string) (string, string) {
+	if !t.r.usage.CanReset() {
+		return Passed, refused + ". The reset was not tried: redis.allowReset is off."
+	}
+	res, err := t.r.usage.ResetBudget(t.ctx, t.tenant.ID)
+	if err != nil {
+		return Failed, refused + ", but the reset failed: " + err.Error()
+	}
+	if res.Deleted == 0 {
+		return Failed, refused + ", but the reset found no counter to delete: the counter names the Usage page computes are not the gateway's."
+	}
+	start := time.Now()
+	var last string
+	for time.Since(start) < counterWait {
+		r, err := t.chat(t.key)
+		switch {
+		case err != nil:
+			last = err.Error()
+		case r.Status == http.StatusOK:
+			return Passed, refused + "; after the budget was reset the next request was answered."
+		default:
+			last = answer(r)
+		}
+		if !t.wait() {
+			break
+		}
+	}
+	return Failed, refused + ", but after the budget was reset requests were still refused (last: " + last + ")."
 }
 
 // models holds the temporary tenant first to the model under test, which
