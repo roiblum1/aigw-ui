@@ -111,10 +111,9 @@ func TestBudgetsNeedTokensOnly(t *testing.T) {
 	}
 }
 
-// A tenant has one budget across models or quotas of its own on models with
-// prices, never both: each is refused while the other is there (HTTP 409),
-// naming what stands in the way. Prices that wait for their day count, and
-// a quota on a model without prices stays possible beside a budget.
+// A tenant has one budget for all models or quotas of its own, never both:
+// each is refused while the other is there (HTTP 409), naming what stands in
+// the way, on a model without prices too.
 func TestBudgetOrQuotas(t *testing.T) {
 	st, ctx := openStore(t)
 	set := store.TokenSettings{Issuer: "aigw-ui", Audience: "aigw-fleet", Lifetime: 24 * time.Hour}
@@ -151,39 +150,36 @@ func TestBudgetOrQuotas(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if names, err := st.PricedQuotaModels(ctx, a.ID); err != nil || strings.Join(names, ",") != "opus" {
-		t.Fatalf("quotas on models with prices: %v %v", names, err)
+	if names, err := st.QuotaModels(ctx, a.ID); err != nil || strings.Join(names, ",") != "free,opus" {
+		t.Fatalf("quotas: %v %v", names, err)
 	}
-	if w := put(s.setTenantBudget, `{"credits":100,"window":"1d"}`); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "remove its quotas on opus first") {
-		t.Fatalf("a budget beside a quota on opus: %d %s", w.Code, w.Body)
+	if w := put(s.setTenantBudget, `{"credits":100,"window":"1d"}`); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "remove its quotas on free, opus first") {
+		t.Fatalf("a budget beside quotas: %d %s", w.Code, w.Body)
 	}
 
-	// Without the quota on opus the budget can be set; the quota on the
-	// model without prices stays beside it.
+	// Without quotas the budget can be set; then a quota is refused on any
+	// model, one without prices too.
 	quotas, err := st.ListQuotas(ctx, a.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, q := range quotas {
-		if q.ModelID == opus {
-			if _, err := st.DeleteQuota(ctx, q.ID); err != nil {
-				t.Fatal(err)
-			}
+		if _, err := st.DeleteQuota(ctx, q.ID); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if names, err := st.PricedQuotaModels(ctx, a.ID); err != nil || len(names) != 0 {
-		t.Fatalf("after the removal: %v %v", names, err)
+	if has, err := st.HasBudget(ctx, a.ID); err != nil || has {
+		t.Fatalf("before the budget: %v %v", has, err)
 	}
 	if _, err := st.SetTenantBudget(ctx, a.ID, &store.TenantBudget{Credits: 100, Window: "1d"}); err != nil {
 		t.Fatal(err)
 	}
-	if w := put(s.upsertQuota, `{"model_id":"`+opus+`","token_limit":5,"window":"1d"}`); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "Remove the budget first") {
-		t.Fatalf("a quota on opus beside the budget: %d %s", w.Code, w.Body)
+	for _, m := range []string{opus, free} {
+		if w := put(s.upsertQuota, `{"model_id":"`+m+`","token_limit":5,"window":"1d"}`); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "Remove it first") {
+			t.Fatalf("a quota beside the budget: %d %s", w.Code, w.Body)
+		}
 	}
-	if covered, err := st.BudgetCovers(ctx, a.ID, free); err != nil || covered {
-		t.Fatalf("the model without prices: %v %v", covered, err)
-	}
-	if _, err := st.BudgetCovers(ctx, "00000000-0000-0000-0000-000000000000", opus); err != store.ErrNotFound {
+	if _, err := st.HasBudget(ctx, "00000000-0000-0000-0000-000000000000"); err != store.ErrNotFound {
 		t.Fatalf("an unknown tenant: %v", err)
 	}
 }

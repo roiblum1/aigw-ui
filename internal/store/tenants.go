@@ -213,27 +213,21 @@ func (s *Store) ListQuotas(ctx context.Context, tenantID string) ([]Quota, error
 	    FROM quotas q JOIN models m ON m.id = q.model_id WHERE q.tenant_id = $1 ORDER BY m.name`, tenantID)
 }
 
-// PricedQuotaModels returns the names of the models with prices, in use or
-// waiting for their day, on which the tenant has a quota of its own. A
-// budget across models covers those models, so it is refused while they
-// are there.
-func (s *Store) PricedQuotaModels(ctx context.Context, tenantID string) ([]string, error) {
+// QuotaModels returns the names of the models on which the tenant has a
+// quota of its own. A budget across models is refused while there are any:
+// a tenant has one or the other.
+func (s *Store) QuotaModels(ctx context.Context, tenantID string) ([]string, error) {
 	return list(ctx, s, func(r scanner) (string, error) {
 		var name string
 		return name, r.Scan(&name)
-	}, `SELECT m.name FROM quotas q JOIN models m ON m.id = q.model_id
-	    WHERE q.tenant_id = $1 AND EXISTS (SELECT 1 FROM model_prices p WHERE p.model_id = m.id)
-	    ORDER BY m.name`, tenantID)
+	}, `SELECT m.name FROM quotas q JOIN models m ON m.id = q.model_id WHERE q.tenant_id = $1 ORDER BY m.name`, tenantID)
 }
 
-// BudgetCovers reports whether the tenant has a budget across models and
-// the model has prices, in use or waiting for their day: the budget then
-// holds the tenant on the model, so a quota of its own there is refused.
-func (s *Store) BudgetCovers(ctx context.Context, tenantID, modelID string) (bool, error) {
+// HasBudget reports whether the tenant has a budget across models: a quota
+// of its own on any model is then refused.
+func (s *Store) HasBudget(ctx context.Context, tenantID string) (bool, error) {
 	var yes bool
-	err := s.db.QueryRow(ctx,
-		`SELECT t.budget_credits IS NOT NULL AND EXISTS (SELECT 1 FROM model_prices p WHERE p.model_id = $2)
-		 FROM tenants t WHERE t.id = $1`, tenantID, modelID).Scan(&yes)
+	err := s.db.QueryRow(ctx, `SELECT budget_credits IS NOT NULL FROM tenants WHERE id = $1`, tenantID).Scan(&yes)
 	return yes, mapErr(err)
 }
 

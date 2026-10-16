@@ -77,7 +77,7 @@ about a minute. Every request has the same prompt of about 300 tokens.
 | A long prompt is accepted | A request of 64 KB is not refused for its size. It names a model that does not exist, so no model is asked. A failure means the gateway has Envoy Gateway's default limit of 32 KiB, and every longer prompt gets 413: set `connection.bufferLimit` in a `ClientTrafficPolicy` on the Gateway |
 | A conversation stays on one site | Three requests with one session ID are served by the same site, as named in the `x-llm-served-by` response header. It also lists where ten other session IDs landed. Skipped unless the model has an entry route on this cluster. It raises the temporary quota and sends 13 small requests |
 | The cluster has the fleet's current entry routes | The cluster's fleet revision is the fleet's. Skipped outside the fleet |
-| A budget across models is counted and refuses | The tenant gets a budget of 1 credit across models and a quota on the model that cannot run out; a long request is answered and its cost in credits counted where the Usage page reads it, and the next request is refused with 429. A failure names what is missing: global rate limiting in Envoy Gateway, a route whose own policy overrides the budget's, the cost on the route, or the way to the shared Redis. Skipped on a model without prices, or when the gateways still take API keys |
+| A budget across models is counted and refuses | The tenant's quota on the model is taken away and it gets a budget of 1 credit across models, which alone holds it there; a long request is answered and its cost in credits counted where the Usage page reads it, and the next request is refused with 429. A failure names what is missing: global rate limiting in Envoy Gateway, a route whose own policy overrides the budget's, the cost on the route, or the way to the shared Redis. Skipped on a model without prices, or when the gateways still take API keys |
 | A tenant held to its models is refused for any other | The tenant is held to the model under test alone and is still served it; then to no model at all, and its next request is refused with 403. Skipped when the gateways still take API keys |
 
 | The temporary tenant is removed | Nothing is left behind |
@@ -231,11 +231,14 @@ A tenant is a team.
      (`tokens.lifetimeDays`) and carries the tenant's budget and models of
      the day it is created; create a new one after a change, or before it
      expires.
-3. **Add quota**. Pick a model, a number of tokens and a window (minute, hour or day).
-   Tick **Dry run** to count usage against the quota without rejecting
-   requests, and press **Enforce** on the quota when you are ready. The
-   list only offers models the tenant has no quota on yet, and, for a
-   tenant with a budget across models, models without prices only.
+3. **Add quota**. Pick **All models** or a model, an amount (dollars for
+   all models and for a model with prices, tokens for any other) and a
+   window (minute, hour or day). For a model, tick **Dry run** to count
+   usage against the quota without rejecting requests, and press
+   **Enforce** on the quota when you are ready. A tenant has one budget for
+   all models or quotas per model: **All models** cannot be picked while
+   it has a quota, and with all models the form is closed. The list only
+   offers models the tenant has no quota on yet.
 
 Clients send the token where they send an API key: `Authorization: Bearer
 eyJ...`, or the header `x-api-key`, which is what Anthropic's clients do by
@@ -252,22 +255,21 @@ clients and `/anthropic/v1/messages` for Anthropic-style ones.
 
 A quota is one budget for the tenant on that model across all sites.
 
-**One budget across models, or a budget per model.** On the models with
-prices a tenant is held one way or the other, never both:
+**All models, or a quota per model.** A tenant is held one way or the
+other, never both:
 
-- **A budget across models**: one amount in dollars, any amount ($10, $20,
-  $26), for every model with prices together. The tenant chooses what to
-  spend it on, and the models' pools do not hold it there.
-- **A budget per model**: a quota of its own on each model it should have,
-  each with its own amount: $10 on two models and $11 on a third is fine.
-  $5 on Opus and $5 on Sonnet are two budgets of $5, not one of $10.
+- **All models** (a budget across models): one amount in dollars, any
+  amount ($10, $20, $26), for every model with prices together. The tenant
+  chooses what to spend it on, and the models' pools do not hold it there.
+- **A quota per model**: each with its own amount: $10 on two models and
+  $11 on a third is fine. $5 on Opus and $5 on Sonnet are two budgets of
+  $5, not one of $10.
 
 While a tenant has one, the hub refuses the other (HTTP 409) and says what
-to remove first. Models without prices are not in a budget across models:
-a tenant with one can still have quotas of its own on them, in tokens. A
-tenant that had both before 0.25.0 is marked on its page: its budget holds
-it, and its quotas on models with prices hold nothing until they are
-removed.
+to remove first; with all models that includes a quota on a model without
+prices. A tenant that had both before 0.27.0 is marked on its page: remove
+its quotas per model. On a model with prices they hold nothing while it has
+a budget for all models.
 
 **A tenant with neither.** There is no amount every tenant gets by default
 (the standard budget of 0.19 to 0.25 is gone): a tenant has what it is
@@ -289,8 +291,8 @@ travels in the tenant's tokens, as a budget across models does:
   is replaced; the Keys card marks it **older limits**.
 - A changed amount starts the tenant's count on that model again.
 
-**A budget across models.** **Budget across models** on a tenant's page
-gives it one amount in dollars per minute, hour or day for every model with
+**A budget across models.** **All models** in a tenant's quotas gives it
+one amount in dollars per minute, hour or day for every model with
 prices, counted together: a cheaper model spends it more slowly. On those
 models it is the tenant's only limit: the tenant has no quota of its own
 there, and the model's pool does not hold it. Each such model's

@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.27.0](v0.27.0.md) | not released yet | All models is a choice in a tenant's quotas, not a card of its own, and strictly one or the other: no quota beside a budget for all models, on a model without prices either |
 | [0.26.0](v0.26.0.md) | not released yet | A model's standard budget is gone: a tenant has what it is given, a budget across models or quotas per model, and a tenant with neither draws from the pool. A budget tenant's use of each model is counted for the Usage page and the history |
 | [0.25.0](v0.25.0.md) | not released yet | A tenant has one budget across models, any amount, or a budget per model, never both: the hub refuses mixing them, and a budget across models is no longer held by the models' standards and pools |
 | [0.24.0](v0.24.0.md) | not released yet | Own quotas take one gateway rule per amount instead of one per tenant once every tenant is on tokens; the amount travels in the token. Identity headers no longer reach model servers; a priced model without a standard is marked |
