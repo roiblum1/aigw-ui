@@ -200,9 +200,9 @@ what it last applied.
    so a tenant can end one request over its amount, more with requests in
    parallel.
 6. On a model with prices the budget is the tenant's only limit (0.25.0): a
-   tenant has a budget across models or quotas of its own on those models,
-   never both, and the hub refuses either while the other is there (HTTP
-   409). The model's `QuotaPolicy` ends with one more rule, which matches
+   tenant has a budget across models or quotas of its own, never both (on
+   a model without prices either, since 0.27.0), and the hub refuses either
+   while the other is there (HTTP 409). The model's `QuotaPolicy` ends with one more rule, which matches
    `x-aigw-budget` (`RegularExpression` `.+`) and `x-aigw-tenant`
    (`Distinct`) and holds 4,294,967,295 a day: in `Shared` mode a request
    passes while any bucket it matches has room, so a token with a budget is

@@ -206,14 +206,13 @@ func (s *Server) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	covered, err := s.st.BudgetCovers(r.Context(), id, b.ModelID)
+	budget, err := s.st.HasBudget(r.Context(), id)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	if covered {
-		writeError(w, http.StatusConflict, errBudgetOrQuotas.Error()+": this tenant has a budget across models, which holds it on this model. "+
-			"Remove the budget first, or give it quotas on models without prices only.")
+	if budget {
+		writeError(w, http.StatusConflict, errBudgetOrQuotas.Error()+": this tenant has a budget for all models. Remove it first.")
 		return
 	}
 	// A quota on a model with nothing to attach it to would silently do nothing.
