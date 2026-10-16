@@ -2,7 +2,10 @@
 // area and tells you once when it is nearly spent, spent, or served as
 // best-effort. /aigw-usage lists every budget.
 //
-// Install: copy this file to ~/.omp/agent/extensions/ and set
+// Install: copy this file to ~/.omp/agent/extensions/. With aigw-token
+// signed in (it gives omp its tokens, see clients/README.md) there is
+// nothing to set: the hub and the personal key it keeps are used. Otherwise
+// set
 //   AIGW_HUB_URL   the address of the AI Gateway Control hub
 //   AIGW_API_KEY   your key for the gateway
 // AIGW_WARN_AT is the percent to warn at (90).
@@ -10,10 +13,15 @@
 // It asks the hub only, at most every 30 seconds and after each turn. No
 // prompt and no answer is sent anywhere.
 
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
 interface Budget {
 	model_name: string;
+	/** The tenant's budget across models, which holds on every model. */
+	across?: boolean;
 	unit: "tokens" | "credits";
 	limit: number;
 	window: string;
@@ -22,6 +30,34 @@ interface Budget {
 	enforced: boolean;
 	best_effort_until?: string;
 	best_effort_capped?: boolean;
+}
+
+interface TenantBudget {
+	limit: number;
+	window: string;
+	used: number;
+	resets_at: string;
+	enforced: boolean;
+}
+
+const ALL_MODELS = "All models";
+
+/** The budgets of an answer of /my/usage: one per model, and the one across models. */
+function budgetsOf(body: { budgets?: Budget[]; budget?: TenantBudget | null }): Budget[] {
+	const out = [...(body.budgets ?? [])];
+	const all = body.budget;
+	if (all) out.push({ model_name: ALL_MODELS, across: true, unit: "credits", limit: all.limit, window: all.window, used: all.used, resets_at: all.resets_at, enforced: all.enforced });
+	return out;
+}
+
+/** The hub and personal key that `aigw-token login` kept, if any. */
+function helperLogin(): { hub: string; key: string } {
+	const dir = process.env.AIGW_CONFIG_DIR || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "aigw");
+	try {
+		return { hub: readFileSync(join(dir, "hub"), "utf8").trim(), key: readFileSync(join(dir, "personal-key"), "utf8").trim() };
+	} catch {
+		return { hub: "", key: "" };
+	}
 }
 
 interface State {
@@ -69,7 +105,7 @@ function level(b: Budget, warnAt: number): number {
 // on that model, the furthest gone of all.
 function pick(budgets: Budget[], model: string | undefined, warnAt: number): Budget | undefined {
 	const name = (model ?? "").toLowerCase();
-	const mine = budgets.filter(b => b.model_name.toLowerCase() === name);
+	const mine = budgets.filter(b => b.across || b.model_name.toLowerCase() === name);
 	return [...(mine.length ? mine : budgets)].sort((a, b) => level(b, warnAt) - level(a, warnAt) || percent(b) - percent(a))[0];
 }
 
@@ -93,8 +129,9 @@ function warning(b: Budget): string {
 }
 
 export default function aigwUsage(pi: ExtensionAPI) {
-	const hub = (process.env.AIGW_HUB_URL ?? "").replace(/\/+$/, "");
-	const key = process.env.AIGW_API_KEY ?? "";
+	const login = helperLogin();
+	const hub = (process.env.AIGW_HUB_URL || login.hub).replace(/\/+$/, "");
+	const key = process.env.AIGW_API_KEY || login.key;
 	const warnAt = Number(process.env.AIGW_WARN_AT) || 90;
 
 	let state: State | undefined;
@@ -111,14 +148,14 @@ export default function aigwUsage(pi: ExtensionAPI) {
 		if (state && now - state.fetched < wait * 1000) return state;
 		const last = state?.budgets;
 		if (!hub || !key) {
-			state = { fetched: now, error: !hub ? "AIGW_HUB_URL is not set" : "AIGW_API_KEY is not set" };
+			state = { fetched: now, error: !hub ? "no hub: sign in with aigw-token, or set AIGW_HUB_URL" : "no key: sign in with aigw-token, or set AIGW_API_KEY" };
 			return state;
 		}
 		try {
 			const res = await fetch(`${hub}/api/v1/my/usage`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(4000) });
 			if (res.ok) {
-				const body = (await res.json()) as { usage_enabled: boolean; budgets?: Budget[] };
-				state = { fetched: now, budgets: body.budgets ?? [], usageEnabled: body.usage_enabled };
+				const body = (await res.json()) as { usage_enabled: boolean; budgets?: Budget[]; budget?: TenantBudget | null };
+				state = { fetched: now, budgets: budgetsOf(body), usageEnabled: body.usage_enabled };
 			} else {
 				const reasons: Record<number, string> = {
 					401: "the hub does not accept this API key",

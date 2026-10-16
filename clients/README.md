@@ -38,6 +38,9 @@ only asked for tokens.
 | [`claude-code/`](claude-code) | Claude Code | The budget in the status line; a message when a budget is nearly spent, spent, or served as best-effort |
 | [`omp/aigw-usage.ts`](omp/aigw-usage.ts) | Oh My Pi (`omp`) | The same in the status area, and `/aigw-usage` for all budgets |
 
+Both show the budget across models as **All models** next to the budgets
+per model, and the one of them furthest gone in the status line.
+
 ```
 GLM5.3 $47.00 of $50.00 (94%) · resets 18:00
 ```
@@ -91,16 +94,55 @@ How it works:
 
 ## Oh My Pi
 
+Point `omp` at the gateway in `~/.omp/agent/models.yml`, with `aigw-token`
+giving it its tokens (the `!` runs the command):
+
+```yaml
+providers:
+  aigw:
+    baseUrl: https://<the gateway>/v1
+    api: openai-completions
+    apiKey: "!aigw-token"          # the full path if it is not on omp's PATH
+    models:
+      - id: GLM5.3                 # the name the gateway routes on
+        reasoning: true            # offers omp's thinking levels
+        contextWindow: 200000
+        maxTokens: 16384
+        cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 }
+  aigw-anthropic:                  # the gateway's Anthropic path, if wanted
+    baseUrl: https://<the gateway>/anthropic
+    api: anthropic-messages
+    apiKey: "!aigw-token"
+    models:
+      - id: GLM5.3
+        reasoning: true
+```
+
+`omp models find aigw` lists them. `omp` runs `aigw-token` once per session
+and keeps the token, and runs it again after a 401, so a change of budget,
+quota or models reaches you in your next session (in Claude Code, within
+minutes).
+
+The extension shows the budgets in the status area and `/aigw-usage` lists
+them all:
+
 ```sh
 mkdir -p ~/.omp/agent/extensions
 curl -fsSLo ~/.omp/agent/extensions/aigw-usage.ts \
   https://raw.githubusercontent.com/roiblum1/aigw-ui/main/clients/omp/aigw-usage.ts
-export AIGW_HUB_URL=https://aigw.example.com
-export AIGW_API_KEY=<your key>
 ```
 
-`AIGW_WARN_AT` changes the warning percent. `/aigw-usage` lists every
-budget.
+With `aigw-token` signed in there is nothing to set: it asks the hub with
+the personal key `aigw-token` keeps. Without it, set `AIGW_HUB_URL` and
+`AIGW_API_KEY`. `AIGW_WARN_AT` changes the warning percent.
+
+**Thinking.** With `reasoning: true`, omp's thinking level goes to the model
+as `reasoning_effort` on `/v1` (`--thinking off` sends `minimal`), and as
+Anthropic's `thinking` on the Anthropic path. The gateway passes both on to
+the model server unchanged; on the Anthropic path it does not turn
+`thinking` into `reasoning_effort`, so whether the model thinks is up to the
+model server (vLLM accepts both). The model's `reasoning_content` comes back
+as thinking on both paths, and reasoning tokens are charged as output.
 
 ## Tested
 
@@ -108,8 +150,15 @@ budget.
   line, each warning once, a hub that is down, a wrong key, no address. The
   manifests pass `claude plugin validate`. Not yet run inside a Claude Code
   session against a real hub.
-- Oh My Pi: the extension was run with a stand-in for the agent's API, not
-  inside `omp`. It was written against the extension API of version 18.8.9.
+- Oh My Pi 18.11.1 against the sandbox hub and the lab gateway
+  (2026-10-16): models from `models.yml` with `!aigw-token`, a real model
+  answered and a spent budget refused (429, with omp's retry time); the
+  extension inside `omp`'s terminal UI showed the budget across models in
+  the status area, the spent warning, and `/aigw-usage`, signed in through
+  `aigw-token` with nothing set. Thinking with a stand-in model server that
+  answers as vLLM's reasoning parser does: `reasoning_effort` and
+  `thinking` reached it, and its reasoning came back as omp's thoughts on
+  both paths.
 
 - aigw-token: against a stand-in for the hub: sign-in, a new token, the
   token kept, a hub that fails, a revoked key, no hub.
