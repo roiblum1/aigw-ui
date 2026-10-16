@@ -224,7 +224,13 @@ jobs:
   # the repository variable HUB_DEPLOY is "true". The account it uses is in
   # the secrets of the environment "hub": see docs/operations.md.
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.HUB_DEPLOY == 'true'
+    # An if without a status check means success() of every job before it,
+    # and the tests skipped after a merge (seen) count as not successful:
+    # the hub was not upgraded after 0.28.0 and 0.29.0. The image is what
+    # matters here.
+    if: >-
+      !cancelled() && needs.image.result == 'success' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.HUB_DEPLOY == 'true'
     needs: image
     runs-on: ubuntu-latest
     environment: hub
@@ -246,7 +252,7 @@ jobs:
         run: IMAGE_TAG="sha-${GITHUB_SHA::12}" hack/deploy-hub.sh
 
   release:
-    if: github.ref_type == 'tag'
+    if: "!cancelled() && needs.image.result == 'success' && github.ref_type == 'tag'"
     needs: image
     runs-on: ubuntu-latest
     permissions:
