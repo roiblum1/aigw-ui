@@ -114,7 +114,7 @@ function Counters({ q }: { q: UsageQuota }) {
 }
 
 export default function Usage() {
-  const { data, error, reload } = useLoad(() => api.usage());
+  const { data, error, reload } = useLoad(() => api.usage(), "usage");
   usePolling(reload, REFRESH_MS);
   const history = useLoad(() => api.overage());
   usePolling(history.reload, 6 * REFRESH_MS);

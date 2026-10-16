@@ -23,10 +23,10 @@ import {
 } from "../components";
 
 export default function Models() {
-  const { data, error, reload } = useLoad(async () => ({
-    models: await api.models(),
-    clusters: await api.clusters(),
-  }));
+  const { data, error, reload } = useLoad(async () => {
+    const [models, clusters] = await Promise.all([api.models(), api.clusters()]);
+    return { models, clusters };
+  }, "models-page");
   const action = useAction();
   const [editing, setEditing] = useState<Model | "new" | null>(null);
   // The ID, so the dialog shows the model as it is after a change.

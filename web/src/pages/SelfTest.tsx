@@ -15,7 +15,7 @@ const stepBadge: Record<StepStatus, { cls: string; label: string }> = {
 
 /** Runs the self-test of one cluster and shows its steps as they finish. */
 export default function SelfTest({ cluster, onClose }: { cluster: Cluster; onClose: () => void }) {
-  const { data: models } = useLoad(api.models);
+  const { data: models } = useLoad(api.models, "models");
   const [run, setRun] = useState<SelfTestRun | null>(null);
   const [modelId, setModelId] = useState("");
   const action = useAction();

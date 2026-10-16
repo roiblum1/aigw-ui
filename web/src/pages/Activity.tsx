@@ -65,7 +65,7 @@ function Result({ r }: { r: TaskResult }) {
 }
 
 function Tasks() {
-  const { data: tasks, error, reload } = useLoad(() => api.tasks());
+  const { data: tasks, error, reload } = useLoad(() => api.tasks(), "tasks");
   usePolling(reload, REFRESH_MS);
 
   return (

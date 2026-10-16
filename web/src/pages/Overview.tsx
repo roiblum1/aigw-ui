@@ -116,8 +116,11 @@ function BudgetsCard({ b }: { b: Budgets }) {
 }
 
 export default function Overview() {
-  const { data, error } = useLoad(async () => ({ overview: await api.overview(), clusters: await api.clusters() }));
-  const budgets = useLoad(api.budgets);
+  const { data, error } = useLoad(async () => {
+    const [overview, clusters] = await Promise.all([api.overview(), api.clusters()]);
+    return { overview, clusters };
+  }, "overview");
+  const budgets = useLoad(api.budgets, "budgets");
   const o = data?.overview;
   return (
     <>

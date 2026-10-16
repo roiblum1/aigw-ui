@@ -96,7 +96,7 @@ export default function TenantQuotas(props: {
     shadow: false,
   });
   const [edit, setEdit] = useState<Edit | null>(null);
-  const budgets = useLoad(api.budgets);
+  const budgets = useLoad(api.budgets, "budgets");
   const budgetOf = (modelId: string) => budgets.data?.models.find((b) => b.model_id === modelId);
   /** Runs a change, then reads the budgets again. */
   const change = (fn: () => Promise<unknown>) =>

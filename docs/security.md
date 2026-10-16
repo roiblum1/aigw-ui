@@ -124,7 +124,10 @@ its own `jti` and the key's client ID as `cid`. Revoking the key, or
 deleting its tenant, refuses those tokens by their `cid` at every gateway
 until the last one expires, and a disabled tenant's key gets none. Wrong
 keys count against the address as on the tenants' page: ten a minute, then
-429. The answer carries `Cache-Control: no-store`. The helper `aigw-token`
+429. The answer carries `Cache-Control: no-store`, as does the answer that
+shows a new key or token once; the hub gzips its other answers but not
+these, so that the length of one cannot tell anything about the secret in it
+(BREACH). The helper `aigw-token`
 keeps the key and the last token in `~/.config/aigw`, readable by the user
 only, and passes the key to `curl` on stdin, so it is not on any command
 line.

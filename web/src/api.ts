@@ -816,7 +816,15 @@ export function getToken(): string {
   }
 }
 
+/**
+ * The last answer of each load that has a key (see useLoad), kept for this
+ * page load only, in memory: a page opened again shows it at once while it
+ * loads anew. It goes with the token.
+ */
+export const lastLoaded = new Map<string, unknown>();
+
 export function setToken(token: string) {
+  lastLoaded.clear();
   try {
     if (token) localStorage.setItem(TOKEN_KEY, token);
     else localStorage.removeItem(TOKEN_KEY);

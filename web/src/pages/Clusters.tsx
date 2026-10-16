@@ -15,7 +15,7 @@ import {
 } from "../components";
 
 export default function Clusters() {
-  const { data: clusters, error, reload } = useLoad(api.clusters);
+  const { data: clusters, error, reload } = useLoad(api.clusters, "clusters");
   const action = useAction();
   const [editing, setEditing] = useState<Cluster | "new" | null>(null);
   const [manifests, setManifests] = useState<{ name: string; yaml: string } | null>(null);

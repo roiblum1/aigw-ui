@@ -35,7 +35,7 @@ function useRate(report: UsageReport | null, unit: Unit): number[] {
 }
 
 export default function Dashboard() {
-  const { data, reload } = useLoad(() => api.usage());
+  const { data, reload } = useLoad(() => api.usage(), "usage");
   usePolling(reload, REFRESH_MS);
   const presentUnits = useMemo(() => units.filter((u) => data?.quotas.some((q) => q.unit === u)), [data]);
   const [pickedUnit, setPickedUnit] = useState<Unit | null>(null);

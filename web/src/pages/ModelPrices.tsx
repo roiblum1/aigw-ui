@@ -71,7 +71,7 @@ export default function ModelPrices(props: {
   const [now, setNow] = useState(false);
   const [note, setNote] = useState(props.suggestedNote ?? "");
   const history = useLoad(() => api.prices(model.id));
-  const models = useLoad(api.models);
+  const models = useLoad(api.models, "models");
   // The market entry is changed here without closing the dialog.
   const [market, setMarket] = useState({ price: model.market, note: model.market_note, set: model.market_id_set });
   const [choosing, setChoosing] = useState(false);

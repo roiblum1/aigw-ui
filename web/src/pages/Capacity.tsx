@@ -51,8 +51,8 @@ function perDay(n: number, unit: Unit): string {
  * given, and the one set of prices that pays for its instances.
  */
 export default function Capacity() {
-  const { data, error, reload } = useLoad(api.capacity);
-  const budgets = useLoad(api.budgets);
+  const { data, error, reload } = useLoad(api.capacity, "capacity");
+  const budgets = useLoad(api.budgets, "budgets");
   const [splitting, setSplitting] = useState(false);
   const running = data?.models.some((m) => m.running) ?? false;
   usePolling(async () => {
@@ -67,7 +67,7 @@ export default function Capacity() {
   const action = useAction();
 
   // The prices form edits a model as the Models page has it.
-  const usePrices = (m: CapacityModel) =>
+  const takePrices = (m: CapacityModel) =>
     action.run(async () => {
       const model = (await api.models()).find((x) => x.id === m.model_id);
       if (!model || !m.plan.break_even) return;
@@ -123,7 +123,7 @@ export default function Capacity() {
           onHistory={() => setHistory(m)}
           onStop={stop}
           onChanged={reload}
-          onUsePrices={() => usePrices(m)}
+          onUsePrices={() => takePrices(m)}
         />
       ))}
       {measuring && data && (
@@ -773,7 +773,7 @@ function FleetPanel({ b, onSplit }: { b: Budgets; onSplit: () => void }) {
 /** Proposes equal daily budgets on one model out of what is left, and applies them once confirmed. */
 function SplitForm(props: { b: Budgets; onClose: () => void; onApplied: () => Promise<void> }) {
   const priced = props.b.models.filter((m) => m.unit === "credits" && m.measured);
-  const tenants = useLoad(api.tenants);
+  const tenants = useLoad(api.tenants, "tenants");
   const [modelID, setModelID] = useState(priced[0]?.model_id ?? "");
   const model = priced.find((m) => m.model_id === modelID);
   const left = Math.min(model?.left_day ?? 0, props.b.fleet.left_day);

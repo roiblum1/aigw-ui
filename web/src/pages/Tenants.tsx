@@ -24,11 +24,19 @@ function olderLimits(k: ApiKey, t: Tenant): boolean {
   return k.kind === "token" && !k.revoked_at && !expired(k) && !!t.limits_changed_at && new Date(k.created_at) < new Date(t.limits_changed_at);
 }
 
+/** The tenants whose ID or display name has the text in it, in any case. */
+function shown(tenants: Tenant[], find: string): Tenant[] {
+  const f = find.trim().toLowerCase();
+  if (!f) return tenants;
+  return tenants.filter((t) => t.slug.includes(f) || t.display_name.toLowerCase().includes(f));
+}
+
 export default function Tenants() {
-  const { data: tenants, error, reload } = useLoad(api.tenants);
-  const signing = useLoad(api.signingKeys);
+  const { data: tenants, error, reload } = useLoad(api.tenants, "tenants");
+  const signing = useLoad(api.signingKeys, "signing-keys");
   const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [find, setFind] = useState("");
 
   if (openId) {
     return (
@@ -57,6 +65,22 @@ export default function Tenants() {
 
       {tenants && tenants.length === 0 && <Empty icon={Users}>No tenants yet.</Empty>}
       {tenants && tenants.length > 0 && (
+        <div className="inline-form">
+          <input
+            type="search"
+            aria-label="Find a tenant"
+            placeholder="Find a tenant by ID or name"
+            value={find}
+            onChange={(e) => setFind(e.target.value)}
+          />
+          {find && (
+            <span className="detail self-center">
+              {shown(tenants, find).length} of {tenants.length}
+            </span>
+          )}
+        </div>
+      )}
+      {tenants && tenants.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
@@ -70,7 +94,7 @@ export default function Tenants() {
               </tr>
             </thead>
             <tbody>
-              {tenants.map((t) => (
+              {shown(tenants, find).map((t) => (
                 <tr key={t.id}>
                   <td>
                     <div className="strong">{t.display_name || t.slug}</div>
@@ -210,13 +234,12 @@ function TenantForm(props: { onClose: () => void; onCreated: (t: Tenant) => void
 }
 
 function TenantDetail(props: { id: string; onBack: () => void }) {
-  const { data, error, reload } = useLoad(async () => ({
-    detail: await api.tenant(props.id),
-    models: await api.models(),
-    signing: await api.signingKeys(),
-  }));
+  const { data, error, reload } = useLoad(async () => {
+    const [detail, models, signing] = await Promise.all([api.tenant(props.id), api.models(), api.signingKeys()]);
+    return { detail, models, signing };
+  }, "tenant/" + props.id);
   // Usage is loaded on its own so that Redis being down never hides the tenant.
-  const usage = useLoad(() => api.usage(props.id));
+  const usage = useLoad(() => api.usage(props.id), "usage/" + props.id);
   usePolling(usage.reload, REFRESH_MS);
   const action = useAction();
   const [newKey, setNewKey] = useState<{ secret: string; key: ApiKey } | null>(null);

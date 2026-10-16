@@ -85,6 +85,13 @@ func (s *Store) AnyBudget(ctx context.Context) (bool, error) {
 	return yes, mapErr(err)
 }
 
+// EnabledTenants returns how many tenants are enabled.
+func (s *Store) EnabledTenants(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRow(ctx, `SELECT count(*) FROM tenants WHERE enabled`).Scan(&n)
+	return n, err
+}
+
 func (s *Store) ListTenants(ctx context.Context) ([]Tenant, error) {
 	rows, err := s.db.Query(ctx, tenantSelect+` ORDER BY t.slug`)
 	if err != nil {
