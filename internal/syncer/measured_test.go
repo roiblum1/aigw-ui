@@ -120,13 +120,24 @@ func TestThreeFigures(t *testing.T) {
 }
 
 // The cluster's discovery message says what the hub may not list and what it
-// does not know for it.
-func TestShapesNote(t *testing.T) {
-	if n := shapesNote([]kube.ModelCapacity{{Model: "m"}}); n != "" {
+// does not know for it, and which deployment has a route on the client
+// listener (as KServe reported glm53's on a serving site, 2026-10-16).
+func TestDiscoveryNote(t *testing.T) {
+	c := store.Cluster{Namespace: "gw", GatewayName: "envoy-ai-gateway", ClientListener: "http"}
+	if n := discoveryNote(c, []kube.ModelCapacity{{Model: "m", Deployments: []kube.Deployment{{Name: "m", Listeners: []string{"gw/envoy-ai-gateway/peers"}}}}}); n != "" {
 		t.Fatalf("allowed: %q", n)
 	}
-	n := shapesNote([]kube.ModelCapacity{{Model: "m", ShapesDenied: []string{"pods"}}, {Model: "n", ConfigsDenied: true}})
+	n := discoveryNote(c, []kube.ModelCapacity{{Model: "m", ShapesDenied: []string{"pods"}}, {Model: "n", ConfigsDenied: true}})
 	if !strings.Contains(n, "not allowed to list pods") || !strings.Contains(n, "not allowed to list LLMInferenceServiceConfigs") {
 		t.Fatalf("denied: %q", n)
+	}
+	glm := []kube.ModelCapacity{{Model: "glm", Deployments: []kube.Deployment{{Namespace: "llm-glm53", Name: "glm53-b200", Listeners: []string{"gw/envoy-ai-gateway/http"}}}}}
+	if n := discoveryNote(c, glm); !strings.Contains(n, "llm-glm53/glm53-b200 has its route on the client listener http") {
+		t.Fatalf("on the client listener: %q", n)
+	}
+	// Another gateway's listener of the same name is not this one.
+	glm[0].Deployments[0].Listeners = []string{"other/envoy-ai-gateway/http"}
+	if n := discoveryNote(c, glm); n != "" {
+		t.Fatalf("another gateway: %q", n)
 	}
 }

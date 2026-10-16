@@ -183,7 +183,12 @@ func (s *Server) discoverAll(w http.ResponseWriter, r *http.Request) {
 
 // clusterManifests shows what a sync would apply, with key values masked.
 func (s *Server) clusterManifests(w http.ResponseWriter, r *http.Request) {
-	state, err := s.st.RenderState(r.Context(), r.PathValue("id"))
+	// What the cluster says goes into it (the client listener's port); a
+	// cluster that cannot be reached shows what the hub alone renders.
+	state, err := s.sy.RenderState(r.Context(), r.PathValue("id"))
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		state, err = s.st.RenderState(r.Context(), r.PathValue("id"))
+	}
 	if err != nil {
 		fail(w, err)
 		return

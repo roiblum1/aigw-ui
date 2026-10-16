@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { api, getName, setName, setToken } from "../api";
 import BrandMark from "../BrandMark";
+import { CreditsTrigger, Footer } from "../Credits";
 import { ErrorBanner } from "../components";
 
 export default function Login({ onLogin }: { onLogin: () => void }) {
@@ -25,13 +26,15 @@ export default function Login({ onLogin }: { onLogin: () => void }) {
   };
 
   return (
-    <div className="grid min-h-screen place-items-center bg-sidebar p-4">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-sidebar p-4">
       <form
         onSubmit={submit}
         className="w-full max-w-[380px] rounded-2xl border border-border bg-card p-7 shadow-2xl shadow-black/30"
       >
         <div className="mb-6 flex items-center gap-3">
-          <BrandMark className="size-10" />
+          <CreditsTrigger>
+            <BrandMark className="size-10" />
+          </CreditsTrigger>
           <div>
             <h1 className="text-lg">AI Gateway Control</h1>
             <p className="text-[13px] text-muted-foreground">Sign in to manage your clusters</p>
@@ -54,6 +57,7 @@ export default function Login({ onLogin }: { onLogin: () => void }) {
           Looking for your team's usage? <a href="/my-usage">Sign in with an API key</a>.
         </p>
       </form>
+      <Footer className="on-dark" />
     </div>
   );
 }

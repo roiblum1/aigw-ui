@@ -150,6 +150,7 @@ func (c *fakeCluster) Instance(_ context.Context, _, _, pod string) (kube.Instan
 	}
 	i := c.instance
 	i.Pod, i.URL = pod, "http://"+pod+":8000"
+	i.URLs = []string{i.URL}
 	return i, nil
 }
 

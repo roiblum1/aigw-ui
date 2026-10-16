@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 
@@ -104,7 +105,7 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 			models = append(models, store.DiscoveredModel{Name: mc.Model, OnlyIfKnown: true})
 		}
 	}
-	changed, err := s.st.ApplyDiscovery(ctx, id, models, shapesNote(capacity))
+	changed, err := s.st.ApplyDiscovery(ctx, id, models, discoveryNote(c, capacity))
 	if err != nil {
 		return 0, err
 	}
@@ -115,10 +116,26 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 	return len(found), nil
 }
 
-// shapesNote says what the hub was not allowed to list on the cluster and
-// what it does not know for it, or "" when it was allowed everything.
-func shapesNote(capacity []kube.ModelCapacity) string {
+// discoveryNote says what the hub was not allowed to list on the cluster and
+// what it does not know for it, and which deployments KServe routes on the
+// client listener; "" when there is nothing to say.
+func discoveryNote(c store.Cluster, capacity []kube.ModelCapacity) string {
 	var notes []string
+	// A route KServe puts on the client listener reaches the model without
+	// the entry route, and without the AI gateway's processing: requests on
+	// it are charged to no budget or quota. Without a client listener the
+	// hub cannot tell which listener clients reach.
+	if c.ClientListener != "" {
+		client := c.Namespace + "/" + c.GatewayName + "/" + c.ClientListener
+		for _, mc := range capacity {
+			for _, d := range mc.Deployments {
+				if slices.Contains(d.Listeners, client) {
+					notes = append(notes, "LLMInferenceService "+d.Namespace+"/"+d.Name+" has its route on the client listener "+c.ClientListener+
+						": requests there skip the entry route and are charged to no budget or quota. Put its router on the peer listener")
+				}
+			}
+		}
+	}
 	for _, mc := range capacity {
 		if len(mc.ShapesDenied) > 0 {
 			notes = append(notes, "not allowed to list "+strings.Join(mc.ShapesDenied, " or ")+", so the GPUs of its deployments are not known")

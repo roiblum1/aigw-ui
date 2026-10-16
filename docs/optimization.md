@@ -138,17 +138,41 @@ writes by default:
 - 6 of 10 against 26 of 30 is too few requests to read as a priority.
   The order in which the two classes were answered was not recorded.
 
-So on such a site, best-effort means: the tenant keeps being served, the use
-is counted apart from its budget, and under load it competes with everyone
-on equal terms. That is the shared pool's behaviour without the pool's upper
-limit. Set a [best-effort limit](pricing.md#a-limit-on-best-effort-use) on
-the model if that matters.
+**Why nothing was refused.** With KServe's default settings the endpoint
+picker does hold best-effort back, in one way: without flow control it uses
+its legacy admission, which refuses a request with a priority below 0 (HTTP
+429, "system saturated, sheddable request dropped") while it counts the pool
+as saturated, and lets every other request through (llm-d router v0.10.0,
+`pkg/epp/requestcontrol/admission.go`). Its default saturation detector
+(`utilization-detector`) counts a pod as saturated at 5 requests waiting in
+vLLM or 80% of its KV cache in use, from the metrics it scrapes. In the test
+none was refused, so the picker never counted the pool as saturated, although
+vLLM had up to 28 waiting. Why is not known: stale or unread metrics are one
+guess [INFERENCE]. The test is not a proof that best-effort is never dropped
+on such a site; it may be, under a load that the picker sees.
 
-**What should make the class count.** KServe's default settings hold only
-scorers, which choose a replica. They do not hold requests back. The
-endpoint picker has a feature for that, flow control: with it, requests wait
-in the scheduler when the model is saturated, ordered by priority. It is
-switched on in the scheduler's settings, which belong to the model's chart:
+So on such a site, best-effort means: the tenant keeps being served while the
+picker does not see the pool saturated, the use is counted apart from its
+budget, and its requests are refused there (429) once it does. The entry
+route's best-effort route then tries the next site; when every site is
+saturated the tenant gets the 429. Set a
+[best-effort limit](pricing.md#a-limit-on-best-effort-use) on the model if an
+upper limit matters.
+
+**Not a safety net: the pool's `FailOpen`.** The `InferencePool`s KServe
+creates say `failureMode: FailOpen`, but Envoy AI Gateway up to 1.2.0 builds
+the pool's ext_proc filter with `failure_mode_allow: false` whatever the pool
+says (`internal/extensionserver/inferencepool.go:347` in v1.2.0). With the
+picker down, the site answers 500 to every request of the model. The entry
+route tries the next site on a 500 since 0.29.0; with one site the client gets
+it. Run two replicas of the picker where that matters.
+
+**What should make the class count.** Flow control: with it, requests wait in
+the picker when the pool is saturated, ordered by priority, and the lowest
+band is refused first. It is switched on in the scheduler's settings, which
+belong to the model's chart. Use the `concurrency-detector`, which counts
+the requests the picker itself has in flight, rather than the default
+detector, which goes by scraped metrics and did not see the test's queue:
 
 ```yaml
 # LLMInferenceService
@@ -160,11 +184,28 @@ spec:
           apiVersion: llm-d.ai/v1alpha1
           kind: EndpointPickerConfig
           featureGates: [flowControl]
-          # plus the plugins and scheduling profile the model uses today
+          plugins:
+            - type: concurrency-detector
+              parameters:
+                concurrencyMode: requests
+                maxConcurrency: 64   # per pod: what vLLM runs at once (--max-num-seqs)
+            # plus the plugins the model uses today
+          flowControl:
+            saturationDetector:
+              pluginRef: concurrency-detector
+          # plus the scheduling profile the model uses today
 ```
 
-We have not run this. Before relying on it, repeat the test above on one
-model: limit vLLM with `--max-num-seqs`, send both classes together, and
+**Before flow control: one ext_proc filter per pool.** Envoy AI Gateway up
+to 1.2.0 adds the pool's ext_proc filter once per route match that sends to
+the pool, and every copy runs: a KServe route with 16 matches made 16
+scheduling passes for one request (agent-router#2595, merged 2026-10-08, in
+no release yet). Each pass would enter the request into flow control again.
+Wait for a release with that fix, or keep a pool behind a single match (the
+model charts' peer route has one).
+
+We have not run flow control. Before relying on it, repeat the test above on
+one model: limit vLLM with `--max-num-seqs`, send both classes together, and
 compare how long each waits.
 
 ## Side by side
@@ -172,7 +213,7 @@ compare how long each waits.
 | | Shared pool | Best-effort |
 |---|---|---|
 | A tenant past its quota is served | while the pool has tokens | always, up to the best-effort limit if one is set |
-| Its requests under load | compete equally with requests within budget | as each site's scheduler treats the class. With KServe's default settings: compete equally |
+| Its requests under load | compete equally with requests within budget | as each site's scheduler treats the class. With KServe's default settings: served until the picker counts the pool saturated, then refused there (429) and tried at the next site |
 | Protection for tenants within budget | only through the size of the pool | only on sites whose scheduler acts on the class |
 | When the extra runs out | 429 from the gateway | 429 from the gateway at the best-effort limit; without a limit it does not run out |
 | An upper limit on the extra use | yes, the pool, for all tenants together | optional, per tenant: the best-effort limit |
@@ -192,9 +233,10 @@ compare how long each waits.
   total. It is the simple one: one number, and the gateway does the rest.
 - **Best-effort** when a tenant past its budget should keep working and
   its extra use should be seen per tenant, and when the sites' schedulers
-  act on the class, so that tenants within budget are not slowed down. On
-  sites with KServe's default scheduler settings it protects nobody, and
-  the shared pool does the same with less to set up.
+  act on the class, so that tenants within budget are not slowed down. With
+  KServe's default scheduler settings a site refuses best-effort only once
+  its picker counts the pool saturated, which our test never reached; until
+  that is seen to work, do not count on it to protect anyone.
 
 **Both on one model.** A request is refused only when the tenant's quota
 and the pool are both spent, and a tenant is moved to best-effort at 90% of

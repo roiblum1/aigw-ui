@@ -283,7 +283,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <text x="624" y="510" class="t-title">Rate limit service</text>
 <text x="624" y="532" class="t-body">envoy-ratelimit; backend is</text>
 <text x="624" y="550" class="t-body">the shared Redis. Fails open if</text>
-<text x="624" y="568" class="t-body">the hub is unreachable.</text>
+<text x="624" y="568" class="t-body">Redis is unreachable.</text>
 <rect x="888" y="480" width="246" height="112" rx="8" class="box b-usage"/>
 <text x="906" y="510" class="t-title">OTel collector</text>
 <text x="906" y="532" class="t-body">Tenant, key, model, site,</text>
@@ -417,11 +417,11 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
     <li><div><b>Identity.</b> The entry gateway checks the API key and writes the tenant ID into the tenant and fairness headers, replacing anything the client sent. An unknown key gets 401.</div></li>
     <li><div><b>Quota check.</b> The rate limit service checks the tenant’s bucket in the shared Redis at cost 0. A tenant over budget gets 429 here.</div></li>
     <li><div><b>Conversation key.</b> The entry gateway takes the session header the client sends: <code>X-Claude-Code-Session-Id</code>, or the conversation header of a chat UI. It is the same on every turn, so every turn gets the same key. A request without such a header has no key.</div></li>
-    <li><div><b>Site choice.</b> Envoy hashes the key over the sites that serve the model, each weighted by its ready capacity. The same key lands on the same site at every entry gateway, with no service to ask. A request without a key is spread over the sites by the same weights.</div></li>
+    <li><div><b>Site choice.</b> Envoy hashes the key over the sites that serve the model, each weighted by its ready capacity. The same key lands on the same site at every entry gateway, with no service to ask, as long as every gateway resolves each site’s peer host to the same address: Envoy’s Maglev orders the sites by address. A request without a key is spread over the sites by the same weights.</div></li>
     <li><div><b>Hop.</b> Envoy sends the request over mTLS to the chosen site’s peer listener. When the home site is the entry site, the request stays in the cluster.</div></li>
     <li><div><b>Admit or shed.</b> Over its limit, the peer listener answers 503 at once and the entry tries another site. Retries happen only before the first response byte, so a stream is never duplicated.</div></li>
-    <li><div><b>Inside the site.</b> When the pool is saturated, the EPP holds the request in its queue, ordered by priority and fair between tenants, for up to 5 s, then answers 429. It then picks a replica: cache-warm replicas first unless they are too slow, then the lowest token load.</div></li>
-    <li><div><b>Answer and metering.</b> vLLM streams the answer with token usage. The entry gateway deducts the tokens in the shared Redis and sends one usage record through its OTel collector to the hub.</div></li>
+    <li><div><b>Inside the site.</b> When the pool is saturated, the EPP with KServe’s default settings sends standard requests on and refuses best-effort ones (429), which the entry then tries at another site. With flow control on, it holds the request in its queue, ordered by priority and fair between tenants, for up to 5 s, then answers 429. It then picks a replica: cache-warm replicas first unless they are too slow, then the lowest token load. If the EPP cannot be reached, the site answers 500 (the pool’s FailOpen is not applied by Envoy AI Gateway up to 1.2.0) and the entry tries another site.</div></li>
+    <li><div><b>Answer and metering.</b> vLLM streams the answer with token usage. The entry gateway deducts the tokens in the shared Redis. In this design it also sends one usage record through its OTel collector to the hub; that is not built: the hub reads the counters in Redis instead.</div></li>
   </ol>
 </section>
 
@@ -469,7 +469,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
   <div class="prose"><p>These come from the GKE Inference Gateway write-up on Vertex AI, mapped onto the endpoint picker that KServe 0.21 already deploys.</p></div>
   <ul class="plain">
     <li><b>Calibrate the endpoint picker.</b> Keep KServe’s default (prefix-affinity filter, then token-load scorer). Measure <code>peakPrefillThroughput</code> for GLM-5.3 on B200; the default is calibrated for Qwen 32B on 2×H100. Lower <code>maxTTFTPenaltyMs</code> from 18,000 to about 4,000 so a hot replica loses its stickiness sooner. That is the same move as Vertex’s weight change from 3:3:2 to 3:5:2.</li>
-    <li><b>Turn on flow control.</b> When the pool is saturated (queue depth 5 or KV cache 80% by default), requests wait in the EPP, ordered by priority and shared fairly between tenants. Cap the wait at 5 s; the EPP default is 60 s.</li>
+    <li><b>Turn on flow control.</b> When the pool is saturated, requests wait in the EPP, ordered by priority and shared fairly between tenants. Count saturation with the <code>concurrency-detector</code> (the EPP’s own in-flight requests) rather than the default detector, which goes by scraped metrics (queue depth 5 or KV cache 80%). Cap the wait at 5 s; the EPP default is 60 s. First run a gateway with agent-router#2595: up to Envoy AI Gateway 1.2.0 the pool’s filter runs once per route match, so a request would enter flow control once per match.</li>
     <li><b>Priority classes</b> as InferenceObjectives: chat UIs 10, Claude Code 0, scheduled agent runs −10. Today the hub sets the class per model, not per key: the entry gateway replaces the header a client sends with <code>standard</code>, and with <code>best-effort</code> (priority −1) for a tenant whose budget is spent on a model that serves it that way.</li>
   </ul>
   <pre><code><span class="c"># LLMInferenceService, every model on every site</span>
@@ -483,7 +483,10 @@ spec:
           featureGates: [flowControl]
           flowControl:
             defaultRequestTTL: 5s                 <span class="c"># EPP default is 60s</span>
+            saturationDetector: {pluginRef: concurrency-detector}
           plugins:
+            - type: concurrency-detector
+              parameters: {concurrencyMode: requests, maxConcurrency: &lt;vLLM --max-num-seqs&gt;}
             - type: approx-prefix-cache-producer
             - type: inflight-load-producer
             - type: prefix-cache-affinity-filter
@@ -533,8 +536,7 @@ spec:
 ---
 <span class="c"># BackendTrafficPolicy fleet-glm-5.3</span>
 metadata:
-  labels: {aigw-ui.io/zone-weights: "true"}
-  annotations: {aigw-ui.io/model: glm-5.3}
+  labels: {app.kubernetes.io/managed-by: aigw-ui}
 spec:
   loadBalancer:
     type: ConsistentHash
@@ -576,9 +578,9 @@ spec:
         <tr><th scope="row">Normal load</th><td>Every conversation stays on its home site. Sites fill in proportion to their nodes, 8 : 3.</td></tr>
         <tr><th scope="row">One site runs hot</th><td>Past its limit it answers 503, and those requests are tried at another site. Its conversations come back to it as soon as it has room.</td></tr>
         <tr><th scope="row">A site loses instances</th><td>The hub lowers the weight once two polls in a row agree; shed and retry cover the gap.</td></tr>
-        <tr><th scope="row">Every site full</th><td>Conversations stay home. Flow control serves by priority; a request that waits 5 s gets 429.</td></tr>
-        <tr><th scope="row">A site or its gateway goes down</th><td>Health checks remove it from every model within about 15 s. Connect failures go to another site at once.</td></tr>
-        <tr><th scope="row">The hub is down</th><td>Budgets fail open and config stays as last delivered. Routing keeps working: the gateways need nothing from the hub to route.</td></tr>
+        <tr><th scope="row">Every site full</th><td>Conversations stay home. With KServe’s default settings best-effort requests get 429 at every site; with flow control on, requests wait by priority and one that waits 5 s gets 429.</td></tr>
+        <tr><th scope="row">A site or its gateway goes down</th><td>Health checks remove it from every model within about 9 s: three failed checks, 3 s apart. Connect failures go to another site at once.</td></tr>
+        <tr><th scope="row">The hub is down</th><td>Budgets and quotas still hold: their amounts are in the tenants’ tokens and their counters in the shared Redis. Config stays as last delivered, and routing keeps working: the gateways need nothing from the hub to route. A personal key gets no new token, so its user goes on until the last one expires (7 days by default).</td></tr>
         <tr><th scope="row">A site comes back</th><td>Its weight rises one instance per hub poll, so its conversations don’t all return to a cold cache at once.</td></tr>
       </tbody>
     </table>

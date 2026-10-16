@@ -205,8 +205,11 @@ func (s *Service) Start(ctx context.Context, req Request) (store.CapacityRun, er
 // target is what a measurement is aimed at.
 type target struct {
 	// instance is the pod measured, or "" for a prefill/decode deployment.
-	instance    string
-	url, model  string
+	instance string
+	// urls are the addresses the load is spread over; none for a
+	// prefill/decode deployment, which is reached through peer.
+	urls        []string
+	model       string
 	metrics     []string
 	maxModelLen int
 	// instancesDuring is what the result is divided by for one instance.
@@ -223,7 +226,9 @@ func (s *Service) target(ctx context.Context, cl Cluster, d store.Deployment, po
 		if err != nil {
 			return target{}, err
 		}
-		return target{instance: pod, url: inst.URL, model: inst.Model, metrics: []string{inst.URL}, maxModelLen: inst.MaxModelLen,
+		// Every rank of the pod gets its share of the load, and every rank's
+		// counters are added up: the pod is one instance.
+		return target{instance: pod, urls: inst.URLs, model: inst.Model, metrics: inst.URLs, maxModelLen: inst.MaxModelLen,
 			instancesDuring: 1, namespace: d.Namespace}, nil
 	}
 	cluster, err := s.st.GetCluster(ctx, d.ClusterID)
@@ -249,7 +254,7 @@ func (s *Service) target(ctx context.Context, cl Cluster, d store.Deployment, po
 		if err != nil {
 			return target{}, err
 		}
-		t.metrics = append(t.metrics, inst.URL)
+		t.metrics = append(t.metrics, inst.URLs...)
 		t.model, t.maxModelLen = inst.Model, inst.MaxModelLen
 	}
 	return t, nil
@@ -260,7 +265,7 @@ func (s *Service) createJob(ctx context.Context, cl Cluster, runID, namespace st
 		namespace = t.namespace
 	}
 	job, err := capacity.Job(capacity.JobSpec{RunID: runID, Name: capacity.JobName(runID), Namespace: namespace, Image: s.opt.Image,
-		URL: t.url, Model: t.model, Peer: t.peer, MetricsURLs: t.metrics, Settings: set})
+		URLs: t.urls, Model: t.model, Peer: t.peer, MetricsURLs: t.metrics, Settings: set})
 	if err == nil {
 		err = cl.CreateJob(ctx, job)
 	}

@@ -23,6 +23,7 @@ import Activity from "./pages/Activity";
 import Architecture from "./pages/Architecture";
 import Docs from "./pages/Docs";
 import BrandMark from "./BrandMark";
+import { CreditsTrigger, Footer } from "./Credits";
 import Login from "./pages/Login";
 import MyUsage from "./pages/MyUsage";
 import Overview from "./pages/Overview";
@@ -101,7 +102,9 @@ function Admin() {
     <div className="min-h-screen md:grid md:grid-cols-[236px_minmax(0,1fr)]">
       <nav className="flex items-center gap-1 overflow-x-auto bg-sidebar px-3 py-2.5 md:sticky md:top-0 md:h-screen md:flex-col md:items-stretch md:overflow-visible md:py-5">
         <div className="flex items-center gap-2.5 px-2 md:mb-6">
-          <BrandMark />
+          <CreditsTrigger>
+            <BrandMark />
+          </CreditsTrigger>
           <div className="hidden leading-tight md:block">
             <div className="text-sm font-semibold text-white">AI Gateway</div>
             <div className="text-xs text-sidebar-foreground">Control plane</div>
@@ -152,6 +155,7 @@ function Admin() {
         {page === "Activity" && <Activity />}
         {page === "Architecture" && <Architecture />}
         {page === "Docs" && <Docs />}
+        <Footer />
       </main>
     </div>
   );

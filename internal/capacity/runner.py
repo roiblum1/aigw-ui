@@ -30,12 +30,17 @@ import time
 import urllib.request
 
 cfg = json.loads(os.environ["AIGW_CAPACITY"])
-url = cfg["url"]
+# Where the load goes: the instance, with one address per data-parallel rank
+# of a pod that serves on several ports. AIPerf sends to them in turn.
+# A prefill/decode deployment has none: it is reached through the peer
+# listener, below.
+urls = cfg.get("urls") or []
+url = urls[0] if urls else ""
 settings = cfg["settings"]
 mode = settings.get("mode", "")
 # The pods whose counters the measurement reads: the instance it measures,
 # or every decode pod of a prefill/decode deployment.
-metrics_urls = cfg.get("metrics_urls") or [url]
+metrics_urls = cfg.get("metrics_urls") or urls
 work = os.environ.get("AIGW_WORK", "/tmp")
 
 MAX_FOREIGN_SHARE = 0.05
@@ -345,6 +350,7 @@ def run(cmd, log):
 warm_proxy = None
 if cfg.get("peer"):
     url, warm_proxy = peer_proxy(cfg["peer"])
+    urls = [url]
 
 
 def model_length():
@@ -429,7 +435,7 @@ def measure(concurrency):
     sampler = Sampler()
     sampler.start()
     code = run(["aiperf", "profile",
-                "--model", cfg["model"], "--url", url,
+                "--model", cfg["model"], *[a for u in urls for a in ("--url", u)],
                 "--endpoint-type", "chat", "--streaming",
                 "--input-file", dataset, "--custom-dataset-type", "mooncake_trace",
                 # The sessions' blocks: AIPerf otherwise reads them as 512 tokens.

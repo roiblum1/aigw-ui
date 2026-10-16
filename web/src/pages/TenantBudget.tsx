@@ -13,6 +13,8 @@ export function held(identity: SigningKeys["identity"] | undefined): string | nu
 export function TenantModelsCard(props: {
   tenant: Tenant;
   models: Model[];
+  /** The models the tenant has a quota on: they stay in its list until the quota is removed. */
+  withQuota: string[];
   identity: SigningKeys["identity"] | undefined;
   busy: boolean;
   act: (fn: () => Promise<unknown>) => void;
@@ -37,7 +39,8 @@ export function TenantModelsCard(props: {
       <p className="hint">
         Which models the tenant may call. Any other is refused by the gateway (HTTP 403) before a model or a quota is
         asked. A model added later is closed to a tenant with a list until it is added here. The list travels in the
-        tenant's tokens: tokens created after a change carry the new one.
+        tenant's tokens: tokens created after a change carry the new one. A model the tenant has a quota on stays in
+        the list until that quota is removed.
       </p>
       {allowed && why && <div className="banner warn">{why}</div>}
       {picked ? (
@@ -48,6 +51,8 @@ export function TenantModelsCard(props: {
                 <input
                   type="checkbox"
                   checked={picked.has(m.id)}
+                  disabled={picked.has(m.id) && props.withQuota.includes(m.id)}
+                  title={props.withQuota.includes(m.id) ? "The tenant has a quota on this model. Remove the quota first." : undefined}
                   onChange={(e) => {
                     const next = new Set(picked);
                     if (e.target.checked) next.add(m.id);
@@ -82,7 +87,7 @@ export function TenantModelsCard(props: {
           </span>
           {allowed == null ? (
             !why && (
-              <button disabled={busy} onClick={() => setPicked(new Set())}>
+              <button disabled={busy} onClick={() => setPicked(new Set(props.withQuota))}>
                 Limit to some models
               </button>
             )

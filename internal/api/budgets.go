@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	"aigw-ui/internal/render"
@@ -112,6 +113,25 @@ func (s *Server) setTenantModels(w http.ResponseWriter, r *http.Request) {
 	}
 	if b.Models != nil && !s.tokensOnly(w, r) {
 		return
+	}
+	if b.Models != nil {
+		// A model taken off the list keeps no quota: the gateway would refuse
+		// the model before the quota is asked.
+		quotas, err := s.st.ListQuotas(r.Context(), r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		var cut []string
+		for _, q := range quotas {
+			if !slices.Contains(b.Models, q.ModelID) {
+				cut = append(cut, q.ModelName)
+			}
+		}
+		if len(cut) > 0 {
+			writeError(w, http.StatusConflict, "this tenant has quotas on "+strings.Join(cut, ", ")+": remove them first, or keep those models in its list.")
+			return
+		}
 	}
 	t, err := s.st.SetTenantModels(r.Context(), r.PathValue("id"), b.Models)
 	if err != nil {

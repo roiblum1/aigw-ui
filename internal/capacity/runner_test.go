@@ -46,8 +46,11 @@ summary = {
 }
 with open(os.path.join(d, "profile_export_aiperf.json"), "w") as f:
     json.dump(summary, f)
-served = {"prompt": 100000 * c, "cached": 80000 * c, "output": 1000 * c}
-urllib.request.urlopen(arg("--url") + "/served", data=json.dumps(served).encode())
+# Each --url is a rank of the instance: they share the load equally.
+urls = [args[i + 1] for i, a in enumerate(args) if a == "--url"]
+for u in urls:
+    served = {"prompt": 100000 * c // len(urls), "cached": 80000 * c // len(urls), "output": 1000 * c // len(urls)}
+    urllib.request.urlopen(u + "/served", data=json.dumps(served).encode())
 `
 
 // instance is what the stand-in for vLLM reports. Its counters grow by what
@@ -62,11 +65,16 @@ type instance struct {
 	// it turns to once the first step has been served: other clients that
 	// start to reach the instance during the measurement.
 	running, busyAfterFirst int
+	// ranks is how many API servers it runs, each on its own port with its
+	// own counters, as a data-parallel pod does; 0 is one.
+	ranks int
+	// served is what each rank was sent, filled in by runRunner.
+	served []*atomic.Int64
 }
 
 // runRunner runs the Job's script with the fake aiperf against a stand-in
 // instance, and returns what it printed.
-func runRunner(t *testing.T, set Settings, in instance) string {
+func runRunner(t *testing.T, set Settings, in *instance) string {
 	t.Helper()
 	python, err := exec.LookPath("python3")
 	if err != nil {
@@ -80,34 +88,39 @@ func runRunner(t *testing.T, set Settings, in instance) string {
 	if err := os.WriteFile(filepath.Join(bin, "aiperf"), []byte(fakeAIPerf), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	var reads, prompt, cached, output atomic.Int64
-	var busy atomic.Bool
-	mux := http.NewServeMux()
-	mux.HandleFunc("/served", func(w http.ResponseWriter, r *http.Request) {
-		var n struct{ Prompt, Cached, Output int64 }
-		json.NewDecoder(r.Body).Decode(&n)
-		prompt.Add(n.Prompt)
-		cached.Add(n.Cached)
-		output.Add(n.Output)
-		busy.Store(true)
-	})
-	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"object":"list","data":[{"id":"m","object":"model","max_model_len":%d}]}`, in.maxModelLen)
-	})
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		n := reads.Add(1)
-		running := in.running
-		if busy.Load() && in.busyAfterFirst > 0 {
-			running = in.busyAfterFirst
-		}
-		fmt.Fprintf(w, "# HELP vllm:prompt_tokens_total x\nvllm:prompt_tokens_total{engine=\"0\",model_name=\"m\"} %d\n"+
-			"vllm:prompt_tokens_cached_total{engine=\"0\",model_name=\"m\"} %d\nvllm:generation_tokens_total{engine=\"0\"} %d\n"+
-			"vllm:num_requests_running{engine=\"0\",model_name=\"m\"} %d\n", prompt.Load()+n*in.foreignPerRead, cached.Load(), output.Load(), running)
-	})
-	server := httptest.NewServer(mux)
-	defer server.Close()
+	var urls []string
+	for range max(in.ranks, 1) {
+		var reads, prompt, cached, output atomic.Int64
+		var busy atomic.Bool
+		in.served = append(in.served, &prompt)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/served", func(w http.ResponseWriter, r *http.Request) {
+			var n struct{ Prompt, Cached, Output int64 }
+			json.NewDecoder(r.Body).Decode(&n)
+			prompt.Add(n.Prompt)
+			cached.Add(n.Cached)
+			output.Add(n.Output)
+			busy.Store(true)
+		})
+		mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintf(w, `{"object":"list","data":[{"id":"m","object":"model","max_model_len":%d}]}`, in.maxModelLen)
+		})
+		mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+			n := reads.Add(1)
+			running := in.running
+			if busy.Load() && in.busyAfterFirst > 0 {
+				running = in.busyAfterFirst
+			}
+			fmt.Fprintf(w, "# HELP vllm:prompt_tokens_total x\nvllm:prompt_tokens_total{engine=\"0\",model_name=\"m\"} %d\n"+
+				"vllm:prompt_tokens_cached_total{engine=\"0\",model_name=\"m\"} %d\nvllm:generation_tokens_total{engine=\"0\"} %d\n"+
+				"vllm:num_requests_running{engine=\"0\",model_name=\"m\"} %d\n", prompt.Load()+n*in.foreignPerRead, cached.Load(), output.Load(), running)
+		})
+		server := httptest.NewServer(mux)
+		defer server.Close()
+		urls = append(urls, server.URL)
+	}
 
-	config, _ := json.Marshal(map[string]any{"url": server.URL, "model": "m", "settings": set, "grace_seconds": 1,
+	config, _ := json.Marshal(map[string]any{"urls": urls, "model": "m", "settings": set, "grace_seconds": 1,
 		"agentic": Agentic(set), "wait_idle_seconds": 0, "settle_seconds": 0, "quiet_seconds": 0.2})
 	cmd := exec.Command(python, "-c", runner)
 	cmd.Env = append(os.Environ(), "AIGW_CAPACITY="+string(config), "AIGW_WORK="+filepath.Join(dir, "work"), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -123,7 +136,7 @@ func runRunner(t *testing.T, set Settings, in instance) string {
 func TestRunner(t *testing.T) {
 	set := Defaults(0)
 	set.TTFTMillis = 3000 // 1,000 ms per request in flight: 4 misses it, 3 just meets it
-	out := runRunner(t, set, instance{maxModelLen: 200000})
+	out := runRunner(t, set, &instance{maxModelLen: 200000})
 
 	l := ParseLog(out)
 	if !l.Done || l.Error != "" {
@@ -158,10 +171,31 @@ func TestRunner(t *testing.T) {
 	}
 }
 
+// A pod with an API server per data-parallel rank is measured whole: the
+// load goes to every rank in turn, and the counters of all of them are added
+// up, so the step reads as it would from one server.
+func TestRunnerRanks(t *testing.T) {
+	set := Defaults(0)
+	set.TTFTMillis = 3000
+	in := &instance{maxModelLen: 200000, ranks: 8}
+	l := ParseLog(runRunner(t, set, in))
+	if !l.Done || len(l.Steps) != 4 {
+		t.Fatalf("not done: %+v", l)
+	}
+	if s := l.Steps[1]; s.ServerOutputTokens == nil || *s.ServerOutputTokens != 2000 {
+		t.Fatalf("step = %+v", s)
+	}
+	for i, served := range in.served {
+		if served.Load() == 0 {
+			t.Fatalf("rank %d was sent nothing", i)
+		}
+	}
+}
+
 // A model shorter than the settings would refuse every request: the Job stops
 // before it makes up any session, and says what to set.
 func TestRunnerModelTooShort(t *testing.T) {
-	out := runRunner(t, Defaults(0), instance{maxModelLen: 8192})
+	out := runRunner(t, Defaults(0), &instance{maxModelLen: 8192})
 	l := ParseLog(out)
 	if l.Dataset != nil || len(l.Steps) != 0 || l.Done {
 		t.Fatalf("it went on:\n%s", out)
@@ -177,7 +211,7 @@ func TestRunnerModelTooShort(t *testing.T) {
 // step sees it, the step fails as contaminated and the sweep stops; live, the
 // same traffic is expected and shown.
 func TestRunnerForeignTraffic(t *testing.T) {
-	side := instance{maxModelLen: 200000, foreignPerRead: 10_000_000}
+	side := &instance{maxModelLen: 200000, foreignPerRead: 10_000_000}
 	set := Defaults(0)
 	set.MaxConcurrency = 2
 	l := ParseLog(runRunner(t, set, side))
@@ -211,7 +245,7 @@ func TestRunnerForeignTraffic(t *testing.T) {
 // Drained, an instance that other clients start to reach during the
 // measurement fails the next step at its quiet spell: it never runs dry.
 func TestRunnerTrafficArrives(t *testing.T) {
-	l := ParseLog(runRunner(t, Defaults(0), instance{maxModelLen: 200000, busyAfterFirst: 3}))
+	l := ParseLog(runRunner(t, Defaults(0), &instance{maxModelLen: 200000, busyAfterFirst: 3}))
 	if !l.Done || len(l.Steps) != 2 || l.Steps[0].Error != "" || !strings.Contains(l.Steps[1].Error, "still had 3 requests in flight") {
 		t.Fatalf("steps: %+v", l.Steps)
 	}
@@ -222,7 +256,7 @@ func TestRunnerTrafficArrives(t *testing.T) {
 
 // A drained instance that never runs dry is not measured.
 func TestRunnerNotIdle(t *testing.T) {
-	l := ParseLog(runRunner(t, Defaults(0), instance{maxModelLen: 200000, running: 3}))
+	l := ParseLog(runRunner(t, Defaults(0), &instance{maxModelLen: 200000, running: 3}))
 	if l.Dataset != nil || !strings.Contains(l.Error, "still has 3 requests in flight") {
 		t.Fatalf("not idle: %+v", l)
 	}

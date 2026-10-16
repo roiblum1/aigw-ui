@@ -56,6 +56,14 @@ func Counters(s State) []Counter {
 	for _, b := range s.budgets() {
 		budgeted[b.TenantSlug] = true
 	}
+	// The models each tenant held to some may call, by name.
+	allowed := map[string]map[string]bool{}
+	for _, r := range s.Restricted {
+		allowed[r.TenantSlug] = map[string]bool{}
+		for _, name := range r.Models {
+			allowed[r.TenantSlug][name] = true
+		}
+	}
 	for _, m := range s.Models {
 		// held reports whether the tenant's budget across models holds it on
 		// the model instead of the model's rules.
@@ -100,7 +108,9 @@ func Counters(s State) []Counter {
 				}
 				stem := budgetPassStem(prefix, m.ruleCount()-1)
 				for _, b := range s.budgets() {
-					if own[b.TenantSlug] {
+					// A tenant held to other models is refused this one by
+					// the gateway, so it never uses it.
+					if names, held := allowed[b.TenantSlug]; own[b.TenantSlug] || (held && !names[m.Name]) {
 						continue
 					}
 					out = append(out, Counter{

@@ -129,8 +129,10 @@ func TestQuotaAmountName(t *testing.T) {
 	}
 }
 
-// A model server never sees the headers that told the tenants apart, the
-// amounts included.
+// A model server never sees the headers that told the tenants apart. The
+// list is the same for any number of models with quotas by amount: the
+// AIServiceBackend takes 16 names at most, and a header per such model
+// made every backend invalid from the eleventh on.
 func TestModelServerLosesIdentityHeaders(t *testing.T) {
 	s := testState()
 	s.Identity = Identity{Mode: IdentityTokens}
@@ -138,7 +140,16 @@ func TestModelServerLosesIdentityHeaders(t *testing.T) {
 		s.Models[i].ByAmount = true
 	}
 	s.Models[0].Amounts = []QuotaAmount{{Slot: 0, Limit: 1000, Window: "1d"}, {Slot: 1, Limit: 500, Window: "1h"}}
-	for _, name := range []string{"glm5-3", "small"} {
+	for n := range 20 {
+		name := fmt.Sprintf("extra-%02d", n)
+		s.Models = append(s.Models, Model{Name: name, Slug: name, Host: name + ".models", Port: 8000, UpstreamModel: name,
+			DefaultLimit: 1, DefaultWindow: "1d", ByAmount: true, Amounts: []QuotaAmount{{Slot: 0, Limit: 1000, Window: "1d"}},
+			Quotas: []TenantQuota{{TenantSlug: "team-" + name, Slot: 0, Limit: 1000, Window: "1d"}}})
+	}
+	if h := QuotaClaimHeaders(s.Models); len(h) < 20 {
+		t.Fatalf("the test needs more models with quotas by amount than the list takes: %d", len(h))
+	}
+	for _, name := range []string{"glm5-3", "small", "extra-19"} {
 		var b *unstructured.Unstructured
 		for _, o := range Objects(s) {
 			if o.GetKind() == "AIServiceBackend" && o.GetName() == name {
@@ -149,7 +160,7 @@ func TestModelServerLosesIdentityHeaders(t *testing.T) {
 			t.Fatalf("no backend %s", name)
 		}
 		got := fmt.Sprint(b.Object["spec"].(map[string]any)["headerMutation"])
-		if got != "map[remove:[authorization x-api-key x-aigw-tenant x-aigw-key x-aigw-client-id x-aigw-budget x-aigw-quota-glm5-3]]" {
+		if got != "map[remove:[authorization x-api-key x-aigw-tenant x-aigw-key x-aigw-client-id x-aigw-budget]]" {
 			t.Fatalf("backend %s: %s", name, got)
 		}
 	}

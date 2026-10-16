@@ -1,10 +1,14 @@
 package kube
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 )
 
 func pod(name, phase, ip string, ready bool, role string, probe map[string]any) unstructured.Unstructured {
@@ -97,5 +101,53 @@ func TestShapeOfADeployment(t *testing.T) {
 	multi := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "x", "namespace": "llm"}, "spec": map[string]any{"worker": map[string]any{}}}}
 	if d := g.of(multi, 1, true); d.Topology != TopologyMultiNode {
 		t.Fatalf("multi-node = %+v", d)
+	}
+}
+
+// A pod that runs one API server per data-parallel rank is reached on every
+// port its InferencePool lists, not on the port of its probes, which glm53
+// points at a supervisor that answers health checks only (site export,
+// 2026-10-16). The older pool kind has one port.
+func TestRankPorts(t *testing.T) {
+	svc := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": "glm53-b200", "namespace": "llm-glm53"},
+		"spec":     map[string]any{"router": map[string]any{"scheduler": map[string]any{}}},
+		"status": map[string]any{"router": map[string]any{"scheduler": map[string]any{"inferencePool": map[string]any{
+			"group": "inference.networking.k8s.io", "kind": "InferencePool", "name": "glm53-b200-inference-pool"}}}},
+	}}
+	v1 := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "inference.networking.k8s.io/v1", "kind": "InferencePool",
+		"metadata": map[string]any{"name": "glm53-b200-inference-pool", "namespace": "llm-glm53"},
+		"spec":     map[string]any{"targetPorts": []any{map[string]any{"number": int64(8000)}, map[string]any{"number": int64(8001)}}},
+	}}
+	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), v1)
+	c := &Client{dyn: dyn}
+	ports := c.rankPorts(context.Background(), svc)
+	if fmt.Sprint(ports) != "[8000 8001]" {
+		t.Fatalf("ports %v", ports)
+	}
+	glm := pod("p", "Running", "10.0.0.7", true, "both", map[string]any{"path": "/readyz", "port": int64(8208)})
+	urls, err := serverURLs(glm, ports)
+	if err != nil || fmt.Sprint(urls) != "[http://10.0.0.7:8000 http://10.0.0.7:8001]" {
+		t.Fatalf("urls %v %v", urls, err)
+	}
+	// Without a pool the probe's port, as before.
+	if urls, _ := serverURLs(glm, nil); fmt.Sprint(urls) != "[http://10.0.0.7:8208]" {
+		t.Fatalf("without a pool: %v", urls)
+	}
+
+	svc.Object["status"].(map[string]any)["router"].(map[string]any)["scheduler"].(map[string]any)["inferencePool"].(map[string]any)["group"] = "inference.networking.x-k8s.io"
+	alpha := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "inference.networking.x-k8s.io/v1alpha2", "kind": "InferencePool",
+		"metadata": map[string]any{"name": "glm53-b200-inference-pool", "namespace": "llm-glm53"},
+		"spec":     map[string]any{"targetPortNumber": int64(8000)},
+	}}
+	c.dyn = dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), alpha)
+	if ports := c.rankPorts(context.Background(), svc); fmt.Sprint(ports) != "[8000]" {
+		t.Fatalf("v1alpha2 ports %v", ports)
+	}
+	// An IPv6 pod.
+	if urls, _ := serverURLs(pod("p", "Running", "fd00::1", true, "both", nil), []int64{8000, 8001}); fmt.Sprint(urls) != "[http://[fd00::1]:8000 http://[fd00::1]:8001]" {
+		t.Fatalf("ipv6: %v", urls)
 	}
 }

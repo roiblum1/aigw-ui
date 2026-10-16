@@ -246,6 +246,28 @@ func TestFleetRetryPatch(t *testing.T) {
 	if !reflect.DeepEqual(patches, want) {
 		t.Errorf("patches = %v\nwant      %v", patches, want)
 	}
+	if len(patch.GetAnnotations()) != 0 {
+		t.Errorf("one name, yet annotated: %v", patch.GetAnnotations())
+	}
+
+	// With the client listener's port known, the same patches go to the name
+	// Envoy Gateway gives the configuration under its xDS name scheme v2,
+	// and the policy lists both names.
+	s.ClientPort = 80
+	patch = find(t, Objects(s), "EnvoyPatchPolicy", "fleet-glm-5-3-retry")
+	patches, _, _ = unstructured.NestedSlice(patch.Object, "spec", "jsonPatches")
+	if len(patches) != 6 || !reflect.DeepEqual(patches[:3], want) {
+		t.Fatalf("patches = %v", patches)
+	}
+	for _, p := range patches[3:] {
+		if p.(map[string]any)["name"] != "http-80" {
+			t.Errorf("v2 patch %v", p)
+		}
+	}
+	if got := patch.GetAnnotations()[RouteConfigsAnnotation]; got != "ai-gateway/ai-gateway/https,http-80" {
+		t.Errorf("annotation %q", got)
+	}
+	s.ClientPort = 0
 
 	// A held model keeps its patch on the cluster, and a model that is
 	// switched on meanwhile still gets its own.

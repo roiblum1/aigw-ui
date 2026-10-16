@@ -175,7 +175,12 @@ type State struct {
 	// ClientListener is the Gateway listener the API-key policy attaches
 	// to. Empty attaches it to the whole Gateway.
 	ClientListener string
-	AuthEnabled    bool
+	// ClientPort is the client listener's port when it serves plain HTTP,
+	// as the cluster's Gateway says; 0 when unknown or HTTPS. Envoy Gateway
+	// names the listener's route configuration after it under version 2 of
+	// its xDS names (fleetRetryPatch).
+	ClientPort  int64
+	AuthEnabled bool
 	// Identity is how the gateway tells tenants apart when AuthEnabled.
 	Identity Identity
 	// Fleet is used by the models that have Fleet sites.

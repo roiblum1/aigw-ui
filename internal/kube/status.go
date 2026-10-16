@@ -2,10 +2,14 @@ package kube
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"aigw-ui/internal/render"
 )
 
 // readGatewayStatus asks the cluster what the gateway's controller made of
@@ -27,6 +31,10 @@ func (c *Client) readGatewayStatus(ctx context.Context, namespace string, desire
 	for _, obj := range desired {
 		if obj.GetKind() == "EnvoyPatchPolicy" || obj.GetKind() == "BackendTrafficPolicy" {
 			c.readPatchStatus(ctx, namespace, obj, changed, res)
+			continue
+		}
+		if obj.GetKind() == "SecurityPolicy" {
+			c.readSecurityStatus(ctx, namespace, obj, changed, res)
 			continue
 		}
 		if obj.GroupVersionKind().Group != "aigateway.envoyproxy.io" {
@@ -88,12 +96,75 @@ func (c *Client) readPatchStatus(ctx context.Context, namespace string, obj *uns
 	if verdict == "" {
 		return
 	}
+	if verdict == "NotProgrammed" && otherSchemeOnly(obj, message) {
+		verdict, message = want, ""
+	}
 	if i, ok := changed[obj.GetKind()+"/"+ns+"/"+obj.GetName()]; ok {
 		res.Changes[i].Gateway, res.Changes[i].GatewayMessage = verdict, message
 	}
 	if verdict != want {
 		res.Rejected = append(res.Rejected, Change{Kind: obj.GetKind(), Namespace: ns, Name: obj.GetName(), Gateway: verdict, GatewayMessage: message})
 	}
+}
+
+// readSecurityStatus reports the hub's SecurityPolicy when the gateway does
+// not accept it, and warns when a SecurityPolicy on some route replaces it
+// there (Overridden): requests on that route are not checked for a tenant's
+// key or token, carry no tenant header, and so are charged to no budget or
+// quota of a tenant. The route is the site's; whether it should be on the
+// client listener at all is for its owner to say, so this does not fail the
+// sync.
+func (c *Client) readSecurityStatus(ctx context.Context, namespace string, obj *unstructured.Unstructured, changed map[string]int, res *SyncResult) {
+	gvr, _ := gvrFor(obj.GetKind())
+	ns := obj.GetNamespace()
+	if ns == "" {
+		ns = namespace
+	}
+	live, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, obj.GetName(), metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	verdict, message := patchVerdict(live, "Accepted")
+	if verdict == "" {
+		return
+	}
+	if i, ok := changed[obj.GetKind()+"/"+ns+"/"+obj.GetName()]; ok {
+		res.Changes[i].Gateway, res.Changes[i].GatewayMessage = verdict, message
+	}
+	switch verdict {
+	case "Overridden":
+		res.Warnings = append(res.Warnings, "SecurityPolicy "+ns+"/"+obj.GetName()+" does not hold on some routes of the client listener: "+message+
+			" Requests there are not checked for a tenant's key or token and are charged to no tenant's budget or quota.")
+	case "Accepted":
+	default:
+		res.Rejected = append(res.Rejected, Change{Kind: obj.GetKind(), Namespace: ns, Name: obj.GetName(), Gateway: verdict, GatewayMessage: message})
+	}
+}
+
+// otherSchemeOnly reports whether a retry patch written for both names of
+// the route configuration (render.RouteConfigsAnnotation) is reported as not
+// programmed only because the configuration is missing under the name the
+// gateway does not use. Envoy Gateway then still applied the patches for the
+// other name. When every name is missing, the route configuration itself is.
+//
+// Envoy Gateway writes that report over any other error of the same policy,
+// so an error in the patches of the name that exists is not seen here; the
+// self-test's stickiness step, which then gets no answer, sees it.
+func otherSchemeOnly(desired *unstructured.Unstructured, message string) bool {
+	names := strings.Split(desired.GetAnnotations()[render.RouteConfigsAnnotation], ",")
+	const prefix = "Unable to find xds resources: "
+	if len(names) < 2 || !strings.HasPrefix(message, prefix) {
+		return false
+	}
+	missing := map[string]bool{}
+	for _, r := range strings.Split(strings.TrimPrefix(message, prefix), ",") {
+		name, ok := strings.CutPrefix(strings.TrimSpace(r), render.RouteConfigType+"/")
+		if !ok || !slices.Contains(names, name) {
+			return false
+		}
+		missing[name] = true
+	}
+	return len(missing) < len(names)
 }
 
 // patchVerdict returns want ("Programmed" or "Accepted") when every gateway

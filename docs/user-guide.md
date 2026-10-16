@@ -336,6 +336,16 @@ tenant's list. By default a tenant may call every model. It needs every
 tenant on tokens too, and like the budget it travels in the tenant's
 tokens: a change reaches the gateway with the tenant's next token.
 
+A list and a budget or quotas go together. A budget for **All models** is
+spent on the models in the list that have prices; the others are refused
+with 403 before any budget is asked (checked on the lab gateway,
+2026-10-17: a tenant with Haiku and Sonnet in its list and a budget for all
+models was charged for both, and refused Opus and a model without prices).
+A quota can only be on a model in the list: **Add a quota for…** shows the
+others as "not in its models", and a model the tenant has a quota on stays
+ticked in **Models** until the quota is removed. A quota from before on a
+model outside the list is marked "not in its models": remove it.
+
 **Tokens and API keys.** Before 0.18 a key was an API key (`sk-...`) that
 every gateway had to list. Now a new key is a token the hub signs, which the
 gateways check against the hub's public keys without listing it. **Keys and

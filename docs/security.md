@@ -32,20 +32,27 @@ controls every LLM cluster. Keep access to the hub namespace small.
 **Narrower credentials.** The tool only needs, in the gateway namespace of each
 LLM cluster: create, get, list, patch and delete on the Envoy Gateway and AI
 gateway resources it manages; create on Secrets plus get, patch and delete on
-the one Secret named `aigw-ui-api-keys`; and get on the `Gateway`. It never
+the one Secret named `aigw-ui-api-keys`; and get on the `Gateway`. In the
+namespaces of the models it serves: the same on `QuotaPolicy` and
+`InferenceObjective`, and list and patch on `AIGatewayRoute`. It never
 lists Secrets. Across the cluster it reads LLMInferenceServices, the
 LLMInferenceServiceConfigs they are built on, the pods of their deployments
 (`kserve.io/component=workload`) and the nodes' labels, to count ready
-instances, find each deployment's GPU and tell what it runs. Without list on
-pods and nodes the instances are still counted, the GPUs are not known, and
-the cluster's discovery message says what was not allowed; without list on
-pods or on the configs, a change of image or of a shared config does not
-mark a measurement stale ([capacity](capacity.md#what-is-measured-each-llminferenceservice)). A ServiceAccount
+instances, find each deployment's GPU and tell what it runs, and gets the
+`Deployment` or `LeaderWorkerSet` each service's status names, for its ready
+count. Without list on pods and nodes the instances are still counted, the
+GPUs are not known, and the cluster's discovery message says what was not
+allowed; without get on the workloads the count KServe copies into the
+service's status is used; without list on pods or on the configs, a change
+of image or of a shared config does not mark a measurement stale
+([capacity](capacity.md#what-is-measured-each-llminferenceservice)). A ServiceAccount
 kubeconfig limited to that would reduce the damage if the hub were
 compromised.
 
 **Capacity measurements** need more, in the namespace of each model that is
-measured: create, get and delete on Jobs, list on Pods and get on `pods/log`.
+measured: create, get and delete on Jobs, list on Pods, get on `pods/log`,
+and get on the model's `InferencePool` for the ports of a pod that serves
+one API server per data-parallel rank.
 That is a step up from writing gateway objects: the hub then runs a workload
 next to the model, and whoever may create Jobs in a namespace can mount any
 Secret of that namespace in one. The Job is described [below](#what-the-tool-can-change-on-an-llm-cluster).
@@ -180,20 +187,40 @@ client ID too. The Tenants page says which tenants still have API keys.
 `x-aigw-tenant`, `x-aigw-key`, `x-aigw-client-id`, `x-aigw-budget` and each
 `x-aigw-quota-<model>` from the token, and on every request it checks it
 first removes a client's own value of each (Envoy's documented
-`claim_to_headers` behaviour; since 1.38 also on requests that skip the
-check): a header holds the token's value or nothing. On the lab a request
+`claim_to_headers` behaviour): a header holds the token's value or nothing.
+Up to Envoy 1.39, which Envoy Gateway 1.9.2 ships (1.39.1), only the
+provider that checks the token removes them; Envoy 1.40.0 removes them on
+every request, also on those that skip the check (runtime flag
+`jwt_authn_sanitize_payload_headers_filter_wide`). With tokens only, the
+gateway checks a token on every request of the client listener, so that
+difference does not open anything there. On the lab a request
 with a forged `x-aigw-tenant` was still refused by its own spent budget
 (2026-10-16). The budget and quota rules read these headers, so this is what
 keeps a tenant to its own counters.
 
 **Defense in depth.** On a listener without the hub's policy nothing removes
 them. The gateway chart's ClientTrafficPolicy already removes a client's
-`x-aigw-client-id` before any check; add `x-aigw-tenant`, `x-aigw-key` and
-`x-aigw-budget` to that list, and, with quotas by amount, each
-`x-aigw-quota-<model>` header (a ClientTrafficPolicy takes names, not a
-prefix). The backends the hub renders for a model server remove all of them
-before the request leaves the gateway; an entry route's backend keeps them,
-since the site it forwards to may count the request by its tenant.
+`x-aigw-client-id` before any check. One entry removes all of them, the
+`x-aigw-quota-<model>` headers of models added later too: a prefix match in
+`earlyRequestHeaders.removeOnMatch` (Envoy Gateway 1.8.5 and 1.9.2):
+
+```yaml
+spec:
+  headers:
+    earlyRequestHeaders:
+      removeOnMatch:
+        - type: Prefix
+          value: x-aigw-
+```
+
+The backends the hub renders for a model server remove the tenant, key,
+client ID and budget headers before the request leaves the gateway. They do
+not remove the `x-aigw-quota-<model>` amounts: an `AIServiceBackend` takes 16
+header names at most and no prefix (AI gateway 1.2.0), and one name per
+model with quotas by amount made every backend invalid from the eleventh
+such model on. An amount says nothing about who sent the request. An entry
+route's backend keeps them all, since the site it forwards to may count the
+request by its tenant.
 
 ## The tenants' own page
 
@@ -291,8 +318,24 @@ secrets has what the account has.
 ## What the tool can change on an LLM cluster
 
 It applies and deletes only objects labelled
-`app.kubernetes.io/managed-by: aigw-ui`, in the gateway namespace you set. The
-label is checked on the hub before any delete.
+`app.kubernetes.io/managed-by: aigw-ui`. The label is checked on the hub
+before any delete. Most are in the gateway namespace you set; some are next
+to what they belong to:
+
+- `QuotaPolicy` objects in the namespace of the model's `AIServiceBackend`,
+  often the model's namespace;
+- the `InferenceObjective` `best-effort` next to each `InferencePool` that
+  serves a model with best-effort on;
+- on `AIGatewayRoute`s a chart owns, it patches the annotation
+  `gateway.envoyproxy.io/aigw-ui-quota-revision` and, for a priced model,
+  adds its credits entry to `spec.llmRequestCosts`. It never deletes them.
+
+It reads, across the cluster, `LLMInferenceService`s and their configs, the
+workload pods, the nodes' labels, the `Deployment` or `LeaderWorkerSet`
+each service's status names, and its `InferencePool`, and in the gateway
+namespace the `Gateway`. Each of these that it may not read only takes away
+what it is for (GPU shapes, ready counts from the workload itself, the rank
+ports of a measurement).
 
 Turning on "Enforce API keys" attaches API key auth to the whole gateway. That
 is the one setting that affects traffic this tool does not otherwise manage.

@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.29.0](v0.29.0.md) | not released yet | Fixes from a review checked against the upstream source: model server backends past ten models with quotas by amount, retry patches for Envoy Gateway 1.10's route names, measurements of data-parallel pods, retry on a site's 500, ready counts from the workload itself, warnings for routes outside the hub's policy; a tenant's models go with its budget or quotas |
 | [0.28.0](v0.28.0.md) | not released yet | The image carries the docs of Envoy AI Gateway, Envoy Gateway, KServe, vLLM and llm-d, shown and searched on the Docs page offline and moved to their newest releases weekly; CI tests a merge once |
 | [0.27.0](v0.27.0.md) | not released yet | All models is a choice in a tenant's quotas, not a card of its own, and strictly one or the other: no quota beside a budget for all models, on a model without prices either |
 | [0.26.0](v0.26.0.md) | not released yet | A model's standard budget is gone: a tenant has what it is given, a budget across models or quotas per model, and a tenant with neither draws from the pool. A budget tenant's use of each model is counted for the Usage page and the history |

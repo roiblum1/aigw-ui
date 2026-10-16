@@ -174,18 +174,19 @@ func taskMessage(res kube.SyncResult, err error) string {
 }
 
 func heldNote(res kube.SyncResult) string {
-	if len(res.Held) == 0 {
+	notes := append(append([]string(nil), res.Held...), res.Warnings...)
+	if len(notes) == 0 {
 		return ""
 	}
-	return " " + strings.Join(res.Held, " ")
+	return " " + strings.Join(notes, " ")
 }
 
 func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, error) {
-	state, err := s.st.RenderState(ctx, id)
+	client, err := s.client(ctx, id)
 	if err != nil {
 		return kube.SyncResult{}, err
 	}
-	client, err := s.client(ctx, id)
+	state, err := s.renderState(ctx, id, client)
 	if err != nil {
 		return kube.SyncResult{}, err
 	}
@@ -203,6 +204,33 @@ func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, e
 	}
 	// Only a sync that applied everything moves the cluster to the revision.
 	return res, s.st.SetFleetRevision(ctx, id, render.FleetRevision(state))
+}
+
+// RenderState returns what a sync of the cluster would render, with what the
+// hub reads from the cluster for it, as syncCluster does.
+func (s *Syncer) RenderState(ctx context.Context, id string) (render.State, error) {
+	client, err := s.client(ctx, id)
+	if err != nil {
+		return render.State{}, err
+	}
+	return s.renderState(ctx, id, client)
+}
+
+// renderState is the cluster's desired state from the store, with the port
+// of its client listener when it has entry routes: the retry patches name
+// the listener's route configuration by it too (render.RouteConfigNames).
+func (s *Syncer) renderState(ctx context.Context, id string, client *kube.Client) (render.State, error) {
+	state, err := s.st.RenderState(ctx, id)
+	if err != nil {
+		return state, err
+	}
+	for _, m := range state.Models {
+		if len(m.Fleet) > 0 {
+			state.ClientPort, err = client.ClientPort(ctx, state.Namespace, state.GatewayName, state.ClientListener)
+			break
+		}
+	}
+	return state, err
 }
 
 func (s *Syncer) Probe(ctx context.Context, id string) (kube.Probe, error) {

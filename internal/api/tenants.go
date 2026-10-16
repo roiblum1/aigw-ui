@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -213,6 +214,17 @@ func (s *Server) upsertQuota(w http.ResponseWriter, r *http.Request) {
 	}
 	if budget {
 		writeError(w, http.StatusConflict, errBudgetOrQuotas.Error()+": this tenant has a budget for all models. Remove it first.")
+		return
+	}
+	// A quota on a model the tenant may not call would never be used: the
+	// gateway refuses the model first (HTTP 403).
+	t, err := s.st.GetTenant(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if t.Models != nil && !slices.Contains(t.Models, b.ModelID) {
+		writeError(w, http.StatusConflict, "this tenant may call only the models in its list, and this model is not one of them: add it to the tenant's models first.")
 		return
 	}
 	// A quota on a model with nothing to attach it to would silently do nothing.

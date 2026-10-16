@@ -88,7 +88,7 @@ func TestRunnerPeer(t *testing.T) {
 	defer server.Close()
 
 	set := Defaults(0)
-	config, _ := json.Marshal(map[string]any{"url": "http://unused", "model": "m", "settings": set, "grace_seconds": 1, "agentic": Agentic(set),
+	config, _ := json.Marshal(map[string]any{"model": "m", "settings": set, "grace_seconds": 1, "agentic": Agentic(set),
 		"metrics_urls": []string{"http://127.0.0.1:1"},
 		"peer": map[string]string{"address": server.Listener.Addr().String(), "sni": "peers.llm.test",
 			"cert": filepath.Join(dir, "tls.crt"), "key": filepath.Join(dir, "tls.key"), "ca": filepath.Join(dir, "ca.crt")}})
@@ -156,7 +156,7 @@ func TestRunnerPeerSteps(t *testing.T) {
 
 	set := Defaults(0)
 	set.MaxConcurrency, set.BisectSteps = 4, 0
-	config, _ := json.Marshal(map[string]any{"url": "http://unused", "model": "m", "settings": set, "grace_seconds": 1, "agentic": Agentic(set),
+	config, _ := json.Marshal(map[string]any{"model": "m", "settings": set, "grace_seconds": 1, "agentic": Agentic(set),
 		"metrics_urls": []string{pods.URL}, "wait_idle_seconds": 0, "settle_seconds": 0, "quiet_seconds": 0.1, "proxy_processes": 2,
 		"peer": map[string]string{"address": gateway.Listener.Addr().String(), "sni": "peers.llm.test",
 			"cert": filepath.Join(dir, "tls.crt"), "key": filepath.Join(dir, "tls.key"), "ca": filepath.Join(dir, "ca.crt")}})
