@@ -161,6 +161,40 @@ still asks nothing. On the lab the rule held tokens of 30,000 credits a day
 and 20,000 an hour to the credit, and a token without a budget was not
 checked (2026-10-16).
 
+### 1,000 tenants on the sandbox hub
+
+2026-10-16, through the sandbox hub and the lab, with 1,000 more tenants
+made through the hub's API, each with a personal key and a budget across
+models (two in three by the hour, one in three by the day); one in five
+held to a list of models, one in ten with an own quota on Opus and one in
+twenty also on Sonnet:
+
+| | 25 tenants | 1,025 tenants | After deleting them |
+|---|---|---|---|
+| p50 without a budget, one / 16 at a time | 37.9 / 37.9 ms | 37.8 / 37.6 ms | |
+| p50 with a budget, one / 16 at a time | 68.8 / 67.5 ms | 69.4 / 68.1 ms | |
+| Budget policy | 629 bytes | 629 bytes | 629 bytes |
+| Token policy (`SecurityPolicy`) | 1.6 KB | 1.6 KB | 1.7 KB |
+| Opus `QuotaPolicy` | 8 rules, 2 KB | 108 rules, 20 KB | 8 rules, 2 KB |
+| Sonnet `QuotaPolicy` | 8 rules, 2 KB | 58 rules, 11 KB | 8 rules, 2 KB |
+| Proxy configuration / memory | 1.3 MB / 27.7 MB | 2.1 MB / 29.3 MB | 1.3 MB / 28.7 MB |
+| A sync of the lab | 8.0 s | 8.0 s | 8.0 s |
+| Hub / Postgres memory | 40 / 46 MiB | 59 / 69 MiB | 55 / 75 MiB |
+
+- **Nothing on the way of a prompt grew.** Only own quotas add rules, one
+  per tenant on that model's `QuotaPolicy`: tenants under the model's
+  standard share its one rule, and budgets and model lists are in the
+  tokens.
+- 3,350 API calls made the tenants in 229 s, eight at a time from another
+  continent; deleting them took 70 s. A token renewal took no longer.
+- Held to the credit at 1,025 tenants: a tenant with $0.05 an hour was
+  refused (429) once it was spent, one held to Haiku and qwen-tiny was
+  refused Opus (403), and one with own quotas was counted on both and on
+  its budget, as the Usage page showed.
+- The token policy grew by 120 bytes after the delete: the tokens that the
+  four sample tenants' personal keys had got are refused by client ID until
+  they expire. Keys that never got a token add nothing.
+
 ## Gateway versions
 
 | | 1.1.0 | 1.2.0 |
@@ -192,6 +226,26 @@ answered. The self-test's step "A long prompt is accepted" checks it.
 The hub reads counters and writes Kubernetes objects. Its load grows with
 the number of tenants, models and clusters, not with the number of
 requests. Redis is read with one `MGET` for all counters.
+
+### The admin pages with 1,000 tenants
+
+On a hub with 1,001 tenants, in a browser over a link like one from
+another continent (170 ms there and back, 3 Mbit/s), before and after
+0.23.0's changes for many tenants:
+
+| | Before | After |
+|---|---|---|
+| The tenants list, opened | 1.19 s, 329 KB | 0.41 s, 44 KB |
+| A tenant's page | 0.55 s | 0.20 s |
+| The same tenant's page again | 0.55 s | at once |
+| The UI, first visit | 1.67 s, 462 KB | 0.81 s, 141 KB |
+
+On the hub itself the tenants list, the models and a tenant's usage took
+about 0.1 s each, because every key count read the whole table of keys; with
+an index on the keys' tenant they take 6, 7 and 13 ms. The answers are
+gzipped (except those with a secret in them), the UI's built files are kept
+by the browser for good, and a page shown before shows at once while it
+loads anew.
 
 ## Not measured
 

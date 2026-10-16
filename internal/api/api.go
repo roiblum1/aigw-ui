@@ -116,7 +116,7 @@ func (s *Server) Handler() http.Handler {
 	root.HandleFunc("POST /api/v1/token", s.renewToken)
 	root.Handle("/api/", s.auth(s.audit(api)))
 	root.HandleFunc("/", s.ui)
-	return securityHeaders(root)
+	return securityHeaders(compress(root))
 }
 
 // securityHeaders asks browsers not to guess a content type, not to show
@@ -151,10 +151,20 @@ func (s *Server) auth(next http.Handler) http.Handler {
 }
 
 // ui serves the built single-page app, falling back to index.html for client routes.
+//
+// The build names every script and style under assets/ after its content,
+// so a browser may keep them for good; index.html, which names the current
+// ones, is asked for again on every load, so a new version shows at once.
 func (s *Server) ui(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Join(s.uiDir, filepath.Clean("/"+r.URL.Path))
+	clean := filepath.Clean("/" + r.URL.Path)
+	path := filepath.Join(s.uiDir, clean)
 	if info, err := os.Stat(path); err != nil || info.IsDir() {
 		path = filepath.Join(s.uiDir, "index.html")
+	}
+	if strings.HasPrefix(clean, "/assets/") && path != filepath.Join(s.uiDir, "index.html") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
 	}
 	http.ServeFile(w, r, path)
 }

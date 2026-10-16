@@ -107,16 +107,10 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	tenants, err := s.st.ListTenants(r.Context())
+	enabled, err := s.st.EnabledTenants(r.Context())
 	if err != nil {
 		fail(w, err)
 		return
-	}
-	enabled := 0
-	for _, t := range tenants {
-		if t.Enabled {
-			enabled++
-		}
 	}
 	snap := market.Current()
 	models := make([]modelOut, len(out))

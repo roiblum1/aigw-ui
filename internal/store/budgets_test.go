@@ -78,6 +78,9 @@ func TestTenantBudgetAndModels(t *testing.T) {
 	if _, err := s.UpdateTenant(ctx, a.ID, "", false); err != nil {
 		t.Fatal(err)
 	}
+	if n, err := s.EnabledTenants(ctx); err != nil || n != 1 {
+		t.Fatalf("enabled tenants = %d, %v; want 1, b", n, err)
+	}
 	if b, err = s.SetTenantModels(ctx, b.ID, []string{}); err != nil || b.Models == nil || len(b.Models) != 0 {
 		t.Fatalf("empty list = %v, %v", b.Models, err)
 	}

@@ -156,6 +156,8 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.changed(r, "key.add", "Created "+keyKind(k.Kind)+" "+k.ClientID)
+	// The secret is in no cache, and is not compressed (see compress).
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, map[string]any{"key": k, "secret": plain})
 }
 

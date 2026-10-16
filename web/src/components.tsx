@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { X, type LucideIcon } from "lucide-react";
-import { Unauthorized, type Unit, type Window } from "./api";
+import { lastLoaded, Unauthorized, type Unit, type Window } from "./api";
 
 export * from "./money";
 
@@ -11,25 +11,38 @@ function report(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Loads data on mount and whenever reload() is called. */
-export function useLoad<T>(load: () => Promise<T>) {
-  const [data, setData] = useState<T | null>(null);
+/**
+ * Loads data on mount and whenever reload() is called. With a key, a page
+ * shown again starts from what the same key loaded last time, so it appears
+ * at once, and is brought up to date by the load that follows.
+ */
+export function useLoad<T>(load: () => Promise<T>, key?: string) {
+  const [data, setData] = useState<T | null>(() => (key !== undefined && lastLoaded.has(key) ? (lastLoaded.get(key) as T) : null));
   const [error, setError] = useState("");
   const loadRef = useRef(load);
   loadRef.current = load;
+  const keyRef = useRef(key);
+  keyRef.current = key;
 
   const reload = useCallback(async () => {
+    const key = keyRef.current;
     try {
-      setData(await loadRef.current());
-      setError("");
+      const value = await loadRef.current();
+      if (key !== undefined) lastLoaded.set(key, value);
+      // An answer for a key the page has since left is kept, not shown.
+      if (key === keyRef.current) {
+        setData(value);
+        setError("");
+      }
     } catch (err) {
-      setError(report(err));
+      if (key === keyRef.current) setError(report(err));
     }
   }, []);
 
   useEffect(() => {
+    if (key !== undefined) setData(lastLoaded.has(key) ? (lastLoaded.get(key) as T) : null);
     reload();
-  }, [reload]);
+  }, [reload, key]);
 
   return { data, error, reload };
 }
