@@ -238,6 +238,16 @@ export default function MyUsage() {
                 </div>
               </section>
             )}
+            {report.models && (
+              <section className="card">
+                <h2>Your models</h2>
+                <p className="hint">
+                  {report.models.length === 0
+                    ? "Your team may call no model: every request is refused (HTTP 403)."
+                    : `Your team may call ${report.models.join(", ")}. A request to any other model is refused (HTTP 403).`}
+                </p>
+              </section>
+            )}
             <section className="card">
               <h2>Your budgets</h2>
               {!report.usage_enabled ? (

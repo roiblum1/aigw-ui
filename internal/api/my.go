@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -156,7 +157,10 @@ type myUsage struct {
 	Budgets      []myBudget `json:"budgets"`
 	// Budget is the tenant's budget across models, nil when it has none.
 	Budget *myTenantBudget `json:"budget"`
-	Prices []myPrice       `json:"prices"`
+	// Models names the models the tenant may call, nil for every model.
+	// Budgets and Prices then cover those only.
+	Models []string  `json:"models"`
+	Prices []myPrice `json:"prices"`
 	// Days is the usage of the last 30 days, Hours of the last 2 days.
 	// Steps in which nothing was used are left out.
 	DaysFrom  time.Time          `json:"days_from"`
@@ -173,6 +177,9 @@ func (s *Server) getMyUsage(w http.ResponseWriter, r *http.Request) {
 	out := myUsage{Tenant: t.Slug, DisplayName: t.DisplayName, At: now, Budgets: []myBudget{}, Prices: []myPrice{},
 		DaysFrom: today.AddDate(0, 0, -29), HoursFrom: today.AddDate(0, 0, -1)}
 
+	// A tenant held to some models is shown a budget or a price on those
+	// only: one on a model it is refused reads as something it can spend.
+	calls := func(modelID string) bool { return t.Models == nil || slices.Contains(t.Models, modelID) }
 	mine := map[string]bool{}
 	if t.Budget != nil {
 		out.Budget = &myTenantBudget{Limit: t.Budget.Credits, Window: t.Budget.Window, ResetsAt: render.WindowEnd(t.Budget.Window, now)}
@@ -191,6 +198,9 @@ func (s *Server) getMyUsage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, q := range rep.Quotas {
+			if !calls(q.ModelID) {
+				continue
+			}
 			mine[q.ModelID] = true
 			out.Budgets = append(out.Budgets, myBudget{
 				ModelName: q.ModelName, Unit: q.Unit, Limit: q.Limit, Window: q.Window, Used: q.Used, ResetsAt: q.ResetsAt,
@@ -216,8 +226,14 @@ func (s *Server) getMyUsage(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	if t.Models != nil {
+		out.Models = []string{}
+	}
 	for _, m := range models {
-		if mine[m.ID] && m.Prices != nil {
+		if t.Models != nil && calls(m.ID) {
+			out.Models = append(out.Models, m.Name)
+		}
+		if mine[m.ID] && calls(m.ID) && m.Prices != nil {
 			out.Prices = append(out.Prices, myPrice{ModelName: m.Name, Input: m.Prices.Input, Cached: m.Prices.Cached, Output: m.Prices.Output})
 		}
 	}

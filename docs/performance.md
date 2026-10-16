@@ -82,6 +82,14 @@ AIPerf 0.13 against the same mock, streaming, gave the same as time to the
 first token: 6.7, 38.7, 39.6 and 71.3 ms at one request at a time; 13, 39, 39
 and 70 ms at sixteen.
 
+The same once the sandbox hub ran 0.22.1 and rendered the policies itself,
+on the lab's client listener, between a tenant with a quota on the model and
+one with the same quota and a budget across models: 38 and 69 ms at p50 one
+at a time, 37.6 and 68.4 ms at sixteen (1,500 requests each, two rounds);
+AIPerf time to the first token 40 and 71 ms, and 39.5 and 69.4 ms at
+sixteen, with no error in 6,400 requests. A tenant without a budget pays
+nothing for the policy.
+
 - **Each check is one round trip to Redis, in series.** The quota's rate
   limit filter and the budget's run one after the other, and each asks Redis
   before the request goes on. The charge after the answer is sent once the

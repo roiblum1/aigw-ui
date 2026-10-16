@@ -283,7 +283,10 @@ refused all the same.
   Until then the tenant's page says it is not enforced.
 - A new amount holds what the tenant already used in the running period; a
   new period length starts a new count. Another tenant's budget coming or
-  going changes nothing for this one.
+  going changes nothing for this one. A budget removed and set again in the
+  same period usually comes back with what was used: the tenant gets its old
+  position back unless another tenant took it in between. To give a tenant
+  more, raise the amount.
 - A request is charged once its answer is complete, so a tenant can go
   past its budget by the requests in flight when it is reached, and an
   answer that has started is never cut off.
@@ -473,6 +476,7 @@ keys. The sign-in page of the hub links to it.
 | Section | Shows |
 |---|---|
 | Your budget across models | The tenant's budget across every priced model, when it has one: what is used and left, when the next period starts, and whether a gateway holds the tenant to it |
+| Your models | The models the tenant may call, when it is held to some; the budgets and prices below are of those only |
 | Your budgets | For each model the tenant has a budget on: what is used and left in the running period, when the next period starts, and whether its requests are served as best-effort or refused |
 | Usage over time | Its usage per day for 30 days, or per hour for 2 days, by model |
 | Prices | What a million input, cached input and output tokens cost on its priced models |

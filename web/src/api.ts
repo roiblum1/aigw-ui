@@ -784,6 +784,8 @@ export interface MyUsage {
   usage_enabled: boolean;
   budgets: MyBudget[];
   budget: MyTenantBudget | null;
+  /** The models the tenant may call, null for every model. */
+  models: string[] | null;
   /** Credits for a million tokens. */
   prices: { model_name: string; price_input: number; price_cached: number; price_output: number }[];
   days_from: string;

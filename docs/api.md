@@ -214,15 +214,19 @@ and 404 when `config.tenantPage` is off.
      "used": 3184, "resets_at": "2026-10-10T18:00:00Z", "enforced": true,
      "best_effort_used": 0}
   ],
+  "budget": null,
+  "models": null,
   "prices": [{"model_name": "GLM5.3", "price_input": 11574, "price_cached": 1157, "price_output": 46296}],
   "days_from": "2026-09-11T00:00:00Z", "days": [ ... ],
   "hours_from": "2026-10-09T00:00:00Z", "hours": [ ... ]
 }
 ```
 
-`enforced` is `false` for a dry-run budget. `days` and `hours` are points
-as in the history above, for this tenant only. Prices are in credits for a
-million tokens.
+`enforced` is `false` for a dry-run budget. `budget` is the tenant's budget
+across models, or `null`. `models` names the models the tenant may call, or
+is `null` for every model; with a list, `budgets` and `prices` cover those
+models only. `days` and `hours` are points as in the history above, for this
+tenant only. Prices are in credits for a million tokens.
 
 A reset deletes the counter of the current window, on every cluster that
 shares it. The limit and the window do not change, and the window still ends
