@@ -144,6 +144,10 @@ type Claims struct {
 	// Models are the models the tenant may call, when it is held to some;
 	// an empty list refuses every model. Absent: every model.
 	Models *[]string `json:"models,omitempty"`
+	// Quotas names, by model slug, the amount of each own quota the tenant
+	// had on a model when the token was signed ("500000-1h"): the gateway
+	// copies it to a header that picks the model's rule for that amount.
+	Quotas map[string]string `json:"quotas,omitempty"`
 }
 
 type header struct {

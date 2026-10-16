@@ -225,6 +225,13 @@ func (s *Store) UpsertQuota(ctx context.Context, tenantID, modelID string, limit
 			     ON CONFLICT (tenant_id, model_id) DO UPDATE SET token_limit = EXCLUDED.token_limit, window_size = EXCLUDED.window_size,
 			         shadow = COALESCE($5::boolean, quotas.shadow)
 			     RETURNING token_limit, window_size, shadow
+			 ), changed AS (
+			     SELECT 1 FROM saved s LEFT JOIN before b ON true
+			     WHERE (s.token_limit, s.window_size, s.shadow) IS DISTINCT FROM (b.token_limit, b.window_size, b.shadow)
+			 ), marked AS (
+			     -- The tenant's tokens name the amount of each own quota:
+			     -- those signed before carry the old one.
+			     UPDATE tenants SET limits_changed_at = now() WHERE id = $1 AND EXISTS (SELECT 1 FROM changed)
 			 )
 			 -- A quota that changed is a new budget: the tenant is judged
 			 -- against it from the start. Saving it unchanged moves nobody.
@@ -233,8 +240,9 @@ func (s *Store) UpsertQuota(ctx context.Context, tenantID, modelID string, limit
 			   AND EXISTS (SELECT 1 FROM saved s, before b
 			               WHERE (s.token_limit, s.window_size, s.shadow) IS DISTINCT FROM (b.token_limit, b.window_size, b.shadow))`,
 			tenantID, modelID, limit, window, shadow)
+		// The amount's position is picked the same way (quota_amounts).
 		var pg *pgconn.PgError
-		if !errors.As(err, &pg) || pg.ConstraintName != "quotas_model_slot" {
+		if !errors.As(err, &pg) || (pg.ConstraintName != "quotas_model_slot" && pg.ConstraintName != "quota_amounts_pkey") {
 			break
 		}
 	}
@@ -252,6 +260,8 @@ func (s *Store) DeleteQuota(ctx context.Context, id string) (string, error) {
 		 ), ended AS (
 		     UPDATE overage o SET until = now() FROM gone
 		     WHERE o.tenant_id = gone.tenant_id AND o.model_id = gone.model_id AND o.until > now()
+		 ), marked AS (
+		     UPDATE tenants t SET limits_changed_at = now() FROM gone WHERE t.id = gone.tenant_id
 		 )
 		 SELECT label FROM gone`, id).Scan(&label)
 	return label, mapErr(err)

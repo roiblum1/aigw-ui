@@ -129,4 +129,27 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	if _, err := c.dyn.Resource(btp).Namespace(ns).Get(ctx, render.BudgetPolicyName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("no budgets, yet the policy is there: %v", err)
 	}
+
+	// Own quotas by amount: the rule matches the amount's header exactly and
+	// counts each tenant on its own, and the token provider copies the
+	// amount from a nested claim, both as the CRDs take them.
+	s.Models[0].ByAmount = true
+	s.Models[0].Amounts = []render.QuotaAmount{{Slot: 0, Limit: 500, Window: "1d"}}
+	if _, err := c.Sync(ctx, ns, render.Objects(s), nil); err != nil {
+		t.Fatalf("by amount: the API server refused a rendered object: %v", err)
+	}
+	if q, err = c.dyn.Resource(qp).Namespace(ns).Get(ctx, "glm-5-3", metav1.GetOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	quotas, _, _ = unstructured.NestedSlice(q.Object, "spec", "perModelQuotas")
+	rules = quotas[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
+	if len(rules) != 2 || fmt.Sprint(rules[1]) != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-quota-glm-5-3 type:Exact value:500-1d] map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:500]]" {
+		t.Fatalf("rules by amount: %v", rules)
+	}
+	if live, err = c.dyn.Resource(pol).Namespace(ns).Get(ctx, render.AuthPolicyName, metav1.GetOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fmt.Sprint(live.Object["spec"]), "map[claim:quotas.glm-5-3 header:x-aigw-quota-glm-5-3]") {
+		t.Fatalf("the token provider does not copy the amount: %v", live.Object["spec"])
+	}
 }

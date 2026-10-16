@@ -113,6 +113,9 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 	if err := rows.Err(); err != nil {
 		return st, err
 	}
+	if err := s.addQuotaAmounts(ctx, &st, index); err != nil {
+		return st, err
+	}
 	if !withKeys {
 		return st, nil
 	}
@@ -138,6 +141,34 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 		st.Keys = append(st.Keys, render.Key{ClientID: clientID, Value: string(plain)})
 	}
 	return st, rows.Err()
+}
+
+// addQuotaAmounts renders the tenants' own quotas by amount while the
+// gateway takes tokens only: the token names the tenant's amount, through a
+// header only a token sets. Until then each tenant keeps a rule of its own.
+func (s *Store) addQuotaAmounts(ctx context.Context, st *render.State, index map[string]int) error {
+	if !tokensOnly(*st) {
+		return nil
+	}
+	for i := range st.Models {
+		st.Models[i].ByAmount = true
+	}
+	rows, err := s.db.Query(ctx, `SELECT model_id, slot, token_limit, window_size, shadow FROM quota_amounts ORDER BY model_id, slot`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var modelID string
+		var a render.QuotaAmount
+		if err := rows.Scan(&modelID, &a.Slot, &a.Limit, &a.Window, &a.Shadow); err != nil {
+			return err
+		}
+		if i, ok := index[modelID]; ok {
+			st.Models[i].Amounts = append(st.Models[i].Amounts, a)
+		}
+	}
+	return rows.Err()
 }
 
 // renderedStandard is a model's standard as the gateway gets it: only while

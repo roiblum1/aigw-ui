@@ -185,7 +185,9 @@ func (s *Server) deleteModel(w http.ResponseWriter, r *http.Request) {
 
 // ruleCounts is how many bucket rules a model's QuotaPolicy has, how many it
 // would have with a rule for each of the enabled tenants in place of its
-// standard, and why its standard is not rendered, if it is not.
+// standard and its amounts, and why its standard is not rendered, if it is
+// not. Once the gateways take tokens only, the tenants' own quotas take a
+// rule per amount instead of one each.
 func ruleCounts(m store.Model, mode string, enabled int) (now, perTenant int, held string) {
 	rm := render.Model{}
 	for i := 0; i < m.QuotaRules; i++ {
@@ -199,5 +201,13 @@ func ruleCounts(m store.Model, mode string, enabled int) (now, perTenant int, he
 		}
 	}
 	now, perTenant = render.RuleCount(rm, enabled)
+	if mode == render.IdentityTokens {
+		rm.ByAmount = true
+		for i := 0; i < m.QuotaAmounts; i++ {
+			rm.Amounts = append(rm.Amounts, render.QuotaAmount{Slot: i, Limit: 1, Window: "1d"})
+		}
+		perTenant = max(perTenant, now)
+		now, _ = render.RuleCount(rm, enabled)
+	}
 	return now, perTenant, held
 }

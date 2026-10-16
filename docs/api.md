@@ -317,7 +317,7 @@ gateway URL send `"gateway_url": ""`; that removes the token too.
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| GET | `/models` | | List with endpoints. `standard` is the budget every tenant has on the model (`{"limit", "window"}`, in its unit) or `null`; `standard_next` a change that starts at `at`; `rules` the bucket rules of its QuotaPolicy and `rules_per_tenant` how many a rule per enabled tenant would take instead of the standard; `standard_held` why a standard is not rendered |
+| GET | `/models` | | List with endpoints. `standard` is the budget every tenant has on the model (`{"limit", "window"}`, in its unit) or `null`; `standard_next` a change that starts at `at`; `rules` the bucket rules of its QuotaPolicy and `rules_per_tenant` how many a rule per enabled tenant would take instead of the standard and the amounts; `quota_rules` the positions the tenants' own quotas take while API keys are taken, `quota_amounts` the positions their amounts take with tokens only; `standard_held` why a standard is not rendered |
 | POST | `/models` | model | `{"id": "..."}` |
 | PUT | `/models/{id}` | model; `name` is ignored, fields left out keep their stored value | `{"id": "..."}` |
 | DELETE | `/models/{id}` | | 204 |
@@ -466,7 +466,7 @@ be given; and what is left to give under its overcommit limit
 | DELETE | `/keys/{id}` | | 204, key revoked; a token is refused by every gateway after its next sync, until it expires |
 | GET | `/signing-keys` | | `{"keys": [{"id", "created_at", "retired_at", "tokens"}], "identity", "issuer", "audience", "lifetime_days", "denied"}`. `identity` is `keys` (API keys only, no token issued), `both` or `tokens`; `tokens` of a key counts the unrevoked tokens it signed that have not expired |
 | POST | `/signing-keys/rotate` | | `{"id"}` of the new signing key |
-| PUT | `/tenants/{id}/quotas` | `{"model_id", "token_limit", "window", "shadow"}` | The tenant's quotas |
+| PUT | `/tenants/{id}/quotas` | `{"model_id", "token_limit", "window", "shadow"}` | The tenant's quotas. With tokens only, the amount travels in the tenant's tokens (claim `quotas`, by model slug): the tokens signed from now on carry it, and the tenant's `limits_changed_at` moves |
 | DELETE | `/quotas/{id}` | | 204 |
 
 `window` is `1m`, `1h` or `1d`. `PUT .../quotas` creates the quota or replaces

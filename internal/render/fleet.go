@@ -135,7 +135,9 @@ func fleetBackend(s State, m Model) *unstructured.Unstructured {
 func fleetServiceBackend(s State, m Model, name, objective string) *unstructured.Unstructured {
 	u := object(aigwAPI, "AIServiceBackend", s.Namespace, name)
 	spec := serviceBackendSpec(FleetName(m.Slug))
-	if h := backendHeaders(s, objective); h != nil {
+	// It goes to the sites' gateways, which may count the request by its
+	// tenant too: their headers stay.
+	if h := backendHeaders(s, objective, false); h != nil {
 		spec["headerMutation"] = h
 	}
 	u.Object["spec"] = spec

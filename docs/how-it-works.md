@@ -641,9 +641,12 @@ tokens are counted where the Usage page reads them".
 **What it does.** Limits the tokens a tenant may use on a model per second,
 minute, hour or day. A *dry run* quota counts and never refuses.
 
-**How.** One rule per tenant in the model's `QuotaPolicy`. The rule matches
-every client ID of the tenant, so all its keys draw from one bucket. The
-gateway's rate limit service counts in Redis.
+**How.** While API keys are taken, one rule per tenant in the model's
+`QuotaPolicy`. The rule matches every client ID of the tenant, so all its
+keys draw from one bucket. With tokens only, one rule per amount: the token
+names the tenant's amount on the model, the gateway copies it to a header
+only a token can set, and the amount's rule counts each of its tenants on
+its own. The gateway's rate limit service counts in Redis.
 
 **Why.**
 
@@ -652,6 +655,14 @@ gateway's rate limit service counts in Redis.
 - *A rule keeps its position for life.* The position is part of the
   counter's name. If rules moved up when one is removed, other tenants'
   counters would restart. A removed rule leaves a placeholder.
+- *A rule per amount, not per tenant, with tokens.* The `QuotaPolicy` is
+  checked on every request of the model and goes into every route of it; a
+  rule per tenant grew it by one rule for every tenant with an own quota (a
+  hundred own quotas made 108 rules, 20 KB, on the sandbox). By amount it
+  grows with the amounts in use, and a tenant's change is in its next
+  token, not in the gateways' objects. The gateway cannot take a quota's
+  limit from a token (the `QuotaPolicy` matches headers only), so the
+  token picks the rule instead.
 
 ## Usage
 

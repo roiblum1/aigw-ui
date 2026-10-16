@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ func TestSignVerify(t *testing.T) {
 		t.Fatal("LooksLike")
 	}
 	c, err := Verify(tok, keys, "aigw-ui", "aigw-fleet", now)
-	if err != nil || c != claims(time.Hour) {
+	if err != nil || !reflect.DeepEqual(c, claims(time.Hour)) {
 		t.Fatalf("verify: %+v %v", c, err)
 	}
 

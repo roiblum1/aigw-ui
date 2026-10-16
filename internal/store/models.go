@@ -71,6 +71,24 @@ func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	rows, err = s.db.Query(ctx, `SELECT model_id, max(slot) + 1 FROM quota_amounts GROUP BY model_id`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if m := byID[id]; m != nil {
+			m.QuotaAmounts = n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	annotations, err := s.marketAnnotations(ctx)
 	if err != nil {
 		return nil, err

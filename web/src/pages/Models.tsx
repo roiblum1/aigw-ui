@@ -358,10 +358,18 @@ function StandardLine({ model: m }: { model: Model }) {
         </div>
       )}
       {m.standard_held && <div className="detail warn-text">Standard not in effect: {m.standard_held}.</div>}
+      {m.unit === "credits" && !m.standard && !next?.standard && (
+        <div
+          className="detail warn-text"
+          title="A tenant without a quota of its own on this model has no budget of its own here: it draws from the model's pool, which every tenant shares. A standard gives each tenant its own budget, in one rule for all."
+        >
+          No standard: tenants without a quota of their own share the pool.
+        </div>
+      )}
       {(m.rules > 0 || m.rules_per_tenant > 0) && (
         <div
           className="detail"
-          title="Bucket rules in the model's QuotaPolicy on each gateway. Every rule is checked for every request."
+          title="Bucket rules in the model's QuotaPolicy on each gateway. Every rule is checked for every request. With tokens only, tenants with the same quota of their own share one rule."
         >
           {m.rules} {m.rules === 1 ? "rule" : "rules"}
           {m.rules_per_tenant > m.rules && `, ${m.rules_per_tenant} with a rule per tenant`}
