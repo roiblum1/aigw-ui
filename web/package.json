@@ -10,6 +10,7 @@
     "lint": "oxlint --react-plugin -A all -D react/rules-of-hooks --deny-warnings src"
   },
   "dependencies": {
+    "dompurify": "^3.4.17",
     "lucide-react": "^1.52.0",
     "marked": "^18.1.0",
     "react": "^19.3.0",

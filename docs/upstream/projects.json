@@ -1,0 +1,69 @@
+{
+  "projects": [
+    {
+      "id": "envoy-ai-gateway",
+      "name": "Envoy AI Gateway",
+      "repo": "envoyproxy/ai-gateway",
+      "site": "https://aigateway.envoyproxy.io",
+      "track": "release",
+      "roots": [
+        "site/versioned_docs/version-{minor}"
+      ],
+      "static": "site/static",
+      "ref": "v1.2.0",
+      "version": "v1.2.0"
+    },
+    {
+      "id": "envoy-gateway",
+      "name": "Envoy Gateway",
+      "repo": "envoyproxy/gateway",
+      "site": "https://gateway.envoyproxy.io",
+      "track": "release",
+      "roots": [
+        "site/content/en/v{minor}"
+      ],
+      "static": "site/static",
+      "ref": "v1.9.2",
+      "version": "v1.9.2"
+    },
+    {
+      "id": "kserve",
+      "name": "KServe",
+      "repo": "kserve/website",
+      "site": "https://kserve.github.io/website",
+      "track": "branch",
+      "versions": "versions.json",
+      "roots": [
+        "versioned_docs/version-{version}"
+      ],
+      "static": "static",
+      "ref": "83bfee627b0ddb6b424e311c9fd1742c4591df84",
+      "version": "0.20"
+    },
+    {
+      "id": "vllm",
+      "name": "vLLM",
+      "repo": "vllm-project/vllm",
+      "site": "https://docs.vllm.ai/en/latest",
+      "track": "release",
+      "roots": [
+        "docs"
+      ],
+      "ref": "v0.31.0",
+      "version": "v0.31.0"
+    },
+    {
+      "id": "llm-d",
+      "name": "llm-d",
+      "repo": "llm-d/llm-d",
+      "site": "https://llm-d.ai",
+      "track": "release",
+      "roots": [
+        "docs",
+        "guides"
+      ],
+      "ref": "v0.10.0",
+      "version": "v0.10.0"
+    }
+  ]
+}

@@ -22,6 +22,9 @@ type Server struct {
 	sy         *syncer.Syncer
 	adminToken string
 	uiDir      string
+	// upstreamDir holds the upstream projects' documentation; see upstream.go.
+	upstreamDir string
+	upstream    upstreamCorpus
 	// usage is nil when no Redis is configured.
 	usage    *usage.Service
 	selftest *selftest.Runner
@@ -44,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/docs/platform-architecture", s.platformArchitecture)
 	api.HandleFunc("GET /api/v1/docs", s.listDocs)
 	api.HandleFunc("GET /api/v1/docs/text/{name...}", s.readDoc)
+	api.HandleFunc("GET /api/v1/docs/search", s.searchDocs)
 	api.HandleFunc("GET /api/v1/usage", s.getUsage)
 	api.HandleFunc("GET /api/v1/usage/history", s.usageHistory)
 	api.HandleFunc("POST /api/v1/tenants/{id}/quotas/{model_id}/reset", s.resetUsage)
@@ -113,6 +117,7 @@ func (s *Server) Handler() http.Handler {
 	// A new token for a personal key, which a user's helper asks for.
 	root.HandleFunc("POST /api/v1/token", s.renewToken)
 	root.Handle("/api/", s.auth(s.audit(api)))
+	root.HandleFunc("GET /upstream-docs/", s.upstreamDocs)
 	root.HandleFunc("/", s.ui)
 	return securityHeaders(compress(root))
 }

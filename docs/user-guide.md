@@ -503,6 +503,18 @@ is running. Start with *What each action does, and why*: it goes through
 every action in the UI and says what happens, how the server does it and why
 it was built that way. Links between documents stay inside the page.
 
+**Upstream** holds the documentation of the projects the platform is built
+on, as the image carries it, so it can be read where there is no internet:
+Envoy AI Gateway, Envoy Gateway, KServe, vLLM and llm-d, each at the version
+it names, in its own folders. A line above each page says where it comes
+from, with its license. Links to the project's other pages stay inside the
+page; any other link opens the project's site or GitHub in a new tab.
+
+**Filter titles** above the list narrows it to the titles that have the
+text, ours and upstream; **Enter** searches the text of every document
+instead, and lists the ones that have it, the ones with it in their title
+first.
+
 ## Usage
 
 The **Usage** page shows, for every tenant quota, how many tokens were used in
