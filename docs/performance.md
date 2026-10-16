@@ -118,6 +118,35 @@ One model with a quota for 201 tenants, which is 201 rules in its
 
 The number of tenants does not change much.
 
+Budgets across models, 2026-10-16, on the lab with a listener of 10 routes,
+a mock model on a route without a quota, and the shared Redis about 33 ms
+away. The tenant measured had the last rule; p50 in ms:
+
+| Tenants with a budget | With a budget | Without | Without, 64 at a time | Routes on the listener | A change in the proxy after |
+|---|---|---|---|---|---|
+| 4 | 37.4 | 4.4 | 883 a second | 181 KB | 3 s |
+| 64 | 37.2 | 4.5 | 899 a second | 891 KB | 6 s |
+| 128 | 37.4 | 4.3 | 1,040 a second | 1.7 MB | 8.5 s |
+| 256 | 37.5 | 4.7 | 882 a second | 3.2 MB | 11 to 19 s |
+| One `Distinct` rule for all | 37.0 | (every tenant has it) | | 142 KB | 2.5 s |
+
+- **A request takes as long with 256 tenants as with 4.** Envoy checks the
+  tenant header against every rule of the route, which costs nothing
+  measurable here; only the rule that matches asks Redis. A tenant without a
+  budget asks nothing.
+- **The configuration grows with the tenants:** about 1.2 KB per tenant per
+  route, as Envoy's configuration dump counts it (7.3 MB of it in all at 256
+  tenants, from 1.4 MB). The proxy's memory grew by 5 MB. Envoy Gateway and
+  the AI gateway's controller logged no error up to 256.
+- **A change takes longer to reach the proxy**, any change of the gateway
+  and not only a budget's: 3 s with 4 tenants, 11 to 19 s with 256.
+- **One `Distinct` rule for every tenant** stays at 142 KB and 2.5 s, at the
+  same 37 ms per request, but gives every tenant the same amount and makes
+  every tenant pay the round trip.
+- Not measured: the size of the extension message itself (the dump is JSON;
+  the message is protobuf and smaller), and per-model quotas with as many
+  tenants, which put their rules on that model's routes only.
+
 ## Gateway versions
 
 | | 1.1.0 | 1.2.0 |

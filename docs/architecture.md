@@ -195,10 +195,15 @@ limit (`maxItems` in the CRD of 1.9.1 and 1.9.2), so 256 tenants can have a
 budget; the hub refuses the next one (409) rather than render a policy the
 API server would refuse with the whole sync. And Envoy Gateway writes every
 rule into every route of the listener, twice (the check before the request
-and the charge after it): about 1.25 KB per tenant per route, measured on the
-lab. 256 tenants on 7 routes are about 2.2 MB of route configuration, sent
-to every proxy on any budget change and to the AI gateway's controller in the
-extension message, which is capped at 4 MB by default. Past a few hundred
+and the charge after it): about 1.2 KB per tenant per route in the proxy's
+configuration. On the lab, from 4 to 256 tenants on a listener of 10 routes,
+the time a request takes did not change, with a budget or without one: the
+rules that match another tenant cost nothing measurable. What grows is the
+configuration (3.2 MB of routes at 256), and with it the time a change takes
+to reach the proxy: 3 s with 4 tenants, 11 to 19 s with 256 (see
+[performance](performance.md#many-tenants)). That configuration also goes to
+the AI gateway's controller in the extension message, capped at 4 MB by
+default; 256 tenants on 10 routes stayed under it. Past a few hundred
 tenants, or with many routes on the client listener, the way on is one rule
 per amount instead of per tenant, with a `Distinct` match on the tenant
 (tiers): its size does not grow with the tenants.
