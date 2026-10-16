@@ -12,9 +12,10 @@ func modelRoute(namespace, name string, m Model) *unstructured.Unstructured {
 }
 
 // routeSpec adds to the spec of a model's route what every route of the
-// model carries: for a priced model, the cost of a request in credits.
+// model carries: for a priced model, the cost of a request in credits,
+// unless its prices are in a dry run.
 func routeSpec(m Model, spec map[string]any) map[string]any {
-	if m.Priced && m.CostExpression != "" {
+	if m.chargesBudgets() {
 		spec["llmRequestCosts"] = creditsCost(m)
 	}
 	return spec

@@ -127,43 +127,88 @@ the names are yours.
 ## A budget across models
 
 A tenant's budget across every priced model is enforced by the gateways, not
-by the hub (`internal/render/budget.go`), since 0.22.0:
+by the hub (`internal/render/budget.go`), since 0.22.0. The hub only writes
+the amounts into manifests; while it is down every gateway keeps enforcing
+what it last applied.
 
 1. Every route of a priced model carries `llmRequestCosts` with the key
    `aigw_ui_credits`: the model's price expression, which the AI gateway
    evaluates on each answer and writes to the request's dynamic metadata
-   under `io.envoy.ai_gateway`. The hub writes it on the routes it renders;
-   on a route a cluster's own chart renders it is put there by the sync,
-   next to the quota revision, from the annotation
-   `aigw-ui.io/credits-expression` of the model's `QuotaPolicy`. Other
-   costs the route has stay.
+   under `io.envoy.ai_gateway`. Cached input tokens are charged at the cached
+   price on the OpenAI path and on the Anthropic path (the latter needs the
+   gateway's patch `0002`; stock AI Gateway 1.2.0 reports no cached tokens
+   there and charges them as input). The hub writes the expression on the
+   routes it renders; on a route a cluster's own chart renders it is put
+   there by the sync, next to the quota revision, from the annotations
+   `aigw-ui.io/credits-expression` and `aigw-ui.io/credits-model` of the
+   model's `QuotaPolicy`. A route of the cluster's own that serves several
+   priced models gets one expression that charges each model its prices
+   (`model == 'a' ? (…) : model == 'b' ? (…) : 0u`). Other costs the route has
+   stay. A model whose prices are in a dry run writes no cost: it refuses
+   nobody for them.
 2. One `BackendTrafficPolicy`, `aigw-ui-tenant-budgets`, on the client
-   listener: a global rate limit with one rule per tenant that has a
-   budget, in slug order, matching `x-aigw-tenant` exactly, `shared: true`,
-   the amount in credits for the window, a request cost of 0 and a response
-   cost from that metadata. Shared makes it one bucket across every route of
-   the listener; without it Envoy Gateway keys the bucket by route, which is
-   by model (seen on the lab, 2026-10-16).
-3. Envoy Gateway's global rate limit service charges the bucket when the
-   stream ends and refuses the next request once it is spent (HTTP 429).
-   The counter's key holds the policy's namespace and name and the rule's
-   position, and nothing of the cluster, so every cluster that renders the
-   same policy counts in the same key of the Redis the gateways share (on
-   the lab, the sandbox hub's; in production, one Redis of its own)
-   (`render.BudgetCounters`; the Usage page and the tenants' own page read
-   it).
+   listener: a global rate limit with one rule per tenant that has a budget,
+   `shared: true`, the amount in credits for the window, a request cost of 0
+   and a response cost from that metadata. Shared makes it one bucket across
+   every route of the listener; without it Envoy Gateway keys the bucket by
+   route, which is by model (seen on the lab, 2026-10-16).
+3. Each tenant's rule sits at a fixed position (`tenants.budget_slot`, the
+   lowest free one when the budget is set, kept while it exists), and a
+   position nobody holds is a placeholder rule that matches no tenant. The
+   rule matches `x-aigw-tenant` twice: `Exact` to select the tenant, and
+   `Distinct` to put the tenant into the counter's name. The counter's name
+   is the policy, the rule's position, the tenant and the window start
+   (`render.BudgetCounters`), and nothing of the cluster, so every cluster
+   that renders the same policy counts in the same key of the Redis the
+   gateways share. Ordered by slug, as 0.22.0 rendered them, a tenant added
+   before others moved each later one onto its neighbour's counter; on the
+   lab a tenant's first request ever was refused with another tenant's spend.
+4. The policy is merged with the policy of each entry and best-effort route
+   (`mergeType: StrategicMerge` on those). A policy on a route otherwise
+   replaces the listener's on that route: Envoy Gateway reports the budget
+   policy `Overridden`, and every request through an entry route went
+   uncharged (lab, 2026-10-16). The sync reports `Overridden` as a rejection
+   with Envoy Gateway's message, which names the routes; a chart's own route
+   with its own `BackendTrafficPolicy` needs the same `mergeType`.
+5. Envoy Gateway's global rate limit service asks Redis before each request
+   whether the bucket has room, and charges it when the stream ends. Once it
+   is spent the next request is refused (HTTP 429) on every route of the
+   listener, priced or not. The request that spends it is answered in full,
+   so a tenant can end one request over its amount, more with requests in
+   parallel.
 
 It needs tokens only, as a standard does: the rule reads the tenant header.
 And it needs global rate limiting enabled in the Envoy Gateway configuration
 of every cluster, with the shared Redis and a timeout that reaches it (the
 default of 20 ms does not across a network: every call is cancelled and the
-request passes). The sync reports the policy's `Accepted` condition; the
-self-test checks the whole path.
+request passes). The self-test checks the whole path.
+
+What it costs per request is one round trip to that Redis, in series with
+the per-model quota's: measured on the lab with a mock model, 4 ms through
+the gateway alone, 37 ms with either the budget or the quota, 69 ms with
+both, for a Redis about 33 ms away; the model rule adds nothing measurable.
+Up to 1,700 requests a second the rate limit services kept that pace. So the
+Redis belongs near the gateways (see [deployment](deployment.md)).
+
+How far it scales. Envoy Gateway takes at most 256 rules in one global rate
+limit (`maxItems` in the CRD of 1.9.1 and 1.9.2), so 256 tenants can have a
+budget; the hub refuses the next one (409) rather than render a policy the
+API server would refuse with the whole sync. And Envoy Gateway writes every
+rule into every route of the listener, twice (the check before the request
+and the charge after it): about 1.25 KB per tenant per route, measured on the
+lab. 256 tenants on 7 routes are about 2.2 MB of route configuration, sent
+to every proxy on any budget change and to the AI gateway's controller in the
+extension message, which is capped at 4 MB by default. Past a few hundred
+tenants, or with many routes on the client listener, the way on is one rule
+per amount instead of per tenant, with a `Distinct` match on the tenant
+(tiers): its size does not grow with the tenants.
 
 A tenant held to some models gets one `Deny` rule in the `SecurityPolicy`,
 a CEL expression on the tenant header and `x-ai-eg-model`, which the AI
 gateway sets from the request body before the authorization filter runs. A
-model not in the list is refused with 403 before any quota is asked.
+model not in the list is refused with 403 before any quota is asked. `GET
+/v1/models` is answered by the AI gateway itself and is not refused; it lists
+every model.
 
 ## Task log
 
@@ -654,7 +699,7 @@ removed.
   `AIServiceBackend` as `aigateway.envoyproxy.io/v1beta1`, and `QuotaPolicy`
   as `v1alpha1`, the only version it has. Up to 0.11.0 it wrote all three as
   `v1alpha1`, which both gateway versions still serve but call deprecated.
-- For quotas: the dedicated quota rate limit service, pointed at the hub Redis. The AI gateway Helm chart does not deploy it.
+- For quotas: the dedicated quota rate limit service, pointed at the Redis the gateways share (not on the hub in production). The AI gateway Helm chart does not deploy it.
 - For budgets across models: global rate limiting in the Envoy Gateway
   configuration (`rateLimit.backend` with the shared Redis and `timeout` of a
   few seconds); Envoy Gateway then runs its own rate limit service next to

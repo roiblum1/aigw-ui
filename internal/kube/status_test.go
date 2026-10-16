@@ -1,6 +1,7 @@
 package kube
 
 import (
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -29,6 +30,25 @@ func TestPatchVerdict(t *testing.T) {
 	} {
 		if got, _ := patchVerdict(tc.policy, "Programmed"); got != tc.verdict {
 			t.Errorf("%s: verdict %q, want %q", name, got, tc.verdict)
+		}
+	}
+
+	// The tenants' budget policy as Envoy Gateway 1.9.2 reported it while a
+	// fleet entry route had a policy of its own (lab, 2026-10-16).
+	for name, tc := range map[string]struct {
+		policy  *unstructured.Unstructured
+		verdict string
+	}{
+		"accepted":   {policy(cond("Accepted", "True", "Policy has been accepted.")), "Accepted"},
+		"merged":     {policy(cond("Accepted", "True", ""), cond("Merged", "True", "This policy is being merged by other backendTrafficPolicies")), "Accepted"},
+		"overridden": {policy(cond("Accepted", "True", ""), cond("Overridden", "True", "This policy is being overridden by other backendTrafficPolicies for these routes: [ns/fleet-m]")), "Overridden"},
+	} {
+		got, message := patchVerdict(tc.policy, "Accepted")
+		if got != tc.verdict {
+			t.Errorf("%s: verdict %q, want %q", name, got, tc.verdict)
+		}
+		if got == "Overridden" && !strings.Contains(message, "fleet-m") {
+			t.Errorf("%s: message %q does not name the route", name, message)
 		}
 	}
 }

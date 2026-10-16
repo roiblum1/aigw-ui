@@ -229,7 +229,7 @@ export default function MyUsage() {
                     ) : (
                       report.budget.used >= report.budget.limit && (
                         <p className="detail">
-                          <span className="tag warn">spent</span> Your budget is spent. Requests to every priced model are
+                          <span className="tag warn">spent</span> Your budget is spent. Requests to every model are
                           refused until the new {windowLabel[report.budget.window]}.
                         </p>
                       )

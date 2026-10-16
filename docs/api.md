@@ -453,7 +453,7 @@ be given; and what is left to give under its overcommit limit
 | POST | `/tenants` | `{"slug", "display_name"}` | Created tenant |
 | GET | `/tenants/{id}` | | `{"tenant", "keys", "quotas"}` |
 | PUT | `/tenants/{id}` | `{"display_name", "enabled"}` | Updated tenant |
-| PUT | `/tenants/{id}/budget` | `{"credits", "window"}`, or `{"credits": null}` to remove it | The tenant. One budget in credits across every model with prices, enforced by the gateways from the next sync. 409 while the gateways take API keys too |
+| PUT | `/tenants/{id}/budget` | `{"credits", "window"}`, or `{"credits": null}` to remove it | The tenant. One budget in credits across every model with prices, enforced by the gateways from the next sync. 409 while the gateways take API keys too, or when 256 tenants have a budget already |
 | PUT | `/tenants/{id}/models` | `{"models": ["<model id>", ...]}`, or `{"models": null}` for every model | The tenant. Any other model is refused (403) from the next sync; an empty list refuses every model. 409 while the gateways take API keys too |
 | DELETE | `/tenants/{id}` | | 204 |
 | POST | `/tenants/{id}/keys` | `{"name", "kind"}` | `{"key": {...}, "secret": "eyJ..."}`. `kind` is `token`, the default, or `key` for an API key of the kind before 0.18, refused (409) while a model has a standard. A key has `kind` and, a token, `expires_at` |

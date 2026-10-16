@@ -537,12 +537,13 @@ with the keys it should hold and removes any other entry.
 
 **What it does.** One amount in dollars per minute, hour or day for every
 model with prices, counted together. The gateway refuses the tenant on
-every priced model once it is spent.
+every model once it is spent.
 
 **How.** One rule per tenant in one `BackendTrafficPolicy` on the client
 listener, a global rate limit of Envoy Gateway charged with what each
 answer cost at the model's prices; every route of a priced model writes that
-cost. See [architecture](architecture.md#a-budget-across-models).
+cost, and the entry routes' own policies merge with it. See
+[architecture](architecture.md#a-budget-across-models).
 
 **Why.**
 
@@ -553,9 +554,15 @@ cost. See [architecture](architecture.md#a-budget-across-models).
   every budget holds as it is, and only changes and the Usage page wait. An earlier version
   (0.20.0) added up the spend in the hub and closed tenants by a rule; that
   was a minute late and depended on the hub.
-- *Changing a budget starts its count over.* The gateway names the counter
-  after the rule's position; a changed or removed rule moves it. The owner
-  accepted that in place of a more involved rendering.
+- *A tenant keeps its rule's position.* The gateway names the counter after
+  the rule's position, so each tenant keeps the position it got, and the
+  rule names the tenant into the counter too. A new amount keeps what was
+  used; another tenant's budget coming or going changes nothing. In 0.22.0
+  the rules were in slug order, and a tenant added before others moved every
+  later one onto its neighbour's counter.
+- *It costs a round trip to Redis per request.* The rate limit service asks
+  the shared Redis before the request goes on, after the quota's own check:
+  the Redis belongs near the gateways.
 - *A tenant's quotas per model stay.* Both hold: the budget is the ceiling
   across models, a quota the ceiling on one.
 

@@ -64,7 +64,8 @@ func (c *Client) readGatewayStatus(ctx context.Context, namespace string, desire
 // gateway did not put into effect. For a patch that happens when patches
 // are not enabled in the Envoy Gateway configuration, or when a patch finds
 // nothing to change; for the tenants' budget policy when global rate
-// limiting is not enabled there. Envoy Gateway carries on without the
+// limiting is not enabled there, or when a policy on a route replaces it
+// for that route (Overridden: the route's requests are not charged). Envoy Gateway carries on without the
 // policy, so nothing else is affected, but what the policy was for is
 // missing.
 func (c *Client) readPatchStatus(ctx context.Context, namespace string, obj *unstructured.Unstructured, changed map[string]int, res *SyncResult) {
@@ -97,8 +98,10 @@ func (c *Client) readPatchStatus(ctx context.Context, namespace string, obj *uns
 
 // patchVerdict returns want ("Programmed" or "Accepted") when every gateway
 // the policy is for reports that condition true, and otherwise the first
-// condition that says why not, with its message. It returns "" while the
-// controller has reported nothing.
+// condition that says why not, with its message. Overridden says that a
+// policy on some route replaces this one there; Envoy Gateway still reports
+// the policy Accepted. It returns "" while the controller has reported
+// nothing.
 func patchVerdict(policy *unstructured.Unstructured, want string) (string, string) {
 	ancestors, _, _ := unstructured.NestedSlice(policy.Object, "status", "ancestors")
 	found := false
@@ -113,6 +116,8 @@ func patchVerdict(policy *unstructured.Unstructured, want string) (string, strin
 			switch {
 			case (kind == "Accepted" || kind == "Programmed") && status != "True":
 				return "Not" + kind, message
+			case kind == "Overridden" && status == "True":
+				return kind, message
 			case kind == want:
 				found = true
 			}

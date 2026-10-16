@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -13,6 +14,22 @@ import (
 // a list of models yet.
 var errBudgetNeedsTokens = errors.New("a budget across models, and a list of models a tenant may call, need every tenant on tokens: the gateway reads the tenant from the token, and a request with an API key names none. " +
 	"Give every tenant a token and revoke its API keys first")
+
+// tokensOnly answers 409 and returns false unless the gateways take tokens
+// only. It asks what the gateways take now, not what a new key would change:
+// a model's standard or another tenant's budget does not stand in the way.
+func (s *Server) tokensOnly(w http.ResponseWriter, r *http.Request) bool {
+	mode, err := s.st.IdentityMode(r.Context())
+	if err != nil {
+		fail(w, err)
+		return false
+	}
+	if mode != render.IdentityTokens {
+		writeError(w, http.StatusConflict, errBudgetNeedsTokens.Error()+".")
+		return false
+	}
+	return true
+}
 
 // setTenantBudget sets the tenant's budget across every priced model; a
 // null amount removes it. It is enforced by the gateways from the next sync,
@@ -37,13 +54,16 @@ func (s *Server) setTenantBudget(w http.ResponseWriter, r *http.Request) {
 			fail(w, invalid("window must be 1m, 1h or 1d"))
 			return
 		}
-		if err := s.keepsTokensOnly(r.Context()); err != nil {
-			writeError(w, http.StatusConflict, errBudgetNeedsTokens.Error()+".")
+		if !s.tokensOnly(w, r) {
 			return
 		}
 		budget = &store.TenantBudget{Credits: *b.Credits, Window: b.Window}
 	}
 	t, err := s.st.SetTenantBudget(r.Context(), r.PathValue("id"), budget)
+	if errors.Is(err, store.ErrBudgetsFull) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("%d tenants have a budget across models, the most one rate limit policy of the gateway takes. Remove one first.", render.MaxBudgets))
+		return
+	}
 	if err != nil {
 		fail(w, err)
 		return
@@ -67,11 +87,8 @@ func (s *Server) setTenantModels(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if b.Models != nil {
-		if err := s.keepsTokensOnly(r.Context()); err != nil {
-			writeError(w, http.StatusConflict, errBudgetNeedsTokens.Error()+".")
-			return
-		}
+	if b.Models != nil && !s.tokensOnly(w, r) {
+		return
 	}
 	t, err := s.st.SetTenantModels(r.Context(), r.PathValue("id"), b.Models)
 	if err != nil {

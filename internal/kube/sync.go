@@ -73,8 +73,9 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 
 	// Before any policy is written: the gateway's controller looks at a
 	// route when its policy changes, and the mark has to be there by then.
+	priced := pricedPolicies(desired)
 	for _, obj := range desired {
-		if err := c.markRoutes(ctx, namespace, obj, &res); err != nil {
+		if err := c.markRoutes(ctx, namespace, obj, priced, &res); err != nil {
 			return res, err
 		}
 	}
@@ -119,12 +120,16 @@ func objectKey(kind, namespace, name string) string { return kind + "/" + namesp
 // this tool writes, and, for a priced model, the cost of a request in
 // credits among the route's request costs, which the tenants' budgets
 // across models are charged with. Any other cost the route has stays.
-func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstructured.Unstructured, res *SyncResult) error {
+//
+// The cost is worked out from every priced model whose backends the route
+// sends to, not from this policy alone: a route that serves two priced
+// models charges each its own prices, and one model's sync does not
+// overwrite the other's.
+func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstructured.Unstructured, priced []pricedPolicy, res *SyncResult) error {
 	revision := policy.GetAnnotations()[render.QuotaRevisionAnnotation]
 	if policy.GetKind() != "QuotaPolicy" || revision == "" {
 		return nil
 	}
-	credits := policy.GetAnnotations()[render.CreditsAnnotation]
 	if ns := policy.GetNamespace(); ns != "" {
 		namespace = ns
 	}
@@ -148,7 +153,7 @@ func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstr
 		if route.GetLabels()[render.ManagedLabel] == render.ManagedValue || !sendsTo(route, backends) {
 			continue
 		}
-		costs, costsChanged := withCredits(route, credits)
+		costs, costsChanged := withCredits(route, routeCredits(route, namespace, priced))
 		if route.GetAnnotations()[render.QuotaRevisionAnnotation] == revision && !costsChanged {
 			continue
 		}
@@ -171,6 +176,53 @@ func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstr
 		res.Changes = append(res.Changes, Change{Kind: "AIGatewayRoute", Namespace: namespace, Name: route.GetName(), Action: "updated"})
 	}
 	return nil
+}
+
+// pricedPolicy is a QuotaPolicy of the sync that carries a model's credits
+// expression for the routes of the cluster's own.
+type pricedPolicy struct {
+	namespace, model, credits string
+	backends                  map[string]bool
+}
+
+func pricedPolicies(desired []*unstructured.Unstructured) []pricedPolicy {
+	var out []pricedPolicy
+	for _, obj := range desired {
+		credits := obj.GetAnnotations()[render.CreditsAnnotation]
+		model := obj.GetAnnotations()[render.CreditsModelAnnotation]
+		if obj.GetKind() != "QuotaPolicy" || credits == "" || model == "" {
+			continue
+		}
+		p := pricedPolicy{namespace: obj.GetNamespace(), model: model, credits: credits, backends: map[string]bool{}}
+		targets, _, _ := unstructured.NestedSlice(obj.Object, "spec", "targetRefs")
+		for _, t := range targets {
+			if ref, ok := t.(map[string]any); ok {
+				name, _ := ref["name"].(string)
+				p.backends[name] = true
+			}
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// routeCredits is the credits expression of a route in namespace: that of
+// each priced model whose backends it sends to, or "" for none.
+func routeCredits(route unstructured.Unstructured, namespace string, priced []pricedPolicy) string {
+	byModel := map[string]string{}
+	for _, p := range priced {
+		ns := p.namespace
+		if ns == "" {
+			ns = namespace
+		}
+		if ns == namespace && sendsTo(route, p.backends) {
+			byModel[p.model] = p.credits
+		}
+	}
+	if len(byModel) == 0 {
+		return ""
+	}
+	return render.ModelCredits(byModel)
 }
 
 // withCredits returns the route's request costs with the cost in credits

@@ -158,14 +158,15 @@ func tokensOnly(st render.State) bool {
 }
 
 // addTenantBudgets gives the state the enabled tenants' budgets across
-// models and the models each restricted tenant may call, by model name.
+// models, each at its position, and the models each restricted tenant may
+// call, by model name. A disabled tenant's position is left empty.
 // Neither is given until the gateway takes tokens only (BudgetHeld).
 func (s *Store) addTenantBudgets(ctx context.Context, st *render.State) error {
 	if !tokensOnly(*st) {
 		return nil
 	}
 	rows, err := s.db.Query(ctx,
-		`SELECT t.slug, t.budget_credits, t.budget_window, t.restricted,
+		`SELECT t.slug, t.budget_credits, t.budget_window, t.budget_slot, t.restricted,
 		        (SELECT coalesce(array_agg(m.name ORDER BY m.name), '{}') FROM tenant_models tm JOIN models m ON m.id = tm.model_id WHERE tm.tenant_id = t.id)
 		 FROM tenants t WHERE t.enabled AND (t.budget_credits IS NOT NULL OR t.restricted) ORDER BY t.slug`)
 	if err != nil {
@@ -176,13 +177,14 @@ func (s *Store) addTenantBudgets(ctx context.Context, st *render.State) error {
 		var slug string
 		var credits *int64
 		var window *string
+		var slot *int
 		var restricted bool
 		var models []string
-		if err := rows.Scan(&slug, &credits, &window, &restricted, &models); err != nil {
+		if err := rows.Scan(&slug, &credits, &window, &slot, &restricted, &models); err != nil {
 			return err
 		}
-		if credits != nil && window != nil {
-			st.Budgets = append(st.Budgets, render.TenantBudget{TenantSlug: slug, Limit: *credits, Window: *window})
+		if credits != nil && window != nil && slot != nil {
+			st.Budgets = append(st.Budgets, render.TenantBudget{TenantSlug: slug, Slot: *slot, Limit: *credits, Window: *window})
 		}
 		if restricted {
 			st.Restricted = append(st.Restricted, render.TenantModels{TenantSlug: slug, Models: models})

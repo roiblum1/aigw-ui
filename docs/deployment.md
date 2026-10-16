@@ -137,7 +137,7 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
 |---|---|---|
 | Server pod on the hub | Kubernetes API of every LLM cluster | usually 6443 |
 | Browsers and the self-service portal | The Route | 443 |
-| Rate limit service on every LLM cluster | Redis on the hub (deployed separately) | your Redis port |
+| Rate limit service on every LLM cluster | The Redis the gateways share (deployed separately; in production not on the hub) | your Redis port |
 
 ## Before the first entry route on a cluster
 
@@ -159,17 +159,39 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
 1. In the cluster's Envoy Gateway configuration (`envoy-gateway-config`),
    enable global rate limiting with the Redis every gateway shares (the
    same one the AI gateway's quota rate limit service counts in):
-   `rateLimit.backend.type: Redis`, `rateLimit.backend.redis.url` the hub's
-   Redis, and `rateLimit.timeout: 5s`. The default timeout of 20 ms is
-   cancelled on every call to a Redis across a network, and every request
-   then passes unheld. Envoy Gateway 1.9 cannot mount only a CA for Redis
-   TLS: set `REDIS_TLS`, `REDIS_TLS_CACERT` and `REDIS_AUTH` through
+   `rateLimit.backend.type: Redis`, `rateLimit.backend.redis.url` that
+   Redis, and a `rateLimit.timeout` above the round trip to it. The default
+   of 20 ms is cancelled on every call to a Redis across a network, and
+   every request then passes unheld. Use what the AI gateway's quota uses
+   (`quotaRateLimitTimeout`, 1 second in the production values since
+   2026-10-13), so that both fail open alike when Redis is slow; the lab runs
+   5 seconds. Envoy Gateway 1.9 cannot mount only a CA for Redis TLS: set
+   `REDIS_TLS`, `REDIS_TLS_CACERT` and `REDIS_AUTH` through
    `provider.kubernetes.rateLimitDeployment.container.env`, as the AI
-   gateway's quota rate limit service is set up.
-2. Restart the Envoy Gateway controller. It deploys `envoy-ratelimit` next
+   gateway's quota rate limit service is set up. In the gateway chart of
+   `kserve-dissconnected`, `rateLimit.enabled` is false by default.
+2. Put that Redis near the gateways. Each check is one round trip to it
+   before the request goes on, and the budget's check comes after the
+   per-model quota's: on the lab, with a Redis 33 ms away, a request took
+   4 ms through the gateway alone, 37 ms with one of the two, 69 ms with
+   both. The answer's charge is sent after the stream ends and adds nothing.
+3. Restart the Envoy Gateway controller. It deploys `envoy-ratelimit` next
    to the AI gateway's quota rate limit service; the two do not collide.
-3. Run **Self-test** on the cluster with a priced model. The step "A budget
-   across models is counted and refuses" fails while anything is missing.
+4. A route of the cluster's own that has a `BackendTrafficPolicy` of its own
+   needs `mergeType: StrategicMerge` on it, as the hub's entry routes have:
+   otherwise that policy replaces the budget policy on the route, and the
+   route's requests are not charged. The sync reports the budget policy
+   `Overridden` and names the routes.
+5. On a route of the cluster's own the sync writes the model's cost among
+   its `llmRequestCosts`. If Argo CD manages that route with self-heal, add
+   `/spec/llmRequestCosts` and the annotation
+   `gateway.envoyproxy.io/aigw-ui-quota-revision` to the application's
+   `ignoreDifferences`, or Argo CD takes them away again and the model stops
+   charging the budgets. The entry routes the hub renders have no such
+   owner.
+6. Run **Self-test** on the cluster with a priced model. The step "A budget
+   across models is counted and refuses" fails while anything is missing,
+   and names a route whose policy overrides the budget's.
 
 ## Before a model serves a spent budget as best-effort
 

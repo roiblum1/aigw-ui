@@ -286,6 +286,19 @@ func TestOneSiteHasNoZoneWeights(t *testing.T) {
 	}
 }
 
+// The policies of the entry and best-effort routes merge into the listener's
+// budget policy. Without the merge a route's policy replaces the listener's
+// on that route, and Envoy Gateway charged no budget there (lab, 2026-10-16).
+func TestFleetPoliciesMergeWithTheBudgets(t *testing.T) {
+	objs := Objects(bestEffortState("team-a"))
+	for _, name := range []string{"fleet-glm-5-3", "fleetbe-glm-5-3"} {
+		policy := find(t, objs, "BackendTrafficPolicy", name)
+		if merge, _, _ := unstructured.NestedString(policy.Object, "spec", "mergeType"); merge != "StrategicMerge" {
+			t.Errorf("%s: mergeType %q", name, merge)
+		}
+	}
+}
+
 // The route lists a limited number of tenants. The ones given first, which
 // are those past their budget, keep their place.
 func TestOverageTenantsKeepsTheFirst(t *testing.T) {

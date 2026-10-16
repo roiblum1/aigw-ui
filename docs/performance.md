@@ -58,8 +58,45 @@ matters more than requests a second.
   common default, is throttled long before these numbers. Give a production
   proxy whole cores, and add replicas for more.
 - **The rate limit service and Redis are shared.** Every gateway of every
-  site calls the same Redis on the hub, twice per request with a quota. Its
-  distance from a site is added to every such request.
+  site calls the same Redis, twice per request with a quota: the check
+  before the request, which waits for the answer, and the charge after it,
+  which does not. The distance to Redis is added to every such request once
+  per check (see below).
+
+## A budget across models, and Redis in another site
+
+Measured on the lab on 2026-10-16 with the policies of 0.22.1: one proxy pod,
+a mock model that answers in 0.3 ms, and the rate limit services counting in
+a Redis on another cluster, about 33 ms away. Requests one at a time, 300 per
+path, three rounds; time until the whole answer, in ms:
+
+| Path | p50 | p99 |
+|---|---|---|
+| The gateway alone: token, AI gateway, the models rule | 4.3 | 6.6 to 10 |
+| With the tenant's budget across models | 37.5 | 45 to 47 |
+| With the model's quota | 37.7 | 47 to 65 |
+| With both | 69.4 | 78 to 91 |
+| With both and a list of models | 69.3 | 75 to 84 |
+
+AIPerf 0.13 against the same mock, streaming, gave the same as time to the
+first token: 6.7, 38.7, 39.6 and 71.3 ms at one request at a time; 13, 39, 39
+and 70 ms at sixteen.
+
+- **Each check is one round trip to Redis, in series.** The quota's rate
+  limit filter and the budget's run one after the other, and each asks Redis
+  before the request goes on. The charge after the answer is sent once the
+  stream has ended and adds nothing to the answer.
+- **So the distance to Redis is paid once or twice per request.** With
+  Redis in the same site it is about 1.5 ms each (above); 33 ms away it is
+  33 ms each. Put the Redis the gateways share in the region of the
+  gateways that carry most of the traffic.
+- **The rate limit services kept up.** With both checks the gateway served
+  1,776 requests a second at 128 at a time, still at 65 ms; the services
+  pipeline their calls to Redis, so their pool of 10 connections did not cap
+  them.
+- **A model's own time hides it.** AIPerf against the lab's model on CPU
+  (512-token prompts, 1 to 2 seconds to the first token) could not tell the
+  budget's 33 ms from the model's own variation.
 
 ## Many tenants
 
@@ -107,8 +144,7 @@ requests. Redis is read with one `MGET` for all counters.
 
 ## Not measured
 
-- A real model, and so time to first token and tokens a second through the
-  gateway. Streaming was run for correctness, not for speed.
+- A real model on GPUs, and so time to first token and tokens a second
+  through the gateway. The lab's model runs on CPU.
 - An entry route over two real sites. The lab's sites are stand-ins.
 - More than one proxy pod, and the rate limit service at its own limit.
-- Redis in another site than the gateway.

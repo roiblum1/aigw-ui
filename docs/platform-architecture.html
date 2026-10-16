@@ -263,7 +263,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <text x="459" y="386" class="al al-config">routes · weights · keys · objectives</text>
 <path d="M729,480 L729,318" class="ln ln-quota" marker-end="url(#ah-quota)"/>
 <text x="741" y="370" class="al al-quota al-b">② quota check + deduct</text>
-<text x="741" y="386" class="al al-quota">hub Redis · WAN &lt; 10 ms</text>
+<text x="741" y="386" class="al al-quota">shared Redis · WAN &lt; 10 ms</text>
 <path d="M1011,480 L1011,318" class="ln ln-usage" marker-end="url(#ah-usage)"/>
 <text x="1023" y="370" class="al al-usage al-b">③ usage records</text>
 <text x="1023" y="386" class="al al-usage">OTLP · buffered on disk</text>
@@ -282,7 +282,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
 <rect x="606" y="480" width="246" height="112" rx="8" class="box b-quota"/>
 <text x="624" y="510" class="t-title">Rate limit service</text>
 <text x="624" y="532" class="t-body">envoy-ratelimit; backend is</text>
-<text x="624" y="550" class="t-body">the hub Redis. Fails open if</text>
+<text x="624" y="550" class="t-body">the shared Redis. Fails open if</text>
 <text x="624" y="568" class="t-body">the hub is unreachable.</text>
 <rect x="888" y="480" width="246" height="112" rx="8" class="box b-usage"/>
 <text x="906" y="510" class="t-title">OTel collector</text>
@@ -415,13 +415,13 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
   <ol class="steps">
     <li><div><b>Entry.</b> The client resolves <code>llm.&lt;domain&gt;</code>. Avi GSLB returns any healthy site’s gateway. That only decides where the request enters.</div></li>
     <li><div><b>Identity.</b> The entry gateway checks the API key and writes the tenant ID into the tenant and fairness headers, replacing anything the client sent. An unknown key gets 401.</div></li>
-    <li><div><b>Quota check.</b> The rate limit service checks the tenant’s bucket in the hub Redis at cost 0. A tenant over budget gets 429 here.</div></li>
+    <li><div><b>Quota check.</b> The rate limit service checks the tenant’s bucket in the shared Redis at cost 0. A tenant over budget gets 429 here.</div></li>
     <li><div><b>Conversation key.</b> The entry gateway takes the session header the client sends: <code>X-Claude-Code-Session-Id</code>, or the conversation header of a chat UI. It is the same on every turn, so every turn gets the same key. A request without such a header has no key.</div></li>
     <li><div><b>Site choice.</b> Envoy hashes the key over the sites that serve the model, each weighted by its ready capacity. The same key lands on the same site at every entry gateway, with no service to ask. A request without a key is spread over the sites by the same weights.</div></li>
     <li><div><b>Hop.</b> Envoy sends the request over mTLS to the chosen site’s peer listener. When the home site is the entry site, the request stays in the cluster.</div></li>
     <li><div><b>Admit or shed.</b> Over its limit, the peer listener answers 503 at once and the entry tries another site. Retries happen only before the first response byte, so a stream is never duplicated.</div></li>
     <li><div><b>Inside the site.</b> When the pool is saturated, the EPP holds the request in its queue, ordered by priority and fair between tenants, for up to 5 s, then answers 429. It then picks a replica: cache-warm replicas first unless they are too slow, then the lowest token load.</div></li>
-    <li><div><b>Answer and metering.</b> vLLM streams the answer with token usage. The entry gateway deducts the tokens in the hub Redis and sends one usage record through its OTel collector to the hub.</div></li>
+    <li><div><b>Answer and metering.</b> vLLM streams the answer with token usage. The entry gateway deducts the tokens in the shared Redis and sends one usage record through its OTel collector to the hub.</div></li>
   </ol>
 </section>
 
