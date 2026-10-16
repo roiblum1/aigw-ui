@@ -39,7 +39,8 @@ fails.
 status `ci/tested-tree` on the pull request's head. After the merge, the
 job `seen` compares it with the merge commit's tree: when they are the same
 (`main` did not move in between), the tests and AIPerf do not run again
-and the image is built at once, about nine minutes sooner. A merge after
+and the image is built at once, about nine minutes sooner; the deploy
+follows the image. A merge after
 `main` moved, a squash or rebase merge, a tag, and a pull request from a
 fork, which may not write the status, are tested again.
 
