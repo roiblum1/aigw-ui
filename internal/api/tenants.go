@@ -205,6 +205,17 @@ func (s *Server) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		fail(w, invalid("window must be 1m, 1h or 1d"))
 		return
 	}
+	id := r.PathValue("id")
+	covered, err := s.st.BudgetCovers(r.Context(), id, b.ModelID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if covered {
+		writeError(w, http.StatusConflict, errBudgetOrQuotas.Error()+": this tenant has a budget across models, which holds it on this model. "+
+			"Remove the budget first, or give it quotas on models without prices only.")
+		return
+	}
 	// A quota on a model with nothing to attach it to would silently do nothing.
 	capable, err := s.st.QuotaCapable(r.Context(), b.ModelID)
 	if err != nil {
@@ -215,7 +226,6 @@ func (s *Server) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		fail(w, invalid("this model has no AIServiceBackend on any cluster and is not a fleet model, so a quota cannot be applied to it"))
 		return
 	}
-	id := r.PathValue("id")
 	if err := s.st.UpsertQuota(r.Context(), id, b.ModelID, b.TokenLimit, b.Window, b.Shadow); err != nil {
 		fail(w, err)
 		return

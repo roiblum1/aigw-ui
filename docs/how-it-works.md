@@ -594,8 +594,15 @@ entry routes' own policies merge with it. See
 - *It costs a round trip to Redis per request.* The rate limit service asks
   the shared Redis before the request goes on, after the quota's own check:
   the Redis belongs near the gateways.
-- *A tenant's quotas per model stay.* Both hold: the budget is the ceiling
-  across models, a quota the ceiling on one.
+- *One or the other (0.25.0).* On a model with prices the budget is the
+  tenant's only limit: it has no quota of its own there, and the model's
+  standard and pool do not hold it, so it really chooses what to spend the
+  amount on. Each such model's `QuotaPolicy` has one rule that lets a token
+  with a budget through. Before 0.25.0 both held and the tighter won: a
+  tenant with $5 an hour across models could spend no more than Opus's $2
+  standard on Opus, and a quota of its own above the budget held nothing.
+  A tenant that should have different amounts on different models gets a
+  quota per model instead, each its own budget.
 
 ### Limit a tenant to some models
 

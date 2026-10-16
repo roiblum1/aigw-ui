@@ -85,6 +85,15 @@ func (s *Store) AnyBudget(ctx context.Context) (bool, error) {
 	return yes, mapErr(err)
 }
 
+// AnyTenantBudget reports whether an enabled tenant has a budget across
+// models: the models with prices then let it hold such tenants
+// (render.Model.BudgetsHold).
+func (s *Store) AnyTenantBudget(ctx context.Context) (bool, error) {
+	var yes bool
+	err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tenants WHERE enabled AND budget_credits IS NOT NULL)`).Scan(&yes)
+	return yes, err
+}
+
 // EnabledTenants returns how many tenants are enabled.
 func (s *Store) EnabledTenants(ctx context.Context) (int, error) {
 	var n int
@@ -202,6 +211,30 @@ func (s *Store) ListQuotas(ctx context.Context, tenantID string) ([]Quota, error
 	           CASE WHEN EXISTS (SELECT 1 FROM model_prices p WHERE p.model_id = m.id AND p.applied_at IS NOT NULL)
 	                THEN '`+UnitCredits+`' ELSE '`+UnitTokens+`' END
 	    FROM quotas q JOIN models m ON m.id = q.model_id WHERE q.tenant_id = $1 ORDER BY m.name`, tenantID)
+}
+
+// PricedQuotaModels returns the names of the models with prices, in use or
+// waiting for their day, on which the tenant has a quota of its own. A
+// budget across models covers those models, so it is refused while they
+// are there.
+func (s *Store) PricedQuotaModels(ctx context.Context, tenantID string) ([]string, error) {
+	return list(ctx, s, func(r scanner) (string, error) {
+		var name string
+		return name, r.Scan(&name)
+	}, `SELECT m.name FROM quotas q JOIN models m ON m.id = q.model_id
+	    WHERE q.tenant_id = $1 AND EXISTS (SELECT 1 FROM model_prices p WHERE p.model_id = m.id)
+	    ORDER BY m.name`, tenantID)
+}
+
+// BudgetCovers reports whether the tenant has a budget across models and
+// the model has prices, in use or waiting for their day: the budget then
+// holds the tenant on the model, so a quota of its own there is refused.
+func (s *Store) BudgetCovers(ctx context.Context, tenantID, modelID string) (bool, error) {
+	var yes bool
+	err := s.db.QueryRow(ctx,
+		`SELECT t.budget_credits IS NOT NULL AND EXISTS (SELECT 1 FROM model_prices p WHERE p.model_id = $2)
+		 FROM tenants t WHERE t.id = $1`, tenantID, modelID).Scan(&yes)
+	return yes, mapErr(err)
 }
 
 // UpsertQuota keeps the stored shadow setting when shadow is nil. A new quota

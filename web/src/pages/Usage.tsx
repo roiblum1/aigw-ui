@@ -31,6 +31,19 @@ function untilTime(iso: string): string {
 }
 
 export function UsageMeter({ q }: { q: UsageQuota }) {
+  if (q.budget) {
+    return (
+      <div className="meter-cell">
+        <div className="detail">{formatNumber(q.used, q.unit)} used</div>
+        <span
+          className="tag"
+          title="The tenant has a budget across models, which holds it on this model in place of the model's standard and pool."
+        >
+          in its budget across models
+        </span>
+      </div>
+    );
+  }
   const ratio = q.limit > 0 ? q.used / q.limit : 0;
   const percent = Math.round(ratio * 100);
   const level = ratio >= 1 ? "full" : ratio >= 0.8 ? "high" : "ok";
@@ -247,8 +260,8 @@ export default function Usage() {
                   <td className="strong">{q.tenant_slug}</td>
                   <td>
                     {q.model_name}
-                    {q.shadow && " "}
-                    {q.shadow && (
+                    {q.shadow && !q.budget && " "}
+                    {q.shadow && !q.budget && (
                       <span className="tag warn" title="Counted, but requests are not rejected by this quota.">
                         dry run
                       </span>

@@ -392,6 +392,17 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
         )}
       </section>
 
+      {/* One budget for every model with prices, or a budget per model below: one or the other. */}
+      <TenantBudgetCard
+        tenant={tenant}
+        models={data.models}
+        quotas={quotas}
+        usage={usage.data ?? null}
+        identity={data.signing.identity}
+        busy={action.busy}
+        act={act}
+        resetBudget={() => action.run(async () => void (await api.resetBudget(tenant.id), await usage.reload()))}
+      />
       <TenantQuotas
         tenant={tenant}
         tokensOnly={data.signing.identity === "tokens"}
@@ -403,15 +414,6 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
         resetUsage={(modelId) =>
           action.run(async () => void (await api.resetUsage(tenant.id, modelId), await usage.reload()))
         }
-      />
-      <TenantBudgetCard
-        tenant={tenant}
-        models={data.models}
-        usage={usage.data ?? null}
-        identity={data.signing.identity}
-        busy={action.busy}
-        act={act}
-        resetBudget={() => action.run(async () => void (await api.resetBudget(tenant.id), await usage.reload()))}
       />
       <TenantModelsCard tenant={tenant} models={data.models} identity={data.signing.identity} busy={action.busy} act={act} />
 

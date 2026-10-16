@@ -22,10 +22,12 @@ func (t *test) budgetTokensOnly() bool {
 	return t.mode == render.IdentityTokens && t.cluster.AuthEnabled
 }
 
-// budget gives the temporary tenant a budget of 1 credit across models and
-// a quota on the model that cannot run out, so that only the budget can
-// refuse. A long request is answered and its cost in credits counted where
-// the Usage page reads it; the next request is refused with HTTP 429.
+// budget takes the temporary tenant's quota on the model away and gives it
+// a budget of 1 credit across models instead: a tenant has one or the
+// other, and on a model with prices the budget alone holds it, so the
+// model's standard and pool cannot refuse it either. A long request is
+// answered and its cost in credits counted where the Usage page reads it;
+// the next request is refused with HTTP 429.
 func (t *test) budget() (string, string) {
 	switch {
 	case t.key == "":
@@ -37,8 +39,14 @@ func (t *test) budget() (string, string) {
 	case t.r.usage == nil:
 		return Skipped, "Usage monitoring is off: the server has no Redis configured."
 	}
-	if err := t.r.st.UpsertQuota(t.ctx, t.tenant.ID, t.model.ID, render.MaxLimit, testWindow, nil); err != nil {
+	quotas, err := t.r.st.ListQuotas(t.ctx, t.tenant.ID)
+	if err != nil {
 		return Failed, err.Error()
+	}
+	for _, q := range quotas {
+		if _, err := t.r.st.DeleteQuota(t.ctx, q.ID); err != nil {
+			return Failed, err.Error()
+		}
 	}
 	if _, err := t.r.st.SetTenantBudget(t.ctx, t.tenant.ID, &store.TenantBudget{Credits: 1, Window: testWindow}); err != nil {
 		return Failed, err.Error()
@@ -61,8 +69,8 @@ func (t *test) budget() (string, string) {
 	}
 
 	// The first answered request is charged once its answer is complete.
-	// Until the policy is in place the quota of 1 still refuses, so a 429
-	// here means waiting, not failure.
+	// Until the policies are in place the model's standard or pool may
+	// still refuse, so a 429 here means waiting, not failure.
 	start := time.Now()
 	var first gateway.ChatResult
 	var last string
@@ -78,7 +86,8 @@ func (t *test) budget() (string, string) {
 		}
 	}
 	if first.Status != http.StatusOK {
-		return Failed, fmt.Sprintf("No long request was answered within %d seconds after the quota was raised. Last: %s.", int(budgetWait.Seconds()), last)
+		return Failed, fmt.Sprintf("No long request was answered within %d seconds after the tenant was given a budget across models: the model's QuotaPolicy still holds it, so its rule for tenants with a budget (on the %s header) is missing or does not match. Last: %s.",
+			int(budgetWait.Seconds()), render.BudgetHeader, last)
 	}
 	want, known := expectedCharge(first, t.model.Cost())
 	if known && want == 0 {
@@ -126,7 +135,7 @@ func (t *test) budget() (string, string) {
 		case err != nil:
 			last = err.Error()
 		case res.Status == http.StatusTooManyRequests:
-			refused := counted + "; the next request was refused with HTTP 429, with the model's own quota raised so that only the budget could refuse"
+			refused := counted + "; the next request was refused with HTTP 429 by the budget, with no quota of its own on the model"
 			return t.budgetReset(refused)
 		default:
 			last = answer(res)

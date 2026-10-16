@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { api, type Model, type ModelBudget, type Quota, type Tenant, type Unit, type UsageReport, type Window } from "../api";
 import { LimitInput, WindowSelect, formatAmount, limitText, limitValue, useLoad, windowLabel } from "../components";
+import { hasPrices } from "./TenantBudget";
 import { UsageMeter, confirmReset } from "./Usage";
 
 /** The quota being changed in its row: the model stays, the budget is edited. */
@@ -106,14 +107,17 @@ export default function TenantQuotas(props: {
       await fn();
       await budgets.reload();
     });
+  /** A budget across models holds the tenant on the model: it has no quota of its own there. */
+  const covered = (modelId: string) => tenant.budget != null && hasPrices(props.models.find((m) => m.id === modelId));
+  const coveredNames = props.models.filter((m) => covered(m.id)).map((m) => m.name);
   // What this tenant can use a day over the models counted in dollars.
   const dollarsDay = quotas
-    .filter((q) => q.unit === "credits" && !q.shadow)
+    .filter((q) => q.unit === "credits" && !q.shadow && !covered(q.model_id))
     .reduce((n, q) => n + dailyMax(q.token_limit, q.window), 0);
 
   const usageOf = (modelId: string) => usage?.quotas.find((u) => u.model_id === modelId);
   const withQuota = new Set(quotas.map((q) => q.model_id));
-  const free = props.models.filter((m) => !withQuota.has(m.id));
+  const free = props.models.filter((m) => !withQuota.has(m.id) && !covered(m.id));
   const addedUnit: Unit = props.models.find((m) => m.id === added.model_id)?.unit ?? "tokens";
 
   const addedAfter = added.limit === "" || added.shadow ? null : dailyMax(limitValue(added.limit, addedUnit), added.window);
@@ -162,8 +166,16 @@ export default function TenantQuotas(props: {
           </>
         )}
       </p>
+      {coveredNames.length > 0 && (
+        <p className="hint">
+          Its budget across models holds it on every model with prices ({coveredNames.join(", ")}), so a quota of its
+          own is only for a model without prices. A tenant has one budget across models or a budget per model, not
+          both.
+        </p>
+      )}
       {free.length === 0 ? (
-        props.models.length > 0 && <p className="hint">Every model has a quota. Change one with Edit in its row.</p>
+        props.models.length > 0 &&
+        coveredNames.length === 0 && <p className="hint">Every model has a quota. Change one with Edit in its row.</p>
       ) : (
         <form className="inline-form" onSubmit={add}>
           <select
@@ -240,6 +252,15 @@ export default function TenantQuotas(props: {
                             dry run
                           </span>
                         )}
+                        {covered(q.model_id) && " "}
+                        {covered(q.model_id) && (
+                          <span
+                            className="tag warn"
+                            title="From before a tenant had one or the other. Its budget across models holds it on this model, so this quota holds nothing: remove it."
+                          >
+                            holds nothing: budget across models
+                          </span>
+                        )}
                       </>
                     )}
                   </td>
@@ -257,6 +278,17 @@ export default function TenantQuotas(props: {
                           Cancel
                         </button>
                       </>
+                    ) : covered(q.model_id) ? (
+                      <button
+                        key="remove"
+                        className="danger"
+                        disabled={busy}
+                        onClick={() =>
+                          confirm(`Remove the quota of ${tenant.slug} on ${q.model_name}?`) && change(() => api.deleteQuota(q.id))
+                        }
+                      >
+                        Remove
+                      </button>
                     ) : (
                       <>
                         <button
@@ -299,7 +331,7 @@ export default function TenantQuotas(props: {
           </tbody>
         </table>
       )}
-      <OnStandard models={props.models} quotas={quotas} usage={usage} />
+      <OnStandard models={props.models.filter((m) => !covered(m.id))} quotas={quotas} usage={usage} />
       {edit &&
         quotas
           .filter((q) => q.id === edit.id)

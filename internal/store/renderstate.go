@@ -221,7 +221,15 @@ func (s *Store) addTenantBudgets(ctx context.Context, st *render.State) error {
 			st.Restricted = append(st.Restricted, render.TenantModels{TenantSlug: slug, Models: models})
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// A budget holds its tenant on every model it is charged on, in place
+	// of the model's own rules.
+	for i := range st.Models {
+		st.Models[i].BudgetsHold = len(st.Budgets) > 0
+	}
+	return nil
 }
 
 // Reasons an entry route is left as it is on the clusters.

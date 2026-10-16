@@ -211,3 +211,92 @@ func TestDeniedClients(t *testing.T) {
 		t.Fatalf("rule %s", got)
 	}
 }
+
+// A tenant with a budget across models is held by it alone on a model it is
+// charged on: the model's QuotaPolicy ends with a rule that matches the
+// budget header and never runs out, so in Shared mode neither the standard,
+// the pool nor a quota of the tenant's own refuses it. The positions before
+// it stay, and the tenant's counters there only count.
+func TestBudgetPassRule(t *testing.T) {
+	s := amountState()
+	m := &s.Models[0]
+	m.CostExpression, m.Priced, m.BudgetsHold = "input_tokens * 1u", true, true
+	s.Tenants = append(s.Tenants, "walletcheck-d")
+	// b has a quota of its own as well, from before a tenant had one or the other.
+	s.Budgets = []TenantBudget{{TenantSlug: "walletcheck-b", Limit: 500, Window: "1h"}, {TenantSlug: "walletcheck-d", Limit: 500, Window: "1h"}}
+
+	p := quotaPolicies(s, *m)[0]
+	rules, _, _ := unstructured.NestedSlice(p.Object, "spec", "perModelQuotas")
+	got := rules[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
+	want := "map[clientSelectors:[map[headers:[map[name:x-aigw-budget type:RegularExpression value:.+] map[name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1m limit:4294967295]]"
+	if len(got) != 5 || fmt.Sprint(got[4]) != want || !strings.Contains(fmt.Sprint(got[1]), "66-1h") {
+		t.Fatalf("rules: %v", got)
+	}
+	if now, _ := RuleCount(*m, 4); now != 5 {
+		t.Fatalf("rule count %d", now)
+	}
+	// On the best-effort route it only counts, as every rule there does.
+	be := quotaPolicy(s.Namespace, *m, []Target{{Backend: "x", Model: "wallet-cheap"}}, true)
+	if r := fmt.Sprint(be.Object["spec"]); strings.Count(r, "shadowMode:true") != 4 {
+		t.Fatalf("best-effort: %s", r)
+	}
+
+	held := map[string]bool{}
+	for _, c := range Counters(s) {
+		if c.Pool {
+			if key := c.RedisKey("", time.Unix(0, 0)); !strings.Contains(key, "rule-5-match--1") {
+				t.Fatalf("pool after the last rule: %s", key)
+			}
+			continue
+		}
+		if c.Budget && !c.Shadow {
+			t.Fatalf("a counter the budget holds refuses: %+v", c)
+		}
+		held[c.TenantSlug] = c.Budget
+	}
+	if fmt.Sprint(held) != "map[walletcheck-a:false walletcheck-b:true walletcheck-c:false walletcheck-d:true]" {
+		t.Fatalf("held by the budget: %v", held)
+	}
+
+	// The rule changes the routes' revision; a model without it keeps its own.
+	without := *m
+	without.BudgetsHold = false
+	if quotaRevision(*m) == quotaRevision(without) {
+		t.Fatal("the rule did not change the revision")
+	}
+	// Prices in a dry run charge no budget, and refuse nobody: no rule.
+	dry := *m
+	dry.DryRun = true
+	if r := fmt.Sprint(quotaPolicies(s, dry)[0].Object["spec"]); strings.Contains(r, BudgetHeader) {
+		t.Fatalf("dry run: %s", r)
+	}
+	dryWithout := dry
+	dryWithout.BudgetsHold = false
+	if quotaRevision(dry) != quotaRevision(dryWithout) {
+		t.Fatal("dry run: the revision changed")
+	}
+}
+
+// A priced model without a quota or a standard gets its QuotaPolicy while
+// tenants have budgets, so that its pool holds the tenants with neither a
+// budget nor a quota of their own; without budgets it has none, as before.
+func TestBudgetPolicyOnModelWithoutQuotas(t *testing.T) {
+	policy := func(s State) string {
+		for _, o := range Objects(s) {
+			if o.GetKind() == "QuotaPolicy" && o.GetName() == "opus" {
+				return fmt.Sprint(o.Object["spec"])
+			}
+		}
+		return ""
+	}
+	s := budgetState()
+	if p := policy(s); p != "" {
+		t.Fatalf("without the flag: %s", p)
+	}
+	for i := range s.Models {
+		s.Models[i].BudgetsHold = true
+	}
+	if p := policy(s); !strings.Contains(p, BudgetHeader) || !strings.Contains(p, "defaultBucket:map[duration:1d limit:1]") {
+		t.Fatalf("with budgets: %s", p)
+	}
+}

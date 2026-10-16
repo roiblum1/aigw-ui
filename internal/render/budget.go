@@ -152,6 +152,39 @@ func (s State) hasBudgets() bool {
 	return s.AuthEnabled && s.Identity.Mode == IdentityTokens && len(s.budgets()) > 0
 }
 
+// passesBudgets reports whether the model's QuotaPolicy lets the requests
+// of a tenant with a budget across models through: while some tenant has
+// one, on a model the budgets are charged on.
+func (m Model) passesBudgets() bool {
+	return m.BudgetsHold && m.chargesBudgets()
+}
+
+// budgetPassRule is the rule of a model's QuotaPolicy that lets through the
+// requests whose token carries a budget across models. In Shared mode a
+// request passes while any bucket it matches has room, and this one never
+// runs out, so on the model such a tenant is held by its budget alone, not
+// by the model's standard, its pool or a quota of its own: a tenant has
+// either one budget for every model with prices or a budget per model, never
+// both. The header is the one the budget's rule matches, which only a token
+// sets. Each tenant has a bucket of its own (Distinct), which only counts.
+func budgetPassRule(shadow bool) map[string]any {
+	rule := map[string]any{
+		"clientSelectors": []any{
+			map[string]any{"headers": []any{
+				map[string]any{"name": BudgetHeader, "type": "RegularExpression", "value": ".+"},
+				map[string]any{"name": TenantHeader, "type": "Distinct"},
+			}},
+		},
+		// The most the gateway counts, a minute: more than a tenant can
+		// spend on one model.
+		"quota": map[string]any{"limit": int64(MaxLimit), "duration": "1m"},
+	}
+	if shadow {
+		rule["shadowMode"] = true
+	}
+	return rule
+}
+
 // chargesBudgets reports whether the model's routes write what a request
 // cost in credits, which the tenants' budgets across models are charged
 // with: a model with prices, unless they are being tried out (DryRun), which
