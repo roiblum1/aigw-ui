@@ -561,6 +561,34 @@ route matches the model header and `x-aigw-client-id` against the listed
 tenants. The traffic policy is the entry route's, with 429 added to the
 statuses that send a request to the next site.
 
+**The tenant as the scheduler's flow.** The hub's token check writes the
+token's `sub`, the tenant, into `x-llm-d-inference-fairness-id` as well as
+`x-aigw-tenant`. A site's scheduler with flow control shares each class out
+by that header, so within a class, best-effort or standard, one tenant
+cannot crowd out the others; on the entry site too, since every request
+passes the client listener first. A request with a plain API key carries
+none and joins the scheduler's default flow. Without flow control the
+scheduler only labels its request metrics with it (at most 1,000 values,
+then `other`).
+
+**When best-effort would not rank below regular tenants**, the sync says so
+in the task message. A scheduler holds best-effort back only if all of this
+holds where the model is served:
+
+- the class `best-effort` names the pool: a namespace takes one, for the
+  first pool by name, and a scheduler takes only the classes that name its
+  own pool (llm-d router v0.10.0). Another pool in that namespace serves
+  best-effort requests at priority 0, as regular tenants' are;
+- the site's own class `standard` for the pool, if it has one, ranks above
+  `best-effort` and not below 0: regular tenants' requests name it;
+- the pool's scheduler runs flow control. Without it, it refuses
+  best-effort requests only while it counts the pool full, which its
+  default detector did not do in the lab test of the
+  [optimization guide](optimization.md#what-a-site-does-with-the-class).
+  The hub reads that from the `LLMInferenceService` (its scheduler config, or
+  that of the last config it is built on that has one) and says nothing
+  when the config is in a ConfigMap.
+
 The overage loop (`internal/overage`) decides who is listed. It reads the
 usage report, the same counters as the Usage page, every `OVERAGE_INTERVAL`
 and stores each move in the table `overage` with the end of the quota's

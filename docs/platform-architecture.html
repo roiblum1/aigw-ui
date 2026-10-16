@@ -414,7 +414,7 @@ a:focus-visible { outline: 2px solid var(--report); outline-offset: 2px; border-
   <h2 id="flow">One request, end to end</h2>
   <ol class="steps">
     <li><div><b>Entry.</b> The client resolves <code>llm.&lt;domain&gt;</code>. Avi GSLB returns any healthy site’s gateway. That only decides where the request enters.</div></li>
-    <li><div><b>Identity.</b> The entry gateway checks the API key and writes the tenant ID into the tenant and fairness headers, replacing anything the client sent. An unknown key gets 401.</div></li>
+    <li><div><b>Identity.</b> The entry gateway checks the API key or token and writes the tenant ID into the tenant header; from a token it also writes it into the fairness header (since 0.29.0). Both replace anything the client sent. An unknown key gets 401.</div></li>
     <li><div><b>Quota check.</b> The rate limit service checks the tenant’s bucket in the shared Redis at cost 0. A tenant over budget gets 429 here.</div></li>
     <li><div><b>Conversation key.</b> The entry gateway takes the session header the client sends: <code>X-Claude-Code-Session-Id</code>, or the conversation header of a chat UI. It is the same on every turn, so every turn gets the same key. A request without such a header has no key.</div></li>
     <li><div><b>Site choice.</b> Envoy hashes the key over the sites that serve the model, each weighted by its ready capacity. The same key lands on the same site at every entry gateway, with no service to ask, as long as every gateway resolves each site’s peer host to the same address: Envoy’s Maglev orders the sites by address. A request without a key is spread over the sites by the same weights.</div></li>
@@ -590,7 +590,7 @@ spec:
 <section aria-labelledby="confirm">
   <h2 id="confirm">To confirm before building</h2>
   <ol class="confirm">
-    <li><b>Fairness header.</b> The simplest path is to have the API-key auth write the tenant ID straight into <code>x-llm-d-inference-fairness-id</code> and key token budgets on that same header. The serving site must trust it only from peer certificates.</li>
+    <li><b>Fairness header.</b> Built in 0.29.0: the hub's token check writes the tenant (the token's <code>sub</code>) into <code>x-llm-d-inference-fairness-id</code>. A request with a plain API key has none and joins the scheduler's default flow. The gateway chart strips the header on the client listener, so a site takes it only from the peer listener or its own token check.</li>
     <li><b>Chat UIs.</b> A UI that sends a stable conversation header makes chat sticky as well.</li>
     <li><b>Peer listener limit.</b> It sheds by request count, while the real cost is tokens. Size it from vLLM’s reported concurrency at a realistic context length.</li>
   </ol>
