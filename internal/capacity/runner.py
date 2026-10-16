@@ -31,7 +31,8 @@ import urllib.request
 
 cfg = json.loads(os.environ["AIGW_CAPACITY"])
 # Where the load goes: the instance, with one address per data-parallel rank
-# of a pod that serves on several ports. AIPerf sends to them in turn.
+# of a pod that serves on several ports. AIPerf gives each session one of
+# them in turn and sends all its turns there.
 # A prefill/decode deployment has none: it is reached through the peer
 # listener, below.
 urls = cfg.get("urls") or []
@@ -230,12 +231,15 @@ def metrics():
     return found
 
 
-# Pairs of counters of prompt tokens and the part of them from the cache, in
-# the order they are tried. A pair is used whole, so both figures count the
-# same thing.
+# Counters of prompt tokens and of the part of them from a cache, in the order
+# they are tried; a set is used whole, so all its figures count the same
+# prompts. Since vLLM 0.16 prompt_tokens_cached holds both the local prefix
+# cache and what a KV connector such as LMCache loaded. Before that, the
+# connector's hits are a counter of their own, over the same prompts, for the
+# tokens past the local hits: they are added when the instance has one.
 CACHE_COUNTERS = [
     ("vllm:prompt_tokens_total", "vllm:prompt_tokens_cached_total"),
-    ("vllm:prefix_cache_queries_total", "vllm:prefix_cache_hits_total"),
+    ("vllm:prefix_cache_queries_total", "vllm:prefix_cache_hits_total", "vllm:external_prefix_cache_hits_total"),
 ]
 
 
@@ -247,10 +251,10 @@ def growth(before, after, name):
 
 def cache_growth(before, after):
     """What the instance's prompt and cached-prompt counters grew by."""
-    for prompt, cached in CACHE_COUNTERS:
+    for prompt, cached, *connector in CACHE_COUNTERS:
         p, c = growth(before, after, prompt), growth(before, after, cached)
         if p is not None and c is not None:
-            return p, c
+            return p, c + sum(growth(before, after, name) or 0.0 for name in connector)
     return growth(before, after, "vllm:prompt_tokens_total"), None
 
 
