@@ -11,7 +11,7 @@ import (
 )
 
 const tenantSelect = `SELECT t.id, t.slug, t.display_name, t.enabled, t.created_at,
-	(SELECT count(*) FROM api_keys k WHERE k.tenant_id = t.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())),
+	(SELECT count(*) FROM api_keys k WHERE k.tenant_id = t.id AND k.revoked_at IS NULL AND (k.kind = 'personal' OR k.expires_at IS NULL OR k.expires_at > now())),
 	(SELECT count(*) FROM api_keys k WHERE k.tenant_id = t.id AND k.revoked_at IS NULL AND k.kind = 'key'),
 	(SELECT count(*) FROM quotas q WHERE q.tenant_id = t.id),
 	t.budget_credits, t.budget_window, t.restricted,
@@ -145,11 +145,11 @@ func (s *Store) ListKeys(ctx context.Context, tenantID string) ([]APIKey, error)
 const keyPrefixLen = 9
 
 // keyColumns is what scanKey reads. The key itself is never among them.
-const keyColumns = `id, tenant_id, name, client_id, key_prefix, revoked_at, created_at, kind, expires_at`
+const keyColumns = `id, tenant_id, name, client_id, key_prefix, revoked_at, created_at, kind, expires_at, renewed_at`
 
 func scanKey(r scanner) (APIKey, error) {
 	var k APIKey
-	err := r.Scan(&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt, &k.Kind, &k.ExpiresAt)
+	err := r.Scan(&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt, &k.Kind, &k.ExpiresAt, &k.RenewedAt)
 	return k, err
 }
 

@@ -19,12 +19,19 @@ import (
 const (
 	KindKey   = "key"   // an API key, "sk-…", that every gateway lists
 	KindToken = "token" // a token the hub signed, which the gateways check
+	// KindPersonal is a secret a user's helper trades at the hub for a
+	// token that lives a few days; the gateways never see it.
+	KindPersonal = "personal"
 )
 
 // TokenSettings are what the hub writes into the tokens it signs.
 type TokenSettings struct {
 	Issuer, Audience string
 	Lifetime         time.Duration
+	// RenewedLifetime is how long a token for a personal key lives: how
+	// long a user goes on while the hub cannot be reached, and how long a
+	// token with an older budget can be kept from being renewed.
+	RenewedLifetime time.Duration
 }
 
 // SigningKey is one of the hub's signing keys, without its private half.
@@ -32,10 +39,12 @@ type SigningKey struct {
 	ID        string     `json:"id"`
 	CreatedAt time.Time  `json:"created_at"`
 	RetiredAt *time.Time `json:"retired_at"`
-	// Tokens is how many unrevoked tokens it signed that have not expired:
-	// while there are any, the gateways keep its public key.
-	Tokens int       `json:"tokens"`
-	JWK    token.JWK `json:"-"`
+	// Tokens is how many unrevoked tokens it signed that have not expired,
+	// and RenewedUntil when the last token it signed for a personal key
+	// expires: while there are any, the gateways keep its public key.
+	Tokens       int        `json:"tokens"`
+	RenewedUntil *time.Time `json:"renewed_until"`
+	JWK          token.JWK  `json:"-"`
 }
 
 // ListSigningKeys returns every signing key, the one that signs first.
@@ -43,14 +52,14 @@ func (s *Store) ListSigningKeys(ctx context.Context) ([]SigningKey, error) {
 	return list(ctx, s, func(r scanner) (SigningKey, error) {
 		var k SigningKey
 		var jwk []byte
-		err := r.Scan(&k.ID, &k.CreatedAt, &k.RetiredAt, &k.Tokens, &jwk)
+		err := r.Scan(&k.ID, &k.CreatedAt, &k.RetiredAt, &k.Tokens, &k.RenewedUntil, &jwk)
 		if err == nil {
 			err = json.Unmarshal(jwk, &k.JWK)
 		}
 		return k, err
 	}, `SELECT s.id, s.created_at, s.retired_at,
 	           (SELECT count(*) FROM api_keys k WHERE k.signing_key_id = s.id AND k.revoked_at IS NULL AND k.expires_at > now()),
-	           s.public_jwk
+	           s.renewed_until, s.public_jwk
 	    FROM signing_keys s ORDER BY s.retired_at IS NOT NULL, s.created_at DESC`)
 }
 
@@ -59,8 +68,9 @@ func (s *Store) ListSigningKeys(ctx context.Context) ([]SigningKey, error) {
 // still valid. A retired key with none left is no longer published.
 func GatewayKeys(keys []SigningKey) []token.JWK {
 	var out []token.JWK
+	now := time.Now()
 	for _, k := range keys {
-		if k.RetiredAt == nil || k.Tokens > 0 {
+		if k.RetiredAt == nil || k.Tokens > 0 || (k.RenewedUntil != nil && k.RenewedUntil.After(now)) {
 			out = append(out, k.JWK)
 		}
 	}
@@ -213,13 +223,16 @@ func tokenLimits(ctx context.Context, tx pgx.Tx, t Tenant, c *token.Claims) erro
 
 // TenantOfToken returns the enabled tenant a token belongs to, once its
 // claims were checked: the key must be one of the tenant's, a token, and
-// neither revoked nor expired.
+// neither revoked nor expired; or the token one a live personal key got.
 func (s *Store) TenantOfToken(ctx context.Context, c token.Claims) (Tenant, error) {
 	var tenantID string
 	err := s.db.QueryRow(ctx,
 		`SELECT k.tenant_id FROM api_keys k JOIN tenants t ON t.id = k.tenant_id
 		 WHERE k.jti = $1 AND k.kind = 'token' AND k.revoked_at IS NULL AND k.expires_at > now() AND t.slug = $2 AND t.enabled`,
 		c.ID, c.Subject).Scan(&tenantID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return s.tenantOfRenewed(ctx, c)
+	}
 	if err != nil {
 		return Tenant{}, mapErr(err)
 	}
@@ -258,6 +271,9 @@ func (s *Store) Identity(ctx context.Context) (render.Identity, error) {
 		return id, err
 	}
 	if id.Denied, err = s.DeniedTokens(ctx); err != nil {
+		return id, err
+	}
+	if id.DeniedClients, err = s.DeniedClients(ctx); err != nil {
 		return id, err
 	}
 	id.Disabled, err = list(ctx, s, func(r scanner) (string, error) {

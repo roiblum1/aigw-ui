@@ -76,6 +76,8 @@ spec:
               value: {{ .Values.tokens.audience | quote }}
             - name: TOKEN_LIFETIME_DAYS
               value: {{ .Values.tokens.lifetimeDays | quote }}
+            - name: TOKEN_RENEWED_LIFETIME_HOURS
+              value: {{ .Values.tokens.renewedLifetimeHours | quote }}
             {{- if or .Values.redis.url .Values.redis.existingSecret }}
             - name: REDIS_URL
               valueFrom:

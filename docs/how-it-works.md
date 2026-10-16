@@ -533,6 +533,30 @@ with the keys it should hold and removes any other entry.
   came in through `stringData`, and the gateway trusts every entry: a
   revoked key would keep working.
 
+### Give a person a personal key
+
+**What it does.** A person signs Claude Code in once with a personal key and
+never handles a token; a change of the tenant's budget or models reaches
+them within minutes.
+
+**How.** The helper `aigw-token`, Claude Code's `apiKeyHelper`, trades the
+key at the hub (`POST /api/v1/token`) for a token that lives a week and
+carries the tenant's budget and models as they are then, and gets a new one
+every 10 minutes. The gateways check the token as any other.
+
+**Why.**
+
+- *The limits travel in the token*, so the token must be new for a change
+  to arrive. A token that renews itself does that with nothing for the
+  person to do; one they paste would have to be pasted again.
+- *A week, renewed every 10 minutes.* The hub is asked only for tokens,
+  never for a prompt, and a hub that is down for less than a week stops
+  nobody. A person who keeps an old token from being renewed keeps its
+  budget for at most that week.
+- *Hashed, not encrypted.* No gateway needs the key, so the hub keeps only
+  its hash. The tokens are not stored either: a revoked key's tokens are
+  refused by the key's client ID, which each of them carries.
+
 ### Set a budget across models
 
 **What it does.** One amount in dollars per minute, hour or day for every

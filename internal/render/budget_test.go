@@ -199,3 +199,15 @@ func TestModelsRule(t *testing.T) {
 		t.Fatalf("a models rule without a restricted tenant: %s", spec)
 	}
 }
+
+// A revoked personal key's tokens are refused by their client ID: they
+// are not stored, so there is no jti to refuse them by.
+func TestDeniedClients(t *testing.T) {
+	s := budgetState()
+	s.Identity.DeniedClients = []string{"tenant-x.0011223344556677"}
+	p := find(t, Objects(s), "SecurityPolicy", AuthPolicyName)
+	rules, _, _ := unstructured.NestedSlice(p.Object, "spec", "authorization", "rules")
+	if got := fmt.Sprint(rules[0]); got != "map[action:Deny name:revoked-personal-key principal:map[jwt:map[claims:[map[name:cid values:[tenant-x.0011223344556677]]] provider:aigw-hub]]]" {
+		t.Fatalf("rule %s", got)
+	}
+}

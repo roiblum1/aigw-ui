@@ -66,6 +66,9 @@ func clientAddr(r *http.Request) string {
 // issuer, audience and expiry, then that it is one of the tenant's keys and
 // not revoked. store.ErrNotFound for anything else.
 func (s *Server) tenantOf(ctx context.Context, key string, now time.Time) (store.Tenant, error) {
+	if strings.HasPrefix(key, store.PersonalKeyPrefix) {
+		return s.st.TenantOfPersonalKey(ctx, key)
+	}
 	if !token.LooksLike(key) {
 		return s.st.TenantOfKey(ctx, key)
 	}

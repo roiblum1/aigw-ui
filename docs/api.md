@@ -130,6 +130,7 @@ Request bodies are never stored.
 | GET | `/usage?tenant_id=<id>` | The same for one tenant |
 | GET | `/usage/history?step=day&days=30` | What every tenant used of every model per day or hour |
 | GET | `/my/usage` | A tenant's own budgets, usage and prices. Takes one of the tenant's API keys as the bearer token, not the admin token |
+| POST | `/token` | | A new token for a personal key, which a user's helper asks for: `{"token": "eyJ...", "expires_at", "expires_in"}` (seconds), signed with the tenant's budget and models as they are now; `Cache-Control: no-store`. Takes the personal key as the bearer token, not the admin token. 401 for a key that is unknown, revoked or of a disabled tenant; 429 after ten wrong keys from one address in a minute |
 | POST | `/tenants/{id}/quotas/{model_id}/reset` | `{"counters": 1, "deleted": 1}`. The tenant's usage on that model is back to zero |
 | POST | `/tenants/{id}/budget/reset` | `{"counters": 1, "deleted": 1}`. The tenant's use of its budget across models is back to zero for the running period; 404 without a budget applied to a cluster |
 
@@ -461,7 +462,7 @@ be given; and what is left to give under its overcommit limit
 | PUT | `/tenants/{id}/budget` | `{"credits", "window"}`, or `{"credits": null}` to remove it | The tenant. One budget in credits across every model with prices, enforced by the gateways for the tokens signed from now on: a token carries the budget of its time. 409 while the gateways take API keys too |
 | PUT | `/tenants/{id}/models` | `{"models": ["<model id>", ...]}`, or `{"models": null}` for every model | The tenant. Any other model is refused (403) for the tokens signed from now on, which carry the list; an empty list refuses every model. 409 while the gateways take API keys too |
 | DELETE | `/tenants/{id}` | | 204 |
-| POST | `/tenants/{id}/keys` | `{"name", "kind"}` | `{"key": {...}, "secret": "eyJ..."}`. `kind` is `token`, the default, or `key` for an API key of the kind before 0.18, refused (409) while a model has a standard. A key has `kind` and, a token, `expires_at` |
+| POST | `/tenants/{id}/keys` | `{"name", "kind"}` | `{"key": {...}, "secret": "eyJ..."}`. `kind` is `token`, the default; `personal` for a personal key (`aigw-pk-...`), which `POST /token` takes; or `key` for an API key of the kind before 0.18, refused (409) while a model has a standard. A key has `kind`; a token `expires_at`; a personal key `renewed_at`, when it last got a token, and `expires_at`, when that token expires |
 | DELETE | `/keys/{id}` | | 204, key revoked; a token is refused by every gateway after its next sync, until it expires |
 | GET | `/signing-keys` | | `{"keys": [{"id", "created_at", "retired_at", "tokens"}], "identity", "issuer", "audience", "lifetime_days", "denied"}`. `identity` is `keys` (API keys only, no token issued), `both` or `tokens`; `tokens` of a key counts the unrevoked tokens it signed that have not expired |
 | POST | `/signing-keys/rotate` | | `{"id"}` of the new signing key |

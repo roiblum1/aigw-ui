@@ -140,6 +140,8 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	switch b.Kind {
 	case "", store.KindToken:
 		k, plain, err = s.st.CreateToken(r.Context(), r.PathValue("id"), b.Name, s.st.Tokens(), time.Now())
+	case store.KindPersonal:
+		k, plain, err = s.st.CreatePersonalKey(r.Context(), r.PathValue("id"), b.Name)
 	case store.KindKey:
 		if err = s.keepsTokensOnly(r.Context()); err != nil {
 			writeError(w, http.StatusConflict, err.Error()+".")
@@ -147,7 +149,7 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		}
 		k, plain, err = s.st.CreateKey(r.Context(), r.PathValue("id"), b.Name)
 	default:
-		err = invalid("kind must be %q or %q", store.KindToken, store.KindKey)
+		err = invalid("kind must be %q, %q or %q", store.KindToken, store.KindPersonal, store.KindKey)
 	}
 	if err != nil {
 		fail(w, err)
@@ -159,8 +161,11 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 
 // keyKind names a kind of key in the activity log.
 func keyKind(kind string) string {
-	if kind == store.KindToken {
+	switch kind {
+	case store.KindToken:
 		return "token"
+	case store.KindPersonal:
+		return "personal key"
 	}
 	return "API key"
 }

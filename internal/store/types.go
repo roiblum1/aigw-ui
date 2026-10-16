@@ -238,9 +238,12 @@ type APIKey struct {
 	KeyPrefix string     `json:"key_prefix"`
 	RevokedAt *time.Time `json:"revoked_at"`
 	CreatedAt time.Time  `json:"created_at"`
-	// Kind is KindKey or KindToken; a token expires at ExpiresAt.
+	// Kind is KindKey, KindToken or KindPersonal; a token expires at
+	// ExpiresAt. A personal key does not expire: ExpiresAt is when the last
+	// token it got does, and RenewedAt when it got that token.
 	Kind      string     `json:"kind"`
 	ExpiresAt *time.Time `json:"expires_at"`
+	RenewedAt *time.Time `json:"renewed_at"`
 }
 
 type Quota struct {

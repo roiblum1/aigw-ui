@@ -67,6 +67,8 @@ type Config struct {
 	// long a new token lasts.
 	TokenIssuer, TokenAudience string
 	TokenLifetime              time.Duration
+	// TokenRenewedLifetime is how long a token a personal key gets lives.
+	TokenRenewedLifetime time.Duration
 
 	// Fleet is what every site's entry route has in common. PeerSNI is
 	// empty when neither FLEET_PEER_SNI nor FLEET_DOMAIN is set, and no
@@ -150,6 +152,11 @@ func Load() (*Config, error) {
 		return nil, errors.New("TOKEN_LIFETIME_DAYS must be a whole number of days from 1 to 3650 such as 180")
 	}
 	c.TokenLifetime = time.Duration(days) * 24 * time.Hour
+	hours, err := strconv.Atoi(envOr("TOKEN_RENEWED_LIFETIME_HOURS", "168"))
+	if err != nil || hours < 1 || hours > 24*90 {
+		return nil, errors.New("TOKEN_RENEWED_LIFETIME_HOURS must be a whole number of hours from 1 to 2160 such as 168")
+	}
+	c.TokenRenewedLifetime = time.Duration(hours) * time.Hour
 	c.Fleet.BestEffortPriority, err = strconv.ParseInt(envOr("BEST_EFFORT_PRIORITY", strconv.Itoa(render.DefaultBestEffortPriority)), 10, 32)
 	if err != nil || c.Fleet.BestEffortPriority >= 0 {
 		return nil, errors.New("BEST_EFFORT_PRIORITY must be a whole number below 0 such as -1")
