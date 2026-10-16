@@ -1,9 +1,14 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
+
+	"aigw-ui/internal/store"
 )
 
 func TestHistoryFrom(t *testing.T) {
@@ -54,5 +59,73 @@ func TestClientAddr(t *testing.T) {
 	r.Header.Set("X-Forwarded-For", "1.2.3.4, 203.0.113.7")
 	if got := clientAddr(r); got != "203.0.113.7" {
 		t.Errorf("with the header: %s", got)
+	}
+}
+
+// A tenant held to some models sees prices for those only, and which they
+// are. On the sandbox hub a tenant held to one model was shown the prices of
+// four (2026-10-16).
+func TestMyUsageShowsTheTenantsModels(t *testing.T) {
+	st, ctx := openStore(t)
+	s := &Server{st: st}
+	tenant, err := st.CreateTenant(ctx, "team-a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]string{}
+	for _, name := range []string{"opus", "sonnet"} {
+		id, err := st.CreateModel(ctx, store.ModelInput{Name: name, DefaultLimit: 1, DefaultWindow: "1d"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.SetPendingPrice(ctx, id, store.Price{Input: 300000, Cached: 30000, Output: 1500000}, true); err != nil {
+			t.Fatal(err)
+		}
+		ids[name] = id
+	}
+	if _, err := st.ApplyDuePrices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The tenant used both, so both have a price on its page.
+	err = st.RecordUsage(ctx, func(map[store.UsageKey]store.UsageCursor) ([]store.UsageDelta, []store.UsageCursor, error) {
+		var out []store.UsageDelta
+		for _, id := range ids {
+			out = append(out, store.UsageDelta{UsageKey: store.UsageKey{TenantID: tenant.ID, ModelID: id}, Hour: time.Now(), Unit: "credits", Used: 100})
+		}
+		return out, nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := func(tenant store.Tenant) (models, prices []string) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/v1/my/usage", nil)
+		s.getMyUsage(w, r.WithContext(context.WithValue(r.Context(), tenantKey{}, tenant)))
+		var out myUsage
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatalf("%d %s", w.Code, w.Body)
+		}
+		for _, p := range out.Prices {
+			prices = append(prices, p.ModelName)
+		}
+		return out.Models, prices
+	}
+
+	if models, prices := page(tenant); models != nil || !slices.Equal(prices, []string{"opus", "sonnet"}) {
+		t.Errorf("every model: models %v, prices %v", models, prices)
+	}
+	held, err := st.SetTenantModels(ctx, tenant.ID, []string{ids["opus"]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if models, prices := page(held); !slices.Equal(models, []string{"opus"}) || !slices.Equal(prices, []string{"opus"}) {
+		t.Errorf("held to opus: models %v, prices %v", models, prices)
+	}
+	none, err := st.SetTenantModels(ctx, tenant.ID, []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if models, prices := page(none); models == nil || len(models) != 0 || len(prices) != 0 {
+		t.Errorf("held to no model: models %v, prices %v", models, prices)
 	}
 }
