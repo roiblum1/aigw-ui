@@ -61,8 +61,8 @@ func openStore(t *testing.T) (*store.Store, context.Context) {
 
 // A budget across models and a list of models need the gateways on tokens
 // only, and nothing else. In 0.22.0 the check was the one for a new API key,
-// which also refused them while a model had a standard or another tenant had
-// a budget: the sandbox hub answered 409 to every budget (2026-10-16).
+// which also refused them while another tenant had a budget: the sandbox
+// hub answered 409 to every budget (2026-10-16).
 func TestBudgetsNeedTokensOnly(t *testing.T) {
 	st, ctx := openStore(t)
 	set := store.TokenSettings{Issuer: "aigw-ui", Audience: "aigw-fleet", Lifetime: 24 * time.Hour}
@@ -90,19 +90,12 @@ func TestBudgetsNeedTokensOnly(t *testing.T) {
 		t.Fatalf("tokens only: %d", code)
 	}
 
-	// Another tenant's budget and a model's standard change nothing.
+	// Another tenant's budget changes nothing.
 	if _, err := st.SetTenantBudget(ctx, a.ID, &store.TenantBudget{Credits: 100, Window: "1d"}); err != nil {
 		t.Fatal(err)
 	}
-	m, err := st.CreateModel(ctx, store.ModelInput{Name: "glm", DefaultLimit: 1, DefaultWindow: "1d"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.SetStandard(ctx, m, &store.Standard{Limit: 10, Window: "1d"}, time.Now()); err != nil {
-		t.Fatal(err)
-	}
 	if code := allowed(); code != http.StatusOK {
-		t.Fatalf("with a budget and a standard: %d", code)
+		t.Fatalf("with a budget: %d", code)
 	}
 
 	// An API key again: refused.

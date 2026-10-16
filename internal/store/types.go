@@ -142,32 +142,12 @@ type Model struct {
 	// MarketAnnotations are the values of aigw-ui.io/market-id on the
 	// model's deployments, each once.
 	MarketAnnotations []string `json:"market_annotations"`
-	// Standard is the budget every tenant has on the model, nil when there
-	// is none; a tenant's own quota adds to it. StandardNext is a change
-	// that waits for its day.
-	Standard     *Standard       `json:"standard"`
-	StandardNext *StandardChange `json:"standard_next"`
 	// QuotaRules is how many rules the tenants' quotas on the model take in
 	// its QuotaPolicy, placeholders of quotas since removed included.
 	QuotaRules int `json:"quota_rules"`
 	// QuotaAmounts is how many rules the same quotas take once the gateways
 	// take tokens only: one per amount, placeholders included.
 	QuotaAmounts int `json:"quota_amounts"`
-}
-
-// Standard is a model's standard per-tenant budget: a limit in the model's
-// unit for each window.
-type Standard struct {
-	Limit  int64  `json:"limit"`
-	Window string `json:"window"`
-}
-
-// StandardChange is a change of a model's standard that starts At, the next
-// 00:00 UTC when it was made, so that no tenant's count moves mid-window.
-// Standard nil removes it.
-type StandardChange struct {
-	Standard *Standard `json:"standard"`
-	At       time.Time `json:"at"`
 }
 
 // Cost returns the cost expression that is rendered for the model: the one

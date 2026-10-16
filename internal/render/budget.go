@@ -152,6 +152,13 @@ func (s State) hasBudgets() bool {
 	return s.AuthEnabled && s.Identity.Mode == IdentityTokens && len(s.budgets()) > 0
 }
 
+// budgetPassStem is the Redis key of a tenant's counter under
+// budgetPassRule at position rule, without the key prefix, the tenant and
+// the window start (seen in the shared Redis, 2026-10-16).
+func budgetPassStem(prefix string, rule int) string {
+	return tenantStem(prefix, rule, BudgetHeader+"|.+")
+}
+
 // passesBudgets reports whether the model's QuotaPolicy lets the requests
 // of a tenant with a budget across models through: while some tenant has
 // one, on a model the budgets are charged on.
@@ -159,14 +166,22 @@ func (m Model) passesBudgets() bool {
 	return m.BudgetsHold && m.chargesBudgets()
 }
 
+// The bucket of budgetPassRule: the most the gateway counts, a day, more
+// than a tenant can spend on one model. A day, so that its counter is what
+// the tenant used of the model, which the usage history reads.
+const (
+	budgetPassLimit  int64 = MaxLimit
+	budgetPassWindow       = "1d"
+)
+
 // budgetPassRule is the rule of a model's QuotaPolicy that lets through the
 // requests whose token carries a budget across models. In Shared mode a
 // request passes while any bucket it matches has room, and this one never
 // runs out, so on the model such a tenant is held by its budget alone, not
-// by the model's standard, its pool or a quota of its own: a tenant has
-// either one budget for every model with prices or a budget per model, never
-// both. The header is the one the budget's rule matches, which only a token
-// sets. Each tenant has a bucket of its own (Distinct), which only counts.
+// by the model's pool or a quota of its own: a tenant has either one budget
+// for every model with prices or a budget per model, never both. The header
+// is the one the budget's rule matches, which only a token sets. Each tenant
+// has a bucket of its own (Distinct), which only counts.
 func budgetPassRule(shadow bool) map[string]any {
 	rule := map[string]any{
 		"clientSelectors": []any{
@@ -175,9 +190,7 @@ func budgetPassRule(shadow bool) map[string]any {
 				map[string]any{"name": TenantHeader, "type": "Distinct"},
 			}},
 		},
-		// The most the gateway counts, a minute: more than a tenant can
-		// spend on one model.
-		"quota": map[string]any{"limit": int64(MaxLimit), "duration": "1m"},
+		"quota": map[string]any{"limit": budgetPassLimit, "duration": budgetPassWindow},
 	}
 	if shadow {
 		rule["shadowMode"] = true

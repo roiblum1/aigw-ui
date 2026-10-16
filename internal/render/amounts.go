@@ -27,8 +27,7 @@ func QuotaAmountName(limit int64, window string, shadow bool) string {
 }
 
 // QuotaAmount is one amount of the tenants' own quotas on a model, with the
-// fixed position of its rule in the model's QuotaPolicy (after the
-// standard's). The position is part of the names of the rule's counters in
+// fixed position of its rule in the model's QuotaPolicy. The position is part of the names of the rule's counters in
 // Redis, so it never moves while the amount is in use.
 type QuotaAmount struct {
 	Slot   int
@@ -76,13 +75,22 @@ func amountRule(m Model, a QuotaAmount, shadow bool) map[string]any {
 }
 
 // amountStem is the Redis key of a tenant's counter under the rule at
-// position rule, without the key prefix and the window start. The gateway
-// sorts a rule's headers by name, names each match after its position, the
-// header and the value it matches, and sends a Distinct header's own value.
-func amountStem(prefix string, rule int, m Model, a QuotaAmount, tenant string) string {
+// position rule, without the key prefix, the tenant and the window start.
+// The gateway sorts a rule's headers by name, names each match after its
+// position, the header and the value it matches, and sends a Distinct
+// header's own value.
+func amountStem(prefix string, rule int, m Model, a QuotaAmount) string {
+	return tenantStem(prefix, rule, QuotaHeader(m.Slug)+"|"+a.name())
+}
+
+// tenantStem is the Redis key of a tenant's counter under a rule that
+// matches one header (match, "<header>|<value or pattern>") and counts each
+// tenant by the tenant header, without the key prefix, the tenant and the
+// window start.
+func tenantStem(prefix string, rule int, match string) string {
 	r := "rule-" + strconv.Itoa(rule) + "-"
-	amount := r + QuotaHeader(m.Slug) + "|" + a.name() + "-match-0"
-	return prefix + amount + "_" + amount + "_" + r + TenantHeader + "-match-1_" + tenant + "_"
+	first := r + match + "-match-0"
+	return prefix + first + "_" + first + "_" + r + TenantHeader + "-match-1_"
 }
 
 // amountOf returns the amount a tenant quota has on the model.

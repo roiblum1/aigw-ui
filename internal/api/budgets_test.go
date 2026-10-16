@@ -103,19 +103,22 @@ func TestReadyInstances(t *testing.T) {
 // more rule, which lets such tenants through; prices in a dry run charge no
 // budget and add none.
 func TestRuleCountsWithBudgets(t *testing.T) {
-	m := store.Model{QuotaRules: 2, QuotaAmounts: 1, Standard: &store.Standard{Limit: 10, Window: "1h"}, Prices: &store.Price{Input: 1}}
+	m := store.Model{QuotaRules: 2, QuotaAmounts: 1, Prices: &store.Price{Input: 1}}
 	count := func(m store.Model, budgets bool) int {
-		now, _, _ := ruleCounts(m, render.IdentityTokens, 50, budgets)
+		now, perTenant := ruleCounts(m, render.IdentityTokens, budgets)
+		if perTenant != 2 {
+			t.Fatalf("a rule per tenant would take %d", perTenant)
+		}
 		return now
 	}
-	if n := count(m, false); n != 2 {
-		t.Fatalf("without budgets: %d rules, want the standard's and the amount's", n)
+	if n := count(m, false); n != 1 {
+		t.Fatalf("without budgets: %d rules, want the amount's", n)
 	}
-	if n := count(m, true); n != 3 {
+	if n := count(m, true); n != 2 {
 		t.Fatalf("with budgets: %d rules", n)
 	}
 	m.PriceDryRun = true
-	if n := count(m, true); n != 2 {
+	if n := count(m, true); n != 1 {
 		t.Fatalf("prices in a dry run: %d rules", n)
 	}
 }

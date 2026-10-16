@@ -164,9 +164,10 @@ tokens a request is charged, for example output tokens counted four times.
 
 **How.** Both are fields of the model's `QuotaPolicy`.
 
-**Why.** The default pool is 1 token per day. A tenant without a quota is
-therefore refused as soon as the model has any quota, in place of drawing
-from an unlimited pool.
+**Why.** The default pool is 1 token per day. A tenant without a quota or
+a budget across models is therefore refused as soon as the model has its
+`QuotaPolicy`, in place of drawing from an unlimited pool. A model with
+prices has one while any tenant has a budget across models.
 
 ### Prices
 
@@ -596,8 +597,8 @@ entry routes' own policies merge with it. See
   the Redis belongs near the gateways.
 - *One or the other (0.25.0).* On a model with prices the budget is the
   tenant's only limit: it has no quota of its own there, and the model's
-  standard and pool do not hold it, so it really chooses what to spend the
-  amount on. Each such model's `QuotaPolicy` has one rule that lets a token
+  pool does not hold it, so it really chooses what to spend the amount
+  on. Each such model's `QuotaPolicy` has one rule that lets a token
   with a budget through. Before 0.25.0 both held and the tighter won: a
   tenant with $5 an hour across models could spend no more than Opus's $2
   standard on Opus, and a quota of its own above the budget held nothing.
@@ -670,6 +671,14 @@ its own. The gateway's rate limit service counts in Redis.
   token, not in the gateways' objects. The gateway cannot take a quota's
   limit from a token (the `QuotaPolicy` matches headers only), so the
   token picks the rule instead.
+- *No default for every tenant (0.26.0).* From 0.19 to 0.25 a model could
+  have a **standard budget**: one rule that gave every tenant the same
+  amount, so that most tenants needed no rule of their own. Once quotas
+  took one rule per amount, a thousand tenants with a few amounts took a
+  few rules anyway, and the standard only added a second limit next to a
+  tenant's own (it held a budget across models to the standard too). A
+  tenant now has what it is given, and a tenant with nothing draws from the
+  model's pool.
 
 ## Usage
 

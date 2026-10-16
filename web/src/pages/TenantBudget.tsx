@@ -49,8 +49,8 @@ export function TenantBudgetCard(props: {
   };
   const remove = () =>
     confirm(
-      `Remove the budget across models of ${tenant.slug}? On each model it is then held by the model's standard, ` +
-        "or its pool, until it gets quotas of its own. Set again in the same period, the budget comes back with what was used.",
+      `Remove the budget across models of ${tenant.slug}? On each model it then draws from the model's pool, ` +
+        "until it gets quotas of its own. Set again in the same period, the budget comes back with what was used.",
     ) &&
     act(() => api.setTenantBudget(tenant.id, null, "1d"));
 
@@ -61,7 +61,7 @@ export function TenantBudgetCard(props: {
         One amount in dollars for every model with prices, counted together: the tenant chooses what to spend it on,
         and a cheaper model spends it more slowly. Once it is spent the gateway refuses the tenant (HTTP 429) on every
         model, until the next {tenant.budget ? windowLabel[tenant.budget.window] : "period"}. On those models it is the
-        tenant's only limit: their standards and pools do not hold it, and it has no quotas of its own there. A tenant
+        tenant's only limit: their pools do not hold it, and it has no quotas of its own there. A tenant
         has one budget across models or a budget per model, not both. The amount travels in the tenant's tokens:
         tokens created after a change carry the new one, older tokens the one they were created with.
         {unpriced.length > 0 &&

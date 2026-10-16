@@ -97,8 +97,8 @@ cluster's own routes cannot be removed by a sync.
 1. A key has the client ID `<tenant>.<random>`, for example `team-search.5018d00f`. A token's is `<tenant>.<jti>`, 16 hex digits, and is in the token as `cid`.
 2. The gateway's API key auth validates the key and forwards the client ID in the `x-aigw-client-id` header. A token is checked by the gateway's JWT provider against the hub's public keys: while any tenant has an API key, every token is listed as one too and the API key auth writes its client ID; once none has, the JWT provider writes it from `cid`. Either way it also writes `x-aigw-tenant` (`sub`) and `x-aigw-key` (`jti`). See [security](security.md#tokens).
 3. While the gateways take API keys, the model's `QuotaPolicy` has one bucket rule per tenant that matches `^<tenant>\.[a-f0-9]+$`, so all keys of a tenant share one bucket.
-   Once they take **tokens only**, the tenants' own quotas take **one rule per amount** instead: the tenants with the same limit, window and dry-run setting on a model share a rule that matches the model's `x-aigw-quota-<model>` header exactly (`500000-1h`) and `x-aigw-tenant` with `type: Distinct`, which counts each of them in a bucket of its own. The token names the amount of each of the tenant's own quotas (claim `quotas`, by model slug), and the JWT provider copies it to that header; it takes a client's own value of the header out first and writes nothing when the token names none, so a tenant cannot pick an amount. The rule keeps its position while any tenant has the amount (table `quota_amounts`, kept by a trigger on `quotas`), so a tenant moving to an amount that is there changes no object on the gateways: only its next token does. A model with a **standard budget** has one more rule first, `x-aigw-tenant` with `type: Distinct`, which gives every tenant a bucket of its own at the standard; an own quota only adds to it, since a request passes when any bucket has room.
-4. The gateway's quota rate limit service counts tokens in Redis. Under a standard, the key of a tenant's bucket holds the tenant's slug (`…_rule-0-x-aigw-tenant-match-0_<tenant>_<window start>`); under an amount's rule it holds the rule's position, the amount and the slug (`…_rule-1-x-aigw-quota-<model>|500000-1h-match-0_…_rule-1-x-aigw-tenant-match-1_<tenant>_<window start>`). `render.Counters` names them, so the Usage page, the best-effort mover, usage reset and the history read them as before. A tenant whose amount changes is counted under the new amount from its next token: its count starts again.
+   Once they take **tokens only**, the tenants' own quotas take **one rule per amount** instead: the tenants with the same limit, window and dry-run setting on a model share a rule that matches the model's `x-aigw-quota-<model>` header exactly (`500000-1h`) and `x-aigw-tenant` with `type: Distinct`, which counts each of them in a bucket of its own. The token names the amount of each of the tenant's own quotas (claim `quotas`, by model slug), and the JWT provider copies it to that header; it takes a client's own value of the header out first and writes nothing when the token names none, so a tenant cannot pick an amount. The rule keeps its position while any tenant has the amount (table `quota_amounts`, kept by a trigger on `quotas`), so a tenant moving to an amount that is there changes no object on the gateways: only its next token does. There is no rule for every tenant: until 0.26.0 a model's **standard budget** was one, `x-aigw-tenant` with `type: Distinct` first, which a tenant's own quota only added to. A tenant with neither a quota nor a budget across models draws from the model's default bucket, the pool.
+4. The gateway's quota rate limit service counts tokens in Redis. Under an amount's rule the key of a tenant's bucket holds the rule's position, the amount and the slug (`…_rule-0-x-aigw-quota-<model>|500000-1h-match-0_…_rule-0-x-aigw-tenant-match-1_<tenant>_<window start>`); under the rule for budgets across models the header and the slug (`…_rule-3-x-aigw-budget|.+-match-0_…_rule-3-x-aigw-tenant-match-1_<tenant>_<window start>`). `render.Counters` names them, so the Usage page, the best-effort mover, usage reset and the history read them as before. A tenant whose amount changes is counted under the new amount from its next token: its count starts again.
 
 `QuotaPolicy` runs in `Shared` mode: a request passes if any matching bucket
 has quota left, and it is also charged to the model's default bucket. The
@@ -204,21 +204,22 @@ what it last applied.
    never both, and the hub refuses either while the other is there (HTTP
    409). The model's `QuotaPolicy` ends with one more rule, which matches
    `x-aigw-budget` (`RegularExpression` `.+`) and `x-aigw-tenant`
-   (`Distinct`) and holds 4,294,967,295 a minute: in `Shared` mode a request
+   (`Distinct`) and holds 4,294,967,295 a day: in `Shared` mode a request
    passes while any bucket it matches has room, so a token with a budget is
-   not held by the model's standard, its pool or a quota it had from before.
+   not held by the model's pool or a quota it had from before. Its bucket
+   per tenant is what the tenant used of the model, which the Usage page and
+   the history read (a day since 0.26.0; a minute in 0.25.0).
    The rule is last, so the rules before it keep their positions and their
    counters; the pool's counter is named after the number of rules, so its
    count starts again when the rule comes or goes. It is rendered while an
    enabled tenant has a budget, on a model whose prices charge the budgets
    (not in a dry run), and such a model then gets its `QuotaPolicy` even
-   without a quota or a standard, so that its pool holds the tenants with
-   neither. The tenant's counters there only count (`Counter.Budget`): the
+   without a quota, so that its pool holds the tenants with neither. The tenant's counters there only count (`Counter.Budget`): the
    Usage page shows what it used inside its budget, and the best-effort
    mover never moves it. It is one more key in the same call to the quota's
    rate limit service, not another round trip.
 
-It needs tokens only, as a standard does: the rule reads the tenant header.
+It needs tokens only, as quotas by amount do: the rule reads the tenant header.
 And it needs global rate limiting enabled in the Envoy Gateway configuration
 of every cluster, with the shared Redis and a timeout that reaches it (the
 default of 20 ms does not across a network: every call is cancelled and the

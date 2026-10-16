@@ -47,11 +47,8 @@ func TestRealAPIServerIdentity(t *testing.T) {
 		t.Fatalf("backend headers: %v", b.Object["spec"])
 	}
 
-	// Tokens only, with a standard: one Distinct rule on the tenant header
-	// and team-a's quota as an Exact exception on it.
+	// Tokens only: the Secret and the API key check go.
 	s.Identity.Mode = render.IdentityTokens
-	s.Models[0].Standard = &render.Budget{Limit: 100, Window: "1h"}
-	s.Tenants = []string{"team-a", "team-b"}
 	res, err := c.Sync(ctx, ns, render.Objects(s), nil)
 	if err != nil {
 		t.Fatalf("tokens: the API server refused a rendered object: %v", err)
@@ -73,8 +70,8 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	}
 	quotas, _, _ := unstructured.NestedSlice(q.Object, "spec", "perModelQuotas")
 	rules := quotas[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
-	if len(rules) != 2 || fmt.Sprint(rules[0]) != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1h limit:100]]" {
-		t.Fatalf("standard rules: %v", rules)
+	if len(rules) == 0 || strings.Contains(fmt.Sprint(rules), render.TenantHeader) {
+		t.Fatalf("rules per tenant: %v", rules)
 	}
 
 	// Budgets across models and a tenant held to one model: the budget
@@ -94,7 +91,7 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	}
 	quotas, _, _ = unstructured.NestedSlice(q.Object, "spec", "perModelQuotas")
 	rules = quotas[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
-	if last := fmt.Sprint(rules[len(rules)-1]); last != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-budget type:RegularExpression value:.+] map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1m limit:4294967295]]" {
+	if last := fmt.Sprint(rules[len(rules)-1]); last != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-budget type:RegularExpression value:.+] map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:4294967295]]" {
 		t.Fatalf("the rule for budgets: %v", rules)
 	}
 	btp, _ := gvrFor("BackendTrafficPolicy")
@@ -155,7 +152,7 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	}
 	quotas, _, _ = unstructured.NestedSlice(q.Object, "spec", "perModelQuotas")
 	rules = quotas[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
-	if len(rules) != 2 || fmt.Sprint(rules[1]) != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-quota-glm-5-3 type:Exact value:500-1d] map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:500]]" {
+	if len(rules) != 1 || fmt.Sprint(rules[0]) != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-quota-glm-5-3 type:Exact value:500-1d] map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:500]]" {
 		t.Fatalf("rules by amount: %v", rules)
 	}
 	if live, err = c.dyn.Resource(pol).Namespace(ns).Get(ctx, render.AuthPolicyName, metav1.GetOptions{}); err != nil {

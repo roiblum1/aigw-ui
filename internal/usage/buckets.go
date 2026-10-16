@@ -144,10 +144,11 @@ func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) (
 	return out, budgets, nil
 }
 
-// StandardUsed is what the model's standard counted for the tenant slug in
-// the window that contains now, the most of any backend: 0 for a slug no
-// request named. ok is false when the model has no standard on any cluster.
-func (s *Service) StandardUsed(ctx context.Context, modelSlug, slug string, now time.Time) (used int64, ok bool, err error) {
+// UsedAs is what the rule that counts the tenant own on the model counted
+// for the tenant slug in the window that contains now, the most of any
+// backend: 0 for a slug no request named. ok is false when no such rule
+// counts own by the tenant header on any cluster.
+func (s *Service) UsedAs(ctx context.Context, modelSlug, own, slug string, now time.Time) (used int64, ok bool, err error) {
 	clusters, err := s.st.ListClusters(ctx)
 	if err != nil {
 		return 0, false, err
@@ -159,10 +160,10 @@ func (s *Service) StandardUsed(ctx context.Context, modelSlug, slug string, now 
 			return 0, false, err
 		}
 		for _, ct := range render.Counters(state) {
-			if ct.ModelSlug != modelSlug || !ct.Pool {
+			if ct.ModelSlug != modelSlug || ct.TenantSlug != own || ct.Overage {
 				continue
 			}
-			if other, has := ct.StandardFor(slug); has {
+			if other, has := ct.For(slug); has {
 				keys = append(keys, other.RedisKey(s.rd.Prefix, now))
 			}
 		}

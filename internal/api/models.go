@@ -107,11 +107,6 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	enabled, err := s.st.EnabledTenants(r.Context())
-	if err != nil {
-		fail(w, err)
-		return
-	}
 	budgets, err := s.st.AnyTenantBudget(r.Context())
 	if err != nil {
 		fail(w, err)
@@ -122,7 +117,7 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	for i := range out {
 		out[i].Warnings = s.modelWarnings(out[i], fleet, peers, len(bestEffort[out[i].ID]))
 		models[i] = withMarket(out[i], snap)
-		models[i].Rules, models[i].RulesPerTenant, models[i].StandardHeld = ruleCounts(out[i], mode, enabled, budgets)
+		models[i].Rules, models[i].RulesPerTenant = ruleCounts(out[i], mode, budgets)
 	}
 	writeJSON(w, http.StatusOK, models)
 }
@@ -188,25 +183,18 @@ func (s *Server) deleteModel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ruleCounts is how many bucket rules a model's QuotaPolicy has, how many it
-// would have with a rule for each of the enabled tenants in place of its
-// standard and its amounts, and why its standard is not rendered, if it is
-// not. Once the gateways take tokens only, the tenants' own quotas take a
-// rule per amount instead of one each, and while a tenant has a budget
-// across models (budgets), a model it is charged on has one more rule.
-func ruleCounts(m store.Model, mode string, enabled int, budgets bool) (now, perTenant int, held string) {
+// ruleCounts is how many bucket rules a model's QuotaPolicy has, and how
+// many the tenants' own quotas would take with a rule each. Once the
+// gateways take tokens only, they take a rule per amount instead, and while
+// a tenant has a budget across models (budgets), a model it is charged on
+// has one more rule.
+func ruleCounts(m store.Model, mode string, budgets bool) (now, perTenant int) {
 	rm := render.Model{}
 	for i := 0; i < m.QuotaRules; i++ {
 		rm.Quotas = append(rm.Quotas, render.TenantQuota{TenantSlug: "t", Slot: i, Limit: 1, Window: "1d"})
 	}
-	if m.Standard != nil {
-		if mode == render.IdentityTokens {
-			rm.Standard = &render.Budget{Limit: m.Standard.Limit, Window: m.Standard.Window}
-		} else {
-			held = "the gateways take API keys too, and a request with one has no tenant header: the tenants' own quotas count, and the standard waits until the last API key is revoked"
-		}
-	}
-	now, perTenant = render.RuleCount(rm, enabled)
+	now = render.RuleCount(rm)
+	perTenant = now
 	if mode == render.IdentityTokens {
 		rm.ByAmount = true
 		// The model's prices charge the budgets unless they are in a dry run.
@@ -217,8 +205,7 @@ func ruleCounts(m store.Model, mode string, enabled int, budgets bool) (now, per
 		for i := 0; i < m.QuotaAmounts; i++ {
 			rm.Amounts = append(rm.Amounts, render.QuotaAmount{Slot: i, Limit: 1, Window: "1d"})
 		}
-		perTenant = max(perTenant, now)
-		now, _ = render.RuleCount(rm, enabled)
+		now = render.RuleCount(rm)
 	}
-	return now, perTenant, held
+	return now, perTenant
 }

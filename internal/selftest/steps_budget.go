@@ -25,7 +25,7 @@ func (t *test) budgetTokensOnly() bool {
 // budget takes the temporary tenant's quota on the model away and gives it
 // a budget of 1 credit across models instead: a tenant has one or the
 // other, and on a model with prices the budget alone holds it, so the
-// model's standard and pool cannot refuse it either. A long request is
+// model's pool cannot refuse it either. A long request is
 // answered and its cost in credits counted where the Usage page reads it;
 // the next request is refused with HTTP 429.
 func (t *test) budget() (string, string) {
@@ -69,7 +69,7 @@ func (t *test) budget() (string, string) {
 	}
 
 	// The first answered request is charged once its answer is complete.
-	// Until the policies are in place the model's standard or pool may
+	// Until the policies are in place the model's pool may
 	// still refuse, so a 429 here means waiting, not failure.
 	start := time.Now()
 	var first gateway.ChatResult

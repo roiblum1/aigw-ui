@@ -142,25 +142,36 @@ func (t *test) until(key string, refused bool) (string, bool) {
 	return last, false
 }
 
-// standard reports whether the gateway counts the model by its standard: it
-// has one, and the gateways take tokens only.
-func (t *test) standard() bool {
-	return t.model.Standard != nil && t.mode == render.IdentityTokens && t.cluster.AuthEnabled
+// byTenantHeader reports whether the gateway counts the tenant's quota by
+// the tenant header: with tokens only, every tenant with the same amount on
+// a model shares one rule, with a bucket per tenant.
+func (t *test) byTenantHeader() bool {
+	return t.mode == render.IdentityTokens && t.cluster.AuthEnabled
 }
 
 // tenantHeader sends a request with the temporary tenant's token and another
 // tenant's slug in the tenant header. It has to be counted for the token's
-// tenant, and nothing for the slug the client sent: under a standard every
-// tenant has a bucket of its own on one rule, so a header the client could
-// set would let it spend under any name, made up or another tenant's.
+// tenant, and nothing for the slug the client sent: under an amount's rule
+// every tenant with that amount has a bucket of its own, so a header the
+// client could set would let it spend under any name, made up or another
+// tenant's.
 func (t *test) tenantHeader() (string, string) {
 	switch {
 	case !t.tokens:
 		return Skipped, "The hub has issued no token yet: the gateway does not set the tenant header."
-	case !t.standard():
-		return Skipped, "Nothing counts by the tenant header on this model: it has no standard budget, or the gateways still take API keys."
+	case !t.byTenantHeader():
+		return Skipped, "Nothing counts by the tenant header on this model: the gateways still take API keys."
 	case t.r.usage == nil:
 		return Skipped, "Usage monitoring is off: the server has no Redis configured."
+	}
+	if !t.bestEffort() && !t.model.PriceDryRun {
+		// The tenant's quota is spent, so the request would be refused.
+		if !t.r.usage.CanReset() {
+			return Skipped, "The tenant's quota is spent and resetting usage is turned off (redis.allowReset)."
+		}
+		if _, err := t.r.usage.Reset(t.ctx, t.tenant.ID, t.model.ID); err != nil {
+			return Failed, "Reset: " + err.Error()
+		}
 	}
 	other := TenantPrefix + "nobody"
 	before, err := t.quota()
@@ -183,7 +194,7 @@ func (t *test) tenantHeader() (string, string) {
 		// On a model in best-effort mode the step before moved the tenant
 		// to the best-effort route, which counts apart.
 		if now.Used+now.OverageUsed > before.Used+before.OverageUsed {
-			theirs, _, err := t.r.usage.StandardUsed(t.ctx, t.model.Slug, other, time.Now())
+			theirs, _, err := t.r.usage.UsedAs(t.ctx, t.model.Slug, t.tenant.Slug, other, time.Now())
 			if err != nil {
 				return Failed, "Redis: " + err.Error()
 			}

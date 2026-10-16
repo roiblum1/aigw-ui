@@ -115,30 +115,19 @@ type Model struct {
 	// cluster, set for a model in best-effort mode. Each gets the request
 	// class the best-effort route names.
 	BestEffortPools []Pool
-	// Standard is the budget every tenant has on the model: one rule on the
-	// tenant header, with one bucket per tenant, in place of a rule per
-	// tenant. Quotas are then exceptions that add to it, matched on the
-	// tenant header too. It is set only while the gateway takes tokens
-	// only: a request with an API key has no tenant header.
-	Standard *Budget
 	// ByAmount renders the tenants' own quotas as one rule per amount
 	// (Amounts), which the token picks, instead of one rule per tenant
 	// (Quotas, which then only name the tenants' counters). It is set only
-	// while the gateway takes tokens only, as Standard is.
+	// while the gateway takes tokens only: a request with an API key has no
+	// tenant header.
 	ByAmount bool
 	Amounts  []QuotaAmount
 	// BudgetsHold is set while some tenant has a budget across models. On a
 	// model the budget is charged on, the budget alone then holds such a
 	// tenant: the model's QuotaPolicy has one more rule that lets its
 	// requests through (budgetPassRule). It is set only while the gateway
-	// takes tokens only, as Standard is.
+	// takes tokens only, as ByAmount is.
 	BudgetsHold bool
-}
-
-// Budget is a limit for each window.
-type Budget struct {
-	Limit  int64
-	Window string
 }
 
 // Held reports whether the model's objects on the cluster are left alone.
@@ -193,9 +182,6 @@ type State struct {
 	Fleet  FleetConfig
 	Models []Model
 	Keys   []Key
-	// Tenants are the slugs of the enabled tenants: each has a counter of
-	// its own under a model's standard.
-	Tenants []string
 	// Budgets are the enabled tenants' budgets across every priced model,
 	// and Restricted the enabled tenants that may call only some models.
 	// Both are enforced through the tenant header a token sets, so they are
@@ -235,7 +221,7 @@ func Objects(s State) []*unstructured.Unstructured {
 		// are charged on gets its policy without any quota too: its pool
 		// then holds the tenants with neither a budget nor a quota of their
 		// own, as it does on a model with quotas.
-		if len(m.Quotas) > 0 || m.standard() != nil || m.passesBudgets() {
+		if len(m.Quotas) > 0 || m.passesBudgets() {
 			out = append(out, quotaPolicies(s, m)...)
 		}
 		if t, ok := m.overageTarget(); ok {

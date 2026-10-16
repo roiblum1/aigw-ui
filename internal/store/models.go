@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -21,22 +20,14 @@ type ModelInput struct {
 }
 
 func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet, spent_mode, best_effort_unlimited, best_effort_limit, price_dry_run, market_id,
-	        standard_limit, standard_window, standard_next_limit, standard_next_window, standard_next_at FROM models ORDER BY name`)
+	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet, spent_mode, best_effort_unlimited, best_effort_limit, price_dry_run, market_id
+	        FROM models ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	models, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Model, error) {
 		m := Model{Endpoints: []Endpoint{}, Warnings: []string{}, MarketAnnotations: []string{}}
-		var limit, nextLimit *int64
-		var window, nextWindow *string
-		var nextAt *time.Time
-		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet, &m.SpentMode, &m.BestEffortUnlimited, &m.BestEffortLimit, &m.PriceDryRun, &m.MarketIDSet,
-			&limit, &window, &nextLimit, &nextWindow, &nextAt)
-		m.Standard = standardOf(limit, window)
-		if nextAt != nil {
-			m.StandardNext = &StandardChange{Standard: standardOf(nextLimit, nextWindow), At: *nextAt}
-		}
+		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet, &m.SpentMode, &m.BestEffortUnlimited, &m.BestEffortLimit, &m.PriceDryRun, &m.MarketIDSet)
 		return m, err
 	})
 	if err != nil {
@@ -186,19 +177,11 @@ func replaceEndpoints(ctx context.Context, tx pgx.Tx, modelID string, in ModelIn
 // GetModel returns a model's own settings, without its endpoints.
 func (s *Store) GetModel(ctx context.Context, id string) (Model, error) {
 	var m Model
-	var limit, nextLimit *int64
-	var window, nextWindow *string
-	var nextAt *time.Time
-	err := s.db.QueryRow(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, price_dry_run, best_effort_limit,
-	                                  standard_limit, standard_window, standard_next_limit, standard_next_window, standard_next_at FROM models WHERE id = $1`, id).
-		Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.PriceDryRun, &m.BestEffortLimit,
-			&limit, &window, &nextLimit, &nextWindow, &nextAt)
+	err := s.db.QueryRow(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, price_dry_run, best_effort_limit
+	                           FROM models WHERE id = $1`, id).
+		Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.PriceDryRun, &m.BestEffortLimit)
 	if err != nil {
 		return m, mapErr(err)
-	}
-	m.Standard = standardOf(limit, window)
-	if nextAt != nil {
-		m.StandardNext = &StandardChange{Standard: standardOf(nextLimit, nextWindow), At: *nextAt}
 	}
 	prices, err := s.modelPrices(ctx)
 	prices.priced(&m)

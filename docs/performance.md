@@ -183,8 +183,8 @@ twenty also on Sonnet:
 
 - **Nothing on the way of a prompt grew.** Only own quotas added rules, one
   per tenant on that model's `QuotaPolicy` (0.23): tenants under the model's
-  standard share its one rule, and budgets and model lists are in the
-  tokens. Since 0.24 own quotas take one rule per amount with tokens only:
+  standard (removed in 0.26) shared its one rule, and budgets and model
+  lists are in the tokens. Since 0.24 own quotas take one rule per amount with tokens only:
   the 100 Opus quotas of this run, all $5 an hour, would be one rule.
 - 3,350 API calls made the tenants in 229 s, eight at a time from another
   continent; deleting them took 70 s. A token renewal took no longer.
