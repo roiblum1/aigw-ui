@@ -8,8 +8,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-
-	"aigw-ui/internal/render"
 )
 
 const tenantSelect = `SELECT t.id, t.slug, t.display_name, t.enabled, t.created_at,
@@ -17,7 +15,8 @@ const tenantSelect = `SELECT t.id, t.slug, t.display_name, t.enabled, t.created_
 	(SELECT count(*) FROM api_keys k WHERE k.tenant_id = t.id AND k.revoked_at IS NULL AND k.kind = 'key'),
 	(SELECT count(*) FROM quotas q WHERE q.tenant_id = t.id),
 	t.budget_credits, t.budget_window, t.restricted,
-	(SELECT coalesce(array_agg(tm.model_id::text ORDER BY tm.model_id), '{}') FROM tenant_models tm WHERE tm.tenant_id = t.id)
+	(SELECT coalesce(array_agg(tm.model_id::text ORDER BY tm.model_id), '{}') FROM tenant_models tm WHERE tm.tenant_id = t.id),
+	t.limits_changed_at
 	FROM tenants t`
 
 func scanTenant(row pgx.Row) (Tenant, error) {
@@ -27,7 +26,7 @@ func scanTenant(row pgx.Row) (Tenant, error) {
 	var restricted bool
 	var models []string
 	err := row.Scan(&t.ID, &t.Slug, &t.DisplayName, &t.Enabled, &t.CreatedAt, &t.KeyCount, &t.APIKeyCount, &t.QuotaCount,
-		&credits, &window, &restricted, &models)
+		&credits, &window, &restricted, &models, &t.LimitsChangedAt)
 	if credits != nil && window != nil {
 		t.Budget = &TenantBudget{Credits: *credits, Window: *window}
 	}
@@ -38,67 +37,19 @@ func scanTenant(row pgx.Row) (Tenant, error) {
 }
 
 // SetTenantBudget sets the tenant's budget across models, nil to remove it,
-// and returns the tenant.
-//
-// A tenant's first budget takes a position in the gateways' policy, and the
-// tenant keeps it, with or without a budget, so a new amount, or a budget
-// removed and set again, keeps what the tenant used in the running period.
-// See render.TenantBudget.Slot.
+// and returns the tenant. The tokens signed from now on carry it; those
+// signed before carry the budget of their time (Tenant.LimitsChangedAt).
 func (s *Store) SetTenantBudget(ctx context.Context, id string, b *TenantBudget) (Tenant, error) {
-	if b == nil {
-		// The tenant keeps its position, and with it the count of the
-		// running period: a budget set again comes back with what it used.
-		if err := affected(s.db.Exec(ctx, `UPDATE tenants SET budget_credits = NULL, budget_window = NULL WHERE id = $1`, id)); err != nil {
-			return Tenant{}, err
-		}
-		return s.GetTenant(ctx, id)
+	var credits *int64
+	var window *string
+	if b != nil {
+		credits, window = &b.Credits, &b.Window
 	}
-	var err error
-	// Two new budgets can pick the same position at the same time. The
-	// unique index refuses the second, which then picks again.
-	for range 5 {
-		err = pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error { return setTenantBudget(ctx, tx, id, b) })
-		var pg *pgconn.PgError
-		if !errors.As(err, &pg) || pg.ConstraintName != "tenants_budget_slot" {
-			break
-		}
-	}
-	if err != nil {
-		return Tenant{}, mapErr(err)
+	if err := affected(s.db.Exec(ctx,
+		`UPDATE tenants SET budget_credits = $2, budget_window = $3, limits_changed_at = now() WHERE id = $1`, id, credits, window)); err != nil {
+		return Tenant{}, err
 	}
 	return s.GetTenant(ctx, id)
-}
-
-// setTenantBudget stores a budget and, for a tenant without a position, gives
-// it one: the lowest that no tenant holds, else the lowest that a tenant
-// without a budget holds, which then starts from 0 if it gets one again.
-// ErrBudgetsFull when every position belongs to a budget.
-func setTenantBudget(ctx context.Context, tx pgx.Tx, id string, b *TenantBudget) error {
-	var slot *int
-	if err := tx.QueryRow(ctx, `SELECT budget_slot FROM tenants WHERE id = $1 FOR UPDATE`, id).Scan(&slot); err != nil {
-		return err
-	}
-	if slot == nil {
-		if err := tx.QueryRow(ctx,
-			`SELECT min(p) FROM generate_series(0, $1 - 1) p WHERE NOT EXISTS (SELECT 1 FROM tenants WHERE budget_slot = p)`,
-			render.MaxBudgets).Scan(&slot); err != nil {
-			return err
-		}
-	}
-	if slot == nil {
-		err := tx.QueryRow(ctx,
-			`WITH held AS (SELECT id, budget_slot FROM tenants WHERE budget_credits IS NULL AND budget_slot IS NOT NULL
-			               ORDER BY budget_slot LIMIT 1 FOR UPDATE)
-			 UPDATE tenants t SET budget_slot = NULL FROM held WHERE t.id = held.id RETURNING held.budget_slot`).Scan(&slot)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrBudgetsFull
-		}
-		if err != nil {
-			return err
-		}
-	}
-	_, err := tx.Exec(ctx, `UPDATE tenants SET budget_credits = $2, budget_window = $3, budget_slot = $4 WHERE id = $1`, id, b.Credits, b.Window, *slot)
-	return err
 }
 
 // SetTenantModels sets the models the tenant may call: nil for every model,
@@ -109,7 +60,7 @@ func (s *Store) SetTenantModels(ctx context.Context, id string, models []string)
 		return Tenant{}, err
 	}
 	defer tx.Rollback(ctx)
-	if err := affected(tx.Exec(ctx, `UPDATE tenants SET restricted = $2 WHERE id = $1`, id, models != nil)); err != nil {
+	if err := affected(tx.Exec(ctx, `UPDATE tenants SET restricted = $2, limits_changed_at = now() WHERE id = $1`, id, models != nil)); err != nil {
 		return Tenant{}, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM tenant_models WHERE tenant_id = $1`, id); err != nil {

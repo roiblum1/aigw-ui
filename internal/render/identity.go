@@ -60,7 +60,10 @@ func jwtProvider(i Identity) map[string]any {
 	// ID, and it must stay: the JWT filter removes every header it writes
 	// before it reads a token, and a request with an API key has none.
 	if i.Mode == IdentityTokens {
-		claims = append(claims, map[string]any{"header": ClientIDHeader, "claim": "cid"})
+		claims = append(claims,
+			map[string]any{"header": ClientIDHeader, "claim": "cid"},
+			// A token with a budget across models: the budget rule matches it.
+			map[string]any{"header": BudgetHeader, "claim": BudgetClaim})
 	}
 	return map[string]any{
 		"name":      TokenProvider,
@@ -83,9 +86,9 @@ func jwtProvider(i Identity) map[string]any {
 // and any other credential shaped like a token, such as an expired token
 // still listed, is refused. An API key never looks like a token.
 //
-// restricted adds one rule per tenant that may call only some models, which
-// refuses its requests for any other (HTTP 403). With API keys still taken
-// a request with one has no tenant header and is not held by it.
+// With some tenant held to some models, one more rule refuses a request for
+// a model its token does not list (HTTP 403). With API keys still taken a
+// request with one carries no token and is not held by it.
 func authorization(i Identity, restricted []TenantModels) map[string]any {
 	var rules []any
 	deny := func(name, claim string, values []string) {
@@ -106,7 +109,9 @@ func authorization(i Identity, restricted []TenantModels) map[string]any {
 	}
 	deny("revoked", "jti", i.Denied)
 	deny("disabled-tenant", "sub", i.Disabled)
-	rules = append(rules, modelRules(restricted)...)
+	if len(restricted) > 0 {
+		rules = append(rules, modelsRule())
+	}
 	if i.Mode == IdentityBoth {
 		rules = append(rules,
 			map[string]any{

@@ -454,12 +454,12 @@ be given; and what is left to give under its overcommit limit
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| GET | `/tenants` | | List with key and quota counts; `api_key_count` is how many of the keys are API keys rather than tokens; `budget` is the tenant's budget across models (`{"credits", "window"}`) or `null`; `models` the IDs of the models it may call, or `null` for every model |
+| GET | `/tenants` | | List with key and quota counts; `api_key_count` is how many of the keys are API keys rather than tokens; `budget` is the tenant's budget across models (`{"credits", "window"}`) or `null`; `models` the IDs of the models it may call, or `null` for every model; `limits_changed_at` when either last changed, or `null`: a token created before carries the ones from before |
 | POST | `/tenants` | `{"slug", "display_name"}` | Created tenant |
 | GET | `/tenants/{id}` | | `{"tenant", "keys", "quotas"}` |
 | PUT | `/tenants/{id}` | `{"display_name", "enabled"}` | Updated tenant |
-| PUT | `/tenants/{id}/budget` | `{"credits", "window"}`, or `{"credits": null}` to remove it | The tenant. One budget in credits across every model with prices, enforced by the gateways from the next sync. 409 while the gateways take API keys too, or when 256 tenants have a budget already |
-| PUT | `/tenants/{id}/models` | `{"models": ["<model id>", ...]}`, or `{"models": null}` for every model | The tenant. Any other model is refused (403) from the next sync; an empty list refuses every model. 409 while the gateways take API keys too |
+| PUT | `/tenants/{id}/budget` | `{"credits", "window"}`, or `{"credits": null}` to remove it | The tenant. One budget in credits across every model with prices, enforced by the gateways for the tokens signed from now on: a token carries the budget of its time. 409 while the gateways take API keys too |
+| PUT | `/tenants/{id}/models` | `{"models": ["<model id>", ...]}`, or `{"models": null}` for every model | The tenant. Any other model is refused (403) for the tokens signed from now on, which carry the list; an empty list refuses every model. 409 while the gateways take API keys too |
 | DELETE | `/tenants/{id}` | | 204 |
 | POST | `/tenants/{id}/keys` | `{"name", "kind"}` | `{"key": {...}, "secret": "eyJ..."}`. `kind` is `token`, the default, or `key` for an API key of the kind before 0.18, refused (409) while a model has a standard. A key has `kind` and, a token, `expires_at` |
 | DELETE | `/keys/{id}` | | 204, key revoked; a token is refused by every gateway after its next sync, until it expires |

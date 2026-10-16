@@ -160,8 +160,12 @@ func (s *Store) CreateToken(ctx context.Context, tenantID, name string, set Toke
 			return err
 		}
 		expires := now.Add(set.Lifetime).Truncate(time.Second)
-		plain, err = token.Sign(key, token.Claims{Issuer: set.Issuer, Audience: set.Audience, Subject: t.Slug, ID: jti, ClientID: clientID,
-			IssuedAt: now.Unix(), ExpiresAt: expires.Unix()})
+		claims := token.Claims{Issuer: set.Issuer, Audience: set.Audience, Subject: t.Slug, ID: jti, ClientID: clientID,
+			IssuedAt: now.Unix(), ExpiresAt: expires.Unix()}
+		if err := tokenLimits(ctx, tx, t, &claims); err != nil {
+			return err
+		}
+		plain, err = token.Sign(key, claims)
 		if err != nil {
 			return err
 		}
@@ -176,6 +180,35 @@ func (s *Store) CreateToken(ctx context.Context, tenantID, name string, set Toke
 		return err
 	})
 	return k, plain, mapErr(err)
+}
+
+// tokenLimits writes what the gateway holds a tenant to into its token's
+// claims: its budget across models and, when it is held to some, its
+// models by the names clients send.
+func tokenLimits(ctx context.Context, tx pgx.Tx, t Tenant, c *token.Claims) error {
+	if t.Budget != nil {
+		if unit := render.BudgetUnits[t.Budget.Window]; unit != "" {
+			c.RequestsPerUnit, c.Unit = t.Budget.Credits, unit
+		}
+	}
+	if t.Models == nil {
+		return nil
+	}
+	names := []string{}
+	rows, err := tx.Query(ctx, `SELECT name FROM models WHERE id::text = ANY($1) ORDER BY name`, t.Models)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return err
+		}
+		names = append(names, n)
+	}
+	c.Models = &names
+	return rows.Err()
 }
 
 // TenantOfToken returns the enabled tenant a token belongs to, once its

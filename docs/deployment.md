@@ -156,6 +156,11 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
 
 ## Before the first budget across models
 
+The budget travels in the tenant's tokens, and the gateway reads the amount
+from there with `limit.fromMetadata`, which came in Envoy Gateway 1.9.0. With
+an older Envoy Gateway its CRD drops the field and the budget does not hold
+(the self-test's budget step says so).
+
 1. In the cluster's Envoy Gateway configuration (`envoy-gateway-config`),
    enable global rate limiting with the Redis every gateway shares (the
    same one the AI gateway's quota rate limit service counts in):
@@ -189,7 +194,11 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
    `ignoreDifferences`, or Argo CD takes them away again and the model stops
    charging the budgets. The entry routes the hub renders have no such
    owner.
-6. Run **Self-test** on the cluster with a priced model. The step "A budget
+6. Give every tenant with a budget or a list of models new tokens: a token
+   carries the ones its tenant had when it was created, and a token from
+   before 0.23 carries none. The tenant's page marks the tokens that carry
+   older ones.
+7. Run **Self-test** on the cluster with a priced model. The step "A budget
    across models is counted and refuses" fails while anything is missing,
    and names a route whose policy overrides the budget's.
 

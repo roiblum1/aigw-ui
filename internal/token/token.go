@@ -135,6 +135,15 @@ type Claims struct {
 	ClientID  string `json:"cid"`
 	IssuedAt  int64  `json:"iat"`
 	ExpiresAt int64  `json:"exp"`
+	// RequestsPerUnit and Unit are the tenant's budget across models when
+	// the token was signed, in credits per Envoy rate limit unit ("DAY"):
+	// the gateway's budget rule takes its limit from them. Both are absent
+	// for a tenant without a budget.
+	RequestsPerUnit int64  `json:"requests_per_unit,omitempty"`
+	Unit            string `json:"unit,omitempty"`
+	// Models are the models the tenant may call, when it is held to some;
+	// an empty list refuses every model. Absent: every model.
+	Models *[]string `json:"models,omitempty"`
 }
 
 type header struct {
