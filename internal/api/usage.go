@@ -61,6 +61,30 @@ func (s *Server) resetUsage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// resetBudget sets a tenant's use of its budget across models back to zero
+// for the running period.
+func (s *Server) resetBudget(w http.ResponseWriter, r *http.Request) {
+	if s.usage == nil {
+		writeError(w, http.StatusConflict, "usage monitoring is off: the server has no Redis configured")
+		return
+	}
+	res, err := s.usage.ResetBudget(r.Context(), r.PathValue("id"))
+	summary := "Reset the usage of " + res.TenantSlug + " across models"
+	var redisErr usage.RedisError
+	switch {
+	case errors.As(err, &redisErr):
+		s.log(r, "usage.reset", summary, false, "Redis: "+err.Error())
+		failUsage(w, err)
+		return
+	case err != nil:
+		failUsage(w, err)
+		return
+	}
+	s.log(r, "usage.reset", summary, true, fmt.Sprintf("%d of %d counters held usage and were cleared.", res.Deleted, res.Counters))
+	slog.Info("budget reset", "tenant", res.TenantSlug, "counters", res.Counters, "deleted", res.Deleted)
+	writeJSON(w, http.StatusOK, res)
+}
+
 // failUsage maps the errors of the usage service to HTTP statuses.
 func failUsage(w http.ResponseWriter, err error) {
 	var redisErr usage.RedisError
@@ -71,6 +95,8 @@ func failUsage(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, "resetting usage is turned off; set redis.allowReset (REDIS_ALLOW_RESET=true) to allow it")
 	case errors.Is(err, usage.ErrNoQuota):
 		writeError(w, http.StatusNotFound, "this tenant has no quota on that model that is applied to a cluster")
+	case errors.Is(err, usage.ErrNoBudget):
+		writeError(w, http.StatusNotFound, "this tenant has no budget across models that is applied to a cluster")
 	default:
 		fail(w, err)
 	}

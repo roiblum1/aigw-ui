@@ -557,7 +557,9 @@ cost, and the entry routes' own policies merge with it. See
 - *A tenant keeps its rule's position.* The gateway names the counter after
   the rule's position, so each tenant keeps the position it got, and the
   rule names the tenant into the counter too. A new amount keeps what was
-  used; another tenant's budget coming or going changes nothing. In 0.22.0
+  used, and so does a budget removed and set again in the same period;
+  another tenant's budget coming or going changes nothing. **Reset usage**
+  deletes the counter to start the period over. In 0.22.0
   the rules were in slug order, and a tenant added before others moved every
   later one onto its neighbour's counter.
 - *It costs a round trip to Redis per request.* The rate limit service asks

@@ -40,39 +40,65 @@ func scanTenant(row pgx.Row) (Tenant, error) {
 // SetTenantBudget sets the tenant's budget across models, nil to remove it,
 // and returns the tenant.
 //
-// A new budget takes the lowest position in the gateways' policy that no
-// other budget holds, and keeps it while the tenant has one, so a change of
-// amount keeps what the tenant used. See render.TenantBudget.Slot.
+// A tenant's first budget takes a position in the gateways' policy, and the
+// tenant keeps it, with or without a budget, so a new amount, or a budget
+// removed and set again, keeps what the tenant used in the running period.
+// See render.TenantBudget.Slot.
 func (s *Store) SetTenantBudget(ctx context.Context, id string, b *TenantBudget) (Tenant, error) {
 	if b == nil {
-		if err := affected(s.db.Exec(ctx, `UPDATE tenants SET budget_credits = NULL, budget_window = NULL, budget_slot = NULL WHERE id = $1`, id)); err != nil {
+		// The tenant keeps its position, and with it the count of the
+		// running period: a budget set again comes back with what it used.
+		if err := affected(s.db.Exec(ctx, `UPDATE tenants SET budget_credits = NULL, budget_window = NULL WHERE id = $1`, id)); err != nil {
 			return Tenant{}, err
 		}
 		return s.GetTenant(ctx, id)
 	}
-	var tag pgconn.CommandTag
 	var err error
 	// Two new budgets can pick the same position at the same time. The
 	// unique index refuses the second, which then picks again.
 	for range 5 {
-		tag, err = s.db.Exec(ctx,
-			`UPDATE tenants SET budget_credits = $2, budget_window = $3, budget_slot = COALESCE(budget_slot, (
-			     SELECT min(free) FROM generate_series(0, LEAST((SELECT count(*) FROM tenants WHERE budget_slot IS NOT NULL)::int, $4 - 1)) free
-			     WHERE NOT EXISTS (SELECT 1 FROM tenants o WHERE o.budget_slot = free)))
-			 WHERE id = $1`, id, b.Credits, b.Window, render.MaxBudgets)
+		err = pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error { return setTenantBudget(ctx, tx, id, b) })
 		var pg *pgconn.PgError
-		if errors.As(err, &pg) && pg.ConstraintName == "tenants_budget_has_slot" {
-			// Every position is taken.
-			return Tenant{}, ErrBudgetsFull
-		}
 		if !errors.As(err, &pg) || pg.ConstraintName != "tenants_budget_slot" {
 			break
 		}
 	}
-	if err := affected(tag, err); err != nil {
-		return Tenant{}, err
+	if err != nil {
+		return Tenant{}, mapErr(err)
 	}
 	return s.GetTenant(ctx, id)
+}
+
+// setTenantBudget stores a budget and, for a tenant without a position, gives
+// it one: the lowest that no tenant holds, else the lowest that a tenant
+// without a budget holds, which then starts from 0 if it gets one again.
+// ErrBudgetsFull when every position belongs to a budget.
+func setTenantBudget(ctx context.Context, tx pgx.Tx, id string, b *TenantBudget) error {
+	var slot *int
+	if err := tx.QueryRow(ctx, `SELECT budget_slot FROM tenants WHERE id = $1 FOR UPDATE`, id).Scan(&slot); err != nil {
+		return err
+	}
+	if slot == nil {
+		if err := tx.QueryRow(ctx,
+			`SELECT min(p) FROM generate_series(0, $1 - 1) p WHERE NOT EXISTS (SELECT 1 FROM tenants WHERE budget_slot = p)`,
+			render.MaxBudgets).Scan(&slot); err != nil {
+			return err
+		}
+	}
+	if slot == nil {
+		err := tx.QueryRow(ctx,
+			`WITH held AS (SELECT id, budget_slot FROM tenants WHERE budget_credits IS NULL AND budget_slot IS NOT NULL
+			               ORDER BY budget_slot LIMIT 1 FOR UPDATE)
+			 UPDATE tenants t SET budget_slot = NULL FROM held WHERE t.id = held.id RETURNING held.budget_slot`).Scan(&slot)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrBudgetsFull
+		}
+		if err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(ctx, `UPDATE tenants SET budget_credits = $2, budget_window = $3, budget_slot = $4 WHERE id = $1`, id, b.Credits, b.Window, *slot)
+	return err
 }
 
 // SetTenantModels sets the models the tenant may call: nil for every model,

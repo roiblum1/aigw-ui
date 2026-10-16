@@ -893,6 +893,8 @@ export const api = {
     }),
   resetUsage: (tenantId: string, modelId: string) =>
     request<{ counters: number; deleted: number }>("POST", `/tenants/${tenantId}/quotas/${modelId}/reset`),
+  resetBudget: (tenantId: string) =>
+    request<{ counters: number; deleted: number }>("POST", `/tenants/${tenantId}/budget/reset`),
   usage: (tenantId?: string) => request<UsageReport>("GET", "/usage" + (tenantId ? `?tenant_id=${tenantId}` : "")),
   usageHistory: (step: Step, days: number) => request<UsageHistory>("GET", `/usage/history?step=${step}&days=${days}`),
   /** A tenant's own usage, by one of its API keys. */

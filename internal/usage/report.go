@@ -17,6 +17,9 @@ var (
 	// ErrNoQuota is returned when the tenant has no quota on the model that
 	// is applied to a cluster, so there is no counter to reset.
 	ErrNoQuota = errors.New("no applied quota for that tenant and model")
+	// ErrNoBudget is returned when the tenant has no budget across models
+	// that is applied to a cluster.
+	ErrNoBudget = errors.New("no applied budget across models for that tenant")
 )
 
 // RedisError marks a failure to talk to Redis, as opposed to a bad request or
@@ -290,4 +293,33 @@ func (s *Service) Reset(ctx context.Context, tenantID, modelID string) (ResetRes
 		return res, nil
 	}
 	return ResetResult{}, ErrNoQuota
+}
+
+// ResetBudget sets a tenant's use of its budget across models back to zero
+// for the current window, on every cluster that shares the counter. The
+// amount and the window stay as they are.
+func (s *Service) ResetBudget(ctx context.Context, tenantID string) (ResetResult, error) {
+	if !s.rd.AllowReset {
+		return ResetResult{}, ErrResetDisabled
+	}
+	_, budgets, err := s.buckets(ctx, time.Now(), tenantID)
+	if err != nil {
+		return ResetResult{}, err
+	}
+	for _, b := range budgets {
+		if b.tenantID != tenantID {
+			continue
+		}
+		res := ResetResult{TenantSlug: b.tenantSlug, ModelName: "every model", Counters: len(b.keys)}
+		keys := make([]string, 0, len(b.keys))
+		for _, k := range b.keys {
+			keys = append(keys, k.redis)
+		}
+		res.Deleted, err = s.rd.Delete(ctx, keys)
+		if err != nil {
+			return res, RedisError{fmt.Errorf("reset budget: %w", err)}
+		}
+		return res, nil
+	}
+	return ResetResult{}, ErrNoBudget
 }
