@@ -40,6 +40,11 @@ type Identity struct {
 	// Denied is the jti of every token to refuse although it is signed:
 	// revoked, or of a deleted tenant, until a few minutes after it expires.
 	Denied []string
+	// DeniedClients is the client ID of every personal key whose tokens to
+	// refuse: revoked, or of a deleted tenant, until a few minutes after the
+	// last token it got expires. Those tokens are not stored, so they are
+	// refused by the key they carry (cid), not one by one.
+	DeniedClients []string
 	// Disabled is the slug of every disabled tenant.
 	Disabled []string
 }
@@ -108,6 +113,7 @@ func authorization(i Identity, restricted []TenantModels) map[string]any {
 		}
 	}
 	deny("revoked", "jti", i.Denied)
+	deny("revoked-personal-key", "cid", i.DeniedClients)
 	deny("disabled-tenant", "sub", i.Disabled)
 	if len(restricted) > 0 {
 		rules = append(rules, modelsRule())

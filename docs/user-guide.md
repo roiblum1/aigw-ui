@@ -223,8 +223,14 @@ different revisions of the model, or take different request lengths.
 A tenant is a team.
 
 1. **Add tenant**. The ID cannot be changed later.
-2. **Create token**. The token is shown once. Copy it then. It lasts 180
-   days (`tokens.lifetimeDays`); create a new one before it expires.
+2. **Create** a key for each person or tool, shown once:
+   - a **personal key** for a person in Claude Code (see below): they never
+     handle a token, and a change of the tenant's budget or models reaches
+     them with nothing to do;
+   - a **token** for a tool that takes a fixed API key. It lasts 180 days
+     (`tokens.lifetimeDays`) and carries the tenant's budget and models of
+     the day it is created; create a new one after a change, or before it
+     expires.
 3. **Add quota**. Pick a model, a number of tokens and a window (minute, hour or day).
    Tick **Dry run** to count usage against the quota without rejecting
    requests, and press **Enforce** on the quota when you are ready. The
@@ -239,7 +245,7 @@ clients and `/anthropic/v1/messages` for Anthropic-style ones.
 | Action | Effect |
 |---|---|
 | Edit a quota | Change the tokens or the window in the quota's own row, then **Save**. What the tenant has used in the current window stays counted against the new limit; a new window starts a new count |
-| Revoke a key | The key or token stops working after the next sync |
+| Revoke a key | The key or token stops working after the next sync. A revoked personal key gets no new token, and the tokens it got are refused |
 | Disable a tenant | Its keys and quotas are removed from the clusters, and its tokens refused, until it is enabled again |
 | Delete a tenant | Removes the tenant, its keys and its quotas |
 
@@ -318,6 +324,32 @@ tokens** at the top of the Tenants page says what the gateways take now:
    keys** in the list still have one: give each a token, let it switch its
    clients, then revoke its API keys.
 3. Once the last API key is revoked, tokens only: the gateways list no key.
+
+**Personal keys and `aigw-token`.** A personal key is what a person keeps
+on their machine; the hub stores only its hash, and the gateways never see
+it. The helper `aigw-token` (in the repository, `clients/aigw-token`; it
+needs `sh` and `curl`) trades it at the hub (`POST /api/v1/token`) for a
+token that lives 7 days (`tokens.renewedLifetimeHours`), carrying the
+tenant's budget and models as they are then, and asks for a new one every
+10 minutes. Claude Code runs it as its `apiKeyHelper`, so the person sets
+it up once:
+
+```sh
+aigw-token login https://<the hub>     # paste the personal key when asked
+```
+
+```json
+{
+  "apiKeyHelper": "aigw-token",
+  "env": { "ANTHROPIC_BASE_URL": "https://<the gateway>" }
+}
+```
+
+in `~/.claude/settings.json`. Prompts go to the gateway, never to the hub;
+the hub only signs tokens. If it cannot be reached, `aigw-token` goes on
+printing the token it has until that expires, so a hub that is down for
+less than a week stops nobody. The status-line plugin (`clients/claude-code`)
+finds the hub and the key `aigw-token` signed in with.
 
 **Rotate signing key** makes a new key that signs every new token; the old
 one keeps working for the tokens it signed until they expire or are revoked.

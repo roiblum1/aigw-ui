@@ -63,9 +63,15 @@ capacity:
 tokens:
   issuer: aigw-ui
   audience: aigw-fleet
-  # How long a new token lasts. A token holds no budget, so a long life costs
-  # nothing but the time a leaked one works if nobody revokes it.
+  # How long a token created on a tenant's page lasts. It carries the
+  # tenant's budget across models and models as they were when it was made:
+  # a change reaches the gateway with the tenant's next token.
   lifetimeDays: 180
+  # How long a token a personal key gets lasts. The helper gets a new one
+  # long before, so this is how long users go on while the hub cannot be
+  # reached, and how long a token with an older budget can be held back from
+  # renewal.
+  renewedLifetimeHours: 168
 
 # What every site's entry route has in common. Leave domain and peerSNI empty
 # if the hub should not render entry routes.

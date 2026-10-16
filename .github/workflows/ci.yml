@@ -97,7 +97,7 @@ jobs:
           npm run build
 
       - name: Test the Claude Code plugin
-        run: node --test clients/claude-code/scripts/
+        run: node --test clients/claude-code/scripts/ clients/aigw-token/
 
       - name: Lint and render the chart
         run: hack/check-chart.sh

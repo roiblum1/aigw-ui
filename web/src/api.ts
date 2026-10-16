@@ -242,8 +242,12 @@ export interface ApiKey {
   key_prefix: string;
   revoked_at: string | null;
   created_at: string;
-  kind: "key" | "token";
+  /** A personal key is traded at the hub for short-lived tokens; the gateways never see it. */
+  kind: "key" | "token" | "personal";
+  /** A token's expiry; for a personal key, when the last token it got expires. */
   expires_at: string | null;
+  /** When a personal key last got a token. */
+  renewed_at: string | null;
 }
 
 /** How the gateways tell tenants apart. */
@@ -966,8 +970,8 @@ export const api = {
     request<Tenant>("PUT", `/tenants/${id}/budget`, { credits, window }),
   /** null lets the tenant call every model. */
   setTenantModels: (id: string, models: string[] | null) => request<Tenant>("PUT", `/tenants/${id}/models`, { models }),
-  createKey: (tenantId: string, name: string) =>
-    request<{ key: ApiKey; secret: string }>("POST", `/tenants/${tenantId}/keys`, { name }),
+  createKey: (tenantId: string, name: string, kind: "token" | "personal" = "token") =>
+    request<{ key: ApiKey; secret: string }>("POST", `/tenants/${tenantId}/keys`, { name, kind }),
   revokeKey: (id: string) => request<void>("DELETE", `/keys/${id}`),
   signingKeys: () => request<SigningKeys>("GET", "/signing-keys"),
   rotateSigningKey: () => request<{ id: string }>("POST", "/signing-keys/rotate"),

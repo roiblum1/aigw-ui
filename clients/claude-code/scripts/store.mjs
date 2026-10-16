@@ -26,11 +26,26 @@ function write(name, value) {
 export const cache = { read: () => read("usage.json", null), write: (v) => write("usage.json", v) };
 export const told = { read: () => read("told.json", {}), write: (v) => write("told.json", v) };
 
-/** Where the hub is and the key to ask with. Empty when not set up. */
+/** The hub and personal key that `aigw-token login` kept, if any. */
+function helperLogin(env) {
+  const d = env.AIGW_CONFIG_DIR || join(env.XDG_CONFIG_HOME || join(homedir(), ".config"), "aigw");
+  try {
+    return { hub: readFileSync(join(d, "hub"), "utf8").trim(), key: readFileSync(join(d, "personal-key"), "utf8").trim() };
+  } catch {
+    return { hub: "", key: "" };
+  }
+}
+
+/**
+ * Where the hub is and the key to ask with. Empty when not set up. With
+ * aigw-token as Claude Code's apiKeyHelper there is no key in the
+ * environment: the personal key it signed in with is taken instead.
+ */
 export function config(env = process.env) {
+  const login = helperLogin(env);
   return {
-    hub: (env.CLAUDE_PLUGIN_OPTION_HUB_URL || env.AIGW_HUB_URL || "").replace(/\/+$/, ""),
-    key: env.CLAUDE_PLUGIN_OPTION_API_KEY || env.AIGW_API_KEY || env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY || "",
+    hub: (env.CLAUDE_PLUGIN_OPTION_HUB_URL || env.AIGW_HUB_URL || login.hub || "").replace(/\/+$/, ""),
+    key: env.CLAUDE_PLUGIN_OPTION_API_KEY || env.AIGW_API_KEY || login.key || env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY || "",
     warnAt: Number(env.CLAUDE_PLUGIN_OPTION_WARN_AT || env.AIGW_WARN_AT) || 90,
   };
 }

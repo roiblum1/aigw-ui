@@ -1,0 +1,95 @@
+#!/bin/sh
+# aigw-token prints a token for the AI gateway. Claude Code runs it as its
+# apiKeyHelper, so the user never handles a token: it trades the user's
+# personal key at the hub for a token that carries the tenant's budget and
+# models as they are now, and gets a new one every AIGW_TOKEN_RENEW_SECONDS
+# (600). If the hub cannot be reached it prints the token it has while that
+# is valid (7 days by default), so a hub that is down stops nobody.
+#
+#   aigw-token login HUB_URL [PERSONAL_KEY]   keep the hub's address and the key
+#                                            (asked for when not given)
+#   aigw-token                               print a token
+#   aigw-token logout                        forget them
+#
+# The key and the token are kept in ~/.config/aigw, readable by the user
+# only. The key is passed to curl on stdin, never on its command line.
+set -eu
+dir=${AIGW_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/aigw}
+renew=${AIGW_TOKEN_RENEW_SECONDS:-600}
+umask 077
+
+fail() {
+	echo "aigw-token: $*" >&2
+	exit 1
+}
+
+case "${1:-}" in
+login)
+	[ $# -ge 2 ] || fail "usage: aigw-token login HUB_URL [PERSONAL_KEY]"
+	hub=${2%/}
+	if [ $# -ge 3 ]; then
+		key=$3
+	else
+		printf 'Personal key: ' >&2
+		IFS= read -r key
+	fi
+	case $key in aigw-pk-*) ;; *) fail "a personal key starts with aigw-pk-" ;; esac
+	mkdir -p "$dir"
+	printf '%s\n' "$hub" >"$dir/hub"
+	printf '%s\n' "$key" >"$dir/personal-key"
+	rm -f "$dir/token"
+	"$0" >/dev/null || exit 1
+	echo "aigw-token: signed in to $hub" >&2
+	exit 0
+	;;
+logout)
+	rm -f "$dir/hub" "$dir/personal-key" "$dir/token"
+	exit 0
+	;;
+"") ;;
+*) fail "usage: aigw-token [login HUB_URL [PERSONAL_KEY] | logout]" ;;
+esac
+
+[ -r "$dir/hub" ] && [ -r "$dir/personal-key" ] || fail "not signed in: run aigw-token login HUB_URL"
+hub=$(cat "$dir/hub")
+key=$(cat "$dir/personal-key")
+now=$(date +%s)
+
+# The token kept, as "<fetched> <expires> <token>": printed while it is
+# young enough, so the hub is asked once per AIGW_TOKEN_RENEW_SECONDS.
+fetched=0 expires=0 token=
+if [ -r "$dir/token" ]; then
+	read -r fetched expires token <"$dir/token" || true
+	if [ -n "$token" ] && [ $((now - fetched)) -lt "$renew" ] && [ "$expires" -gt $((now + 60)) ]; then
+		printf '%s\n' "$token"
+		exit 0
+	fi
+fi
+
+resp=$(printf 'Authorization: Bearer %s\n' "$key" |
+	curl -sS --max-time 10 -X POST -H @- -w '\n%{http_code}' "$hub/api/v1/token" 2>/dev/null) || resp="
+000"
+code=$(printf '%s\n' "$resp" | tail -n 1)
+body=$(printf '%s\n' "$resp" | sed '$d')
+case $code in
+200)
+	new=$(printf '%s' "$body" | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p')
+	life=$(printf '%s' "$body" | sed -n 's/.*"expires_in": *\([0-9][0-9]*\).*/\1/p')
+	[ -n "$new" ] && [ -n "$life" ] || fail "the hub's answer has no token"
+	printf '%s %s %s\n' "$now" "$((now + life))" "$new" >"$dir/token.tmp"
+	mv "$dir/token.tmp" "$dir/token"
+	printf '%s\n' "$new"
+	exit 0
+	;;
+401)
+	# The key is revoked or wrong: the token kept would be refused too.
+	rm -f "$dir/token"
+	fail "the hub does not take this personal key; ask for a new one"
+	;;
+esac
+# The hub cannot be reached or failed: the token kept, while it is valid.
+if [ -n "$token" ] && [ "$expires" -gt $((now + 60)) ]; then
+	printf '%s\n' "$token"
+	exit 0
+fi
+fail "the hub gave no token (HTTP $code) and the one kept has expired"

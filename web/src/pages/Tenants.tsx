@@ -173,13 +173,14 @@ function IdentityPanel(props: { signing: SigningKeys; tenants: Tenant[]; onChang
   );
 }
 
-/** Which key a row is: an API key's start, a token's end. */
+/** Which key a row is: an API key's start, a token's or a personal key's end. */
 function keyText(k: ApiKey): string {
-  return k.kind === "token" ? `…${k.key_prefix}` : `${k.key_prefix}…`;
+  return k.kind === "key" ? `${k.key_prefix}…` : `…${k.key_prefix}`;
 }
 
+/** A token past its expiry. A personal key does not expire. */
 function expired(k: ApiKey): boolean {
-  return k.expires_at != null && new Date(k.expires_at).getTime() <= Date.now();
+  return k.kind === "token" && k.expires_at != null && new Date(k.expires_at).getTime() <= Date.now();
 }
 
 function TenantForm(props: { onClose: () => void; onCreated: (t: Tenant) => void }) {
@@ -235,10 +236,11 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   const { tenant, keys, quotas } = data.detail;
   const act = (fn: () => Promise<unknown>) => action.run(async () => void (await fn(), await reload()));
 
+  const [keyKind, setKeyKind] = useState<"personal" | "token">("personal");
   const createKey = (e: FormEvent) => {
     e.preventDefault();
     act(async () => {
-      setNewKey(await api.createKey(tenant.id, keyName));
+      setNewKey(await api.createKey(tenant.id, keyName, keyKind));
       setKeyName("");
     });
   };
@@ -278,13 +280,19 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
       <section className="card">
         <h2>Keys</h2>
         <p className="hint">
-          A new key is a token: the client pastes it where it takes an API key. Revoking one refuses it on every gateway
-          after the next sync.
+          A <strong>personal key</strong> is for a person in Claude Code: its helper trades the key at the hub for a
+          token that lives a few days, and gets a new one every few minutes, so a change of budget or models reaches the
+          person with nothing to do. A <strong>token</strong> is for a tool that takes a fixed API key; it carries the
+          budget and models of the day it is created. Revoking either refuses it on every gateway after the next sync.
         </p>
         <form className="inline-form" onSubmit={createKey}>
-          <input value={keyName} placeholder="Key name, e.g. ci-pipeline" onChange={(e) => setKeyName(e.target.value)} />
+          <input value={keyName} placeholder="Key name, e.g. dana-laptop" onChange={(e) => setKeyName(e.target.value)} />
+          <select aria-label="Kind" value={keyKind} onChange={(e) => setKeyKind(e.target.value as "personal" | "token")}>
+            <option value="personal">Personal key</option>
+            <option value="token">Token</option>
+          </select>
           <button type="submit" className="primary" disabled={action.busy}>
-            Create token
+            Create
           </button>
         </form>
         {keys.length === 0 ? (
@@ -306,7 +314,12 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
                 <tr key={k.id} className={k.revoked_at || expired(k) ? "muted" : ""}>
                   <td>{k.name || "—"}</td>
                   <td>
-                    {k.kind === "token" ? (
+                    {k.kind === "personal" ? (
+                      <>
+                        Personal key
+                        <div className="detail">{k.renewed_at ? `last token ${formatTime(k.renewed_at)}` : "no token yet"}</div>
+                      </>
+                    ) : k.kind === "token" ? (
                       <>
                         Token
                         <div className="detail">expires {formatTime(k.expires_at)}</div>
@@ -377,7 +390,10 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
       <TenantModelsCard tenant={tenant} models={data.models} identity={data.signing.identity} busy={action.busy} act={act} />
 
       {newKey && (
-        <Modal title={newKey.key.kind === "token" ? "Token created" : "Key created"} onClose={() => setNewKey(null)}>
+        <Modal
+          title={newKey.key.kind === "personal" ? "Personal key created" : newKey.key.kind === "token" ? "Token created" : "Key created"}
+          onClose={() => setNewKey(null)}
+        >
           <p>
             Copy it now. It is not shown again.{" "}
             {newKey.key.kind === "token" && (
@@ -386,8 +402,25 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
                 <span className="mono">x-api-key</span>. It expires {formatTime(newKey.key.expires_at)}.
               </>
             )}
+            {newKey.key.kind === "personal" && (
+              <>
+                The person signs in once with <span className="mono">aigw-token</span> (in the repository's{" "}
+                <span className="mono">clients/aigw-token</span>) and names it as Claude Code's{" "}
+                <span className="mono">apiKeyHelper</span>; see the user guide.
+              </>
+            )}
           </p>
           <pre className="code">{newKey.secret}</pre>
+          {newKey.key.kind === "personal" && (
+            <pre className="code">{`aigw-token login ${window.location.origin}
+(paste the key when it asks: not on the command line, where the shell keeps it)
+
+~/.claude/settings.json:
+{
+  "apiKeyHelper": "aigw-token",
+  "env": { "ANTHROPIC_BASE_URL": "<the gateway's address>" }
+}`}</pre>
+          )}
           <footer>
             <button className="primary" onClick={() => navigator.clipboard?.writeText(newKey.secret)}>
               <Copy />

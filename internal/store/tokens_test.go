@@ -9,7 +9,7 @@ import (
 	"aigw-ui/internal/token"
 )
 
-var tokenSet = TokenSettings{Issuer: "aigw-ui", Audience: "aigw-fleet", Lifetime: 180 * 24 * time.Hour}
+var tokenSet = TokenSettings{Issuer: "aigw-ui", Audience: "aigw-fleet", Lifetime: 180 * 24 * time.Hour, RenewedLifetime: 7 * 24 * time.Hour}
 
 // A token is signed by a key the hub makes on the first one, checks out
 // against the published keys, and names its tenant and key; the hub finds the

@@ -112,6 +112,8 @@ func (s *Server) Handler() http.Handler {
 	root.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	// A tenant's own usage, by one of its API keys and not the admin token.
 	root.Handle("GET /api/v1/my/usage", s.tenantAuth(http.HandlerFunc(s.getMyUsage)))
+	// A new token for a personal key, which a user's helper asks for.
+	root.HandleFunc("POST /api/v1/token", s.renewToken)
 	root.Handle("/api/", s.auth(s.audit(api)))
 	root.HandleFunc("/", s.ui)
 	return securityHeaders(root)

@@ -1,7 +1,37 @@
 # Usage in the coding agent
 
-Two small add-ons for the people who use the models: they show a tenant's
-budget inside the coding agent and warn before it is spent.
+For the people who use the models: `aigw-token`, which signs Claude Code in
+to the gateway with a personal key, and two small add-ons that show a
+tenant's budget inside the coding agent and warn before it is spent.
+
+## aigw-token
+
+[`aigw-token/aigw-token`](aigw-token/aigw-token) is Claude Code's
+`apiKeyHelper` for the gateway. It trades your personal key at the hub for a
+token that carries your team's budget and models as they are now, and gets a
+new one every 10 minutes (`AIGW_TOKEN_RENEW_SECONDS`), so you never handle a
+token and a change of budget reaches you by itself. If the hub cannot be
+reached it goes on printing the token it has until that expires (7 days by
+default). Needs `sh` and `curl` (macOS, Linux, WSL).
+
+```sh
+curl -fsSLo ~/.local/bin/aigw-token \
+  https://raw.githubusercontent.com/roiblum1/aigw-ui/main/clients/aigw-token/aigw-token
+chmod +x ~/.local/bin/aigw-token
+aigw-token login https://aigw.example.com   # paste your personal key when asked
+```
+
+Then in `~/.claude/settings.json`:
+
+```json
+{
+  "apiKeyHelper": "aigw-token",
+  "env": { "ANTHROPIC_BASE_URL": "https://<the gateway>" }
+}
+```
+
+`aigw-token logout` forgets the key. Prompts go to the gateway; the hub is
+only asked for tokens.
 
 | | For | Shows |
 |---|---|---|
@@ -21,7 +51,8 @@ tokens. No prompt and no answer is sent to the hub.
 
 - The address of the hub, for example `https://aigw.example.com`. It is not
   the gateway's address.
-- Your API key for the gateway.
+- Your key: the personal key `aigw-token` signed in with is found by itself,
+  else a token or API key for the gateway.
 
 ## Claude Code
 
@@ -80,6 +111,9 @@ budget.
 - Oh My Pi: the extension was run with a stand-in for the agent's API, not
   inside `omp`. It was written against the extension API of version 18.8.9.
 
+- aigw-token: against a stand-in for the hub: sign-in, a new token, the
+  token kept, a hub that fails, a revoked key, no hub.
+
 ```sh
-node --test clients/claude-code/scripts/
+node --test clients/claude-code/scripts/ clients/aigw-token/
 ```

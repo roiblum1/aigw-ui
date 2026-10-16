@@ -80,6 +80,47 @@ func (t *test) revokedToken() (string, string) {
 	return Passed, fmt.Sprintf("Refused with %s %d seconds after the sync that revoked it.", status, int(time.Since(start).Seconds()))
 }
 
+// personalKey gives the temporary tenant a personal key and trades it for
+// a token, as a user's helper does at POST /api/v1/token, and expects the
+// gateway to take that token. Then it revokes the key and expects the
+// token to be refused: tokens a personal key got are not stored, so the
+// gateway refuses them by the key's client ID.
+func (t *test) personalKey() (string, string) {
+	switch {
+	case t.key == "":
+		return Skipped, "\"Enforce API keys\" is off for this cluster, so the gateway takes requests without a key."
+	case !t.tokens:
+		return Skipped, "The hub has issued no token yet: the gateway takes API keys only."
+	}
+	k, secret, err := t.r.st.CreatePersonalKey(t.ctx, t.tenant.ID, "self-test, personal")
+	if err != nil {
+		return Failed, err.Error()
+	}
+	set := t.tokenSettings()
+	set.RenewedLifetime = tokenLife
+	renewed, _, _, err := t.r.st.RenewToken(t.ctx, secret, set, time.Now())
+	if err != nil {
+		return Failed, "The personal key got no token: " + err.Error()
+	}
+	if status, ok := t.until(renewed, false); !ok {
+		return Failed, fmt.Sprintf("The gateway never took the token the personal key got within %d seconds (last: %s).", int(keyWait.Seconds()), status)
+	}
+	if _, err := t.r.st.RevokeKey(t.ctx, k.ID); err != nil {
+		return Failed, err.Error()
+	}
+	start := time.Now()
+	if _, err := t.sync("Self-test of " + t.cluster.Name + ": revoked the personal key of " + t.tenant.Slug); err != nil {
+		return Failed, "Sync: " + err.Error()
+	}
+	status, ok := t.until(renewed, true)
+	if !ok {
+		return Failed, fmt.Sprintf("The gateway still takes the token of a revoked personal key %d seconds after the sync (last: %s): the rule on its client ID is not in effect.",
+			int(keyWait.Seconds()), status)
+	}
+	return Passed, fmt.Sprintf("The token the personal key got was answered; once the key was revoked it was refused with %s %d seconds after the sync.",
+		status, int(time.Since(start).Seconds()))
+}
+
 // until sends requests with key until the gateway refuses it (refused) or
 // takes it (!refused), and reports the last status and whether it came.
 func (t *test) until(key string, refused bool) (string, bool) {

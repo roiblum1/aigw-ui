@@ -69,3 +69,18 @@ test("warnings", () => {
   assert.match(warning(b({ used: 5_000_000, best_effort_until: "2026-10-11T18:00:00" }), now), /served as best-effort until 18:00/);
   assert.match(warning(b({ best_effort_until: "2026-10-11T18:00:00", best_effort_capped: true }), now), /refused until 18:00/);
 });
+
+test("takes the hub and the personal key aigw-token signed in with", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { config } = await import("./store.mjs");
+  const d = mkdtempSync(join(tmpdir(), "aigw-"));
+  writeFileSync(join(d, "hub"), "https://hub.example/\n");
+  writeFileSync(join(d, "personal-key"), "aigw-pk-x\n");
+  const c = config({ AIGW_CONFIG_DIR: d, ANTHROPIC_AUTH_TOKEN: "eyJ.old" });
+  assert.equal(c.hub, "https://hub.example");
+  assert.equal(c.key, "aigw-pk-x");
+  // A key set for the plugin comes first.
+  assert.equal(config({ AIGW_CONFIG_DIR: d, AIGW_API_KEY: "mine" }).key, "mine");
+});

@@ -116,6 +116,19 @@ gateway then sets `x-aigw-tenant` from `sub`, `x-aigw-key` from `jti` and
 own `x-aigw-tenant` never reaches the model server, even with a key that is
 not a token).
 
+**Personal keys.** A personal key (`aigw-pk-` and 43 characters, 256 random
+bits) is traded at the hub for a token (`POST /api/v1/token`). The hub keeps
+only its SHA-256 hash; the gateways never see it. The tokens it gets live
+`tokens.renewedLifetimeHours` (168 by default) and are not stored: each has
+its own `jti` and the key's client ID as `cid`. Revoking the key, or
+deleting its tenant, refuses those tokens by their `cid` at every gateway
+until the last one expires, and a disabled tenant's key gets none. Wrong
+keys count against the address as on the tenants' page: ten a minute, then
+429. The answer carries `Cache-Control: no-store`. The helper `aigw-token`
+keeps the key and the last token in `~/.config/aigw`, readable by the user
+only, and passes the key to `curl` on stdin, so it is not on any command
+line.
+
 **The signing key** is an EC P-256 key the hub makes when it signs its first
 token. Its private half is stored in Postgres, encrypted with the encryption
 key, like the kubeconfigs: **whoever can read both the `<release>-auth`
