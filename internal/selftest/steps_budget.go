@@ -138,9 +138,9 @@ func (t *test) budget() (string, string) {
 	return Failed, counted + ", yet requests are still answered (last: " + last + "): the gateway does not take the limit from the token (limit.fromMetadata needs Envoy Gateway 1.9.0 or later), or it does not hold the tenant to the rule."
 }
 
-// reissue gives the temporary tenant a new token, signed with its budget
-// and its models as they are now: both travel in the token, so the token
-// it had says what they were before.
+// reissue gives the temporary tenant a new token, signed with its budget,
+// its models and the amount of its quota as they are now: they travel in
+// the token, so the token it had says what they were before.
 func (t *test) reissue(name string) error {
 	_, key, err := t.r.st.CreateToken(t.ctx, t.tenant.ID, name, t.tokenSettings(), time.Now())
 	if err == nil && t.cluster.AuthEnabled {

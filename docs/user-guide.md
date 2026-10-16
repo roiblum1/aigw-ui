@@ -272,6 +272,22 @@ has, and how many a rule per tenant would take.
   the exception's limit more in that window. Make such changes near the
   start of a window when it matters.
 
+**Quotas of their own, with tokens only.** Once every tenant is on tokens,
+the tenants with the same quota of their own on a model share one rule on
+the gateway, which still counts each of them on its own: a thousand tenants
+with a few different amounts take a few rules, not a thousand. The amount
+travels in the tenant's tokens, as a budget across models does:
+
+- A change reaches a person with a personal key with its next token, within
+  minutes. A token created before the change keeps the old amount until it
+  is replaced; the Keys card marks it **older limits**.
+- A changed amount starts the tenant's count on that model again.
+- **A model with prices and no standard** is marked on the Models page:
+  its tenants without a quota of their own have no budget of their own
+  there and share the model's pool. A pool of the smallest amount (1)
+  closes the model to them, which is what a new model has: a quota or a
+  standard is how a tenant gets in.
+
 **A budget across models.** **Budget across models** on a tenant's page
 gives it one amount in dollars per minute, hour or day for every model with
 prices, counted together: a cheaper model spends it more slowly. Its quotas

@@ -32,7 +32,9 @@ func TestIdentityKeys(t *testing.T) {
 	if strings.Contains(p, "jwt") || strings.Contains(p, "authorization") || !strings.Contains(p, `"sanitize":true`) {
 		t.Fatalf("policy: %s", p)
 	}
-	if b := spec(t, find(t, objs, "AIServiceBackend", "glm5-3")); strings.Contains(b, "headerMutation") {
+	// The model server gets no credential to remove yet, only the headers
+	// that told the tenants apart.
+	if b := spec(t, find(t, objs, "AIServiceBackend", "glm5-3")); !strings.Contains(b, `"headerMutation":{"remove":["x-aigw-tenant","x-aigw-key","x-aigw-client-id","x-aigw-budget"]}`) {
 		t.Fatalf("backend: %s", b)
 	}
 	if !has(objs, "Secret", KeysSecretName) {
@@ -75,7 +77,7 @@ func TestIdentityBoth(t *testing.T) {
 		t.Fatalf("revoked: %s", v)
 	}
 	for _, b := range []string{"glm5-3", "small"} {
-		if h := spec(t, find(t, objs, "AIServiceBackend", b)); !strings.Contains(h, `"headerMutation":{"remove":["authorization","x-api-key"]}`) {
+		if h := spec(t, find(t, objs, "AIServiceBackend", b)); !strings.Contains(h, `"headerMutation":{"remove":["authorization","x-api-key","x-aigw-tenant","x-aigw-key","x-aigw-client-id","x-aigw-budget"]}`) {
 			t.Fatalf("backend %s: %s", b, h)
 		}
 	}

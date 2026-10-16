@@ -150,6 +150,9 @@ type Model struct {
 	// QuotaRules is how many rules the tenants' quotas on the model take in
 	// its QuotaPolicy, placeholders of quotas since removed included.
 	QuotaRules int `json:"quota_rules"`
+	// QuotaAmounts is how many rules the same quotas take once the gateways
+	// take tokens only: one per amount, placeholders included.
+	QuotaAmounts int `json:"quota_amounts"`
 }
 
 // Standard is a model's standard per-tenant budget: a limit in the model's

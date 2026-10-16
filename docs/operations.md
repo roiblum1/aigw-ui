@@ -102,6 +102,24 @@ The LLM clusters keep serving with the configuration they last received. You
 cannot make changes until the hub is back. Nothing on the clusters depends on
 the server being up.
 
+## If the shared Redis is down
+
+The gateways keep answering, without limits: both rate limit services let a
+request through when they cannot reach Redis (the AI gateway's quota service,
+`quotaRateLimitFailureModeDeny: false`, and Envoy Gateway's, which the budget
+across models uses, without `failClosed`). This is on purpose: a prompt does
+not wait on anything outside the gateway. Budgets, quotas and standards hold
+again as soon as Redis is back; what was used meanwhile was not counted.
+
+Watch for it rather than refuse:
+
+- Envoy's rate limit filter counts each request it let through this way in
+  `ratelimit.failure_mode_allowed` (per upstream cluster). Alert when it is
+  above zero.
+- The Usage page and the self-test say "Redis" in their error when the hub
+  cannot read it either.
+- Alert on the Redis itself (up, memory, connections) where it runs.
+
 ## Logs
 
 ```sh

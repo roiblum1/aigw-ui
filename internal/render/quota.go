@@ -31,15 +31,24 @@ const QuotaRevisionAnnotation = "gateway.envoyproxy.io/aigw-ui-quota-revision"
 // and Envoy Gateway builds the route with the new rules.
 func quotaRevision(m Model) string {
 	limit, window := m.defaultBucket(false)
+	// By amount, a tenant moving between amounts changes no rule.
+	var rules []TenantQuota
+	var amounts []QuotaAmount
+	if m.ByAmount {
+		amounts = amountRules(m)
+	} else {
+		rules = tenantRules(m)
+	}
 	data, err := json.Marshal(struct {
 		Rules  []TenantQuota
 		Limit  int64
 		Window string
 		Cost   string
 		// Left out when unset, so a model keeps the revision it had.
-		DryRun   bool    `json:",omitempty"`
-		Standard *Budget `json:",omitempty"`
-	}{tenantRules(m), limit, window, m.CostExpression, m.DryRun, m.standard()})
+		DryRun   bool          `json:",omitempty"`
+		Standard *Budget       `json:",omitempty"`
+		Amounts  []QuotaAmount `json:",omitempty"`
+	}{rules, limit, window, m.CostExpression, m.DryRun, m.standard(), amounts})
 	if err != nil {
 		return ""
 	}
@@ -103,6 +112,16 @@ func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *uns
 			rule["shadowMode"] = true
 		}
 		rules = append(rules, rule)
+	}
+	if m.ByAmount {
+		quotas = nil
+		for _, a := range amountRules(m) {
+			if a.Limit == 0 {
+				rules = append(rules, placeholderRule())
+				continue
+			}
+			rules = append(rules, amountRule(m, a, overage || m.DryRun))
+		}
 	}
 	for _, q := range quotas {
 		if q.TenantSlug == "" {
@@ -196,9 +215,12 @@ func tenantMatch(m Model, slug string) map[string]any {
 
 // ruleCount is how many bucket rules the model's QuotaPolicy has before its
 // default bucket: the standard's, then one per position of the tenant
-// quotas.
+// quotas, or of the amounts.
 func (m Model) ruleCount() int {
 	n := len(tenantRules(m))
+	if m.ByAmount {
+		n = len(amountRules(m))
+	}
 	if m.standard() != nil {
 		n++
 	}

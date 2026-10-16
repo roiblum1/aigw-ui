@@ -214,6 +214,12 @@ func (t *test) apply() (string, string) {
 		return Failed, err.Error()
 	}
 	t.tokens, t.mode = id.Mode != render.IdentityKeys, id.Mode
+	// The quota first: a token names the amount of each of the tenant's
+	// own quotas, and once the gateways take tokens only, that is what
+	// picks the rule that holds it.
+	if err := t.r.st.UpsertQuota(t.ctx, tenant.ID, t.model.ID, testLimit, testWindow, nil); err != nil {
+		return Failed, err.Error()
+	}
 	var key string
 	if t.tokens {
 		_, key, err = t.r.st.CreateToken(t.ctx, tenant.ID, "self-test", t.tokenSettings(), time.Now())
@@ -225,9 +231,6 @@ func (t *test) apply() (string, string) {
 	}
 	if t.cluster.AuthEnabled {
 		t.key = key
-	}
-	if err := t.r.st.UpsertQuota(t.ctx, tenant.ID, t.model.ID, testLimit, testWindow, nil); err != nil {
-		return Failed, err.Error()
 	}
 	res, err := t.sync("Self-test of " + t.cluster.Name + ": added temporary tenant " + slug)
 	if err != nil {

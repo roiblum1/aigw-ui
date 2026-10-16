@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.24.0](v0.24.0.md) | not released yet | Own quotas take one gateway rule per amount instead of one per tenant once every tenant is on tokens; the amount travels in the token. Identity headers no longer reach model servers; a priced model without a standard is marked |
 | [0.23.0](v0.23.0.md) | not released yet | A tenant's budget across models and its models travel in its tokens; one gateway rule holds every tenant to its own, with no limit on the number of tenants. Personal keys and `aigw-token`: tokens that renew themselves |
 | [0.22.1](v0.22.1.md) | not released yet | Fixed: the budget across models was not charged on entry routes, could not be set while a model had a standard, and moved tenants onto each other's counters; a route serving several priced models charges each its prices. The tenant's page shows the models it may call; Reset usage for a budget across models |
 | [0.22.0](v0.22.0.md) | not released yet | A tenant's budget across every priced model, enforced by the gateways through one rate limit policy and counted in the Redis the gateways share, and the models a tenant may call (403); two self-test steps |

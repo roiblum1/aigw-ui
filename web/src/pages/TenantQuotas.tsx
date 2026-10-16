@@ -79,6 +79,8 @@ function confirmBudget(b: ModelBudget | undefined, before: number, after: number
  */
 export default function TenantQuotas(props: {
   tenant: Tenant;
+  /** The gateways take tokens only: the amounts travel in the tenant's tokens. */
+  tokensOnly: boolean;
   quotas: Quota[];
   models: Model[];
   usage: UsageReport | null;
@@ -150,6 +152,13 @@ export default function TenantQuotas(props: {
             {" "}
             Over the models in dollars, this tenant can use up to <span className="strong">{formatAmount(dollarsDay, "credits")}</span>{" "}
             a day.
+          </>
+        )}
+        {props.tokensOnly && (
+          <>
+            {" "}
+            The amount travels in the tenant&apos;s tokens: a personal key&apos;s next token, within minutes, carries a change;
+            a token created before it keeps the old amount. A changed amount starts the tenant&apos;s count again.
           </>
         )}
       </p>

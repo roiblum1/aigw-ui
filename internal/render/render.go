@@ -121,6 +121,12 @@ type Model struct {
 	// tenant header too. It is set only while the gateway takes tokens
 	// only: a request with an API key has no tenant header.
 	Standard *Budget
+	// ByAmount renders the tenants' own quotas as one rule per amount
+	// (Amounts), which the token picks, instead of one rule per tenant
+	// (Quotas, which then only name the tenants' counters). It is set only
+	// while the gateway takes tokens only, as Standard is.
+	ByAmount bool
+	Amounts  []QuotaAmount
 }
 
 // Budget is a limit for each window.

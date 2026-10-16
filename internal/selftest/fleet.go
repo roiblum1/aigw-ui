@@ -67,6 +67,12 @@ func (t *test) sticky() (string, string) {
 	if err := t.r.st.UpsertQuota(t.ctx, t.tenant.ID, t.model.ID, stickyLimit, testWindow, nil); err != nil {
 		return Failed, err.Error()
 	}
+	// With tokens only, the token names the quota's amount.
+	if t.budgetTokensOnly() {
+		if err := t.reissue("self-test, raised quota"); err != nil {
+			return Failed, err.Error()
+		}
+	}
 	if _, err := t.sync("Self-test of " + t.cluster.Name + ": raised the temporary quota for the stickiness check"); err != nil {
 		return Failed, "The cluster refused the raised quota: " + err.Error()
 	}

@@ -176,10 +176,24 @@ for one. Once the last API key is revoked, the next sync drops the API key
 check and the Secret: the gateways list nothing, and a token writes the
 client ID too. The Tenants page says which tenants still have API keys.
 
-**Defense in depth.** The gateway chart's ClientTrafficPolicy already
-removes a client's `x-aigw-client-id` before any check; add `x-aigw-tenant`
-and `x-aigw-key` to that list, so that a listener without the hub's policy
-cannot be handed them either.
+**Headers a client cannot set.** The gateway's JWT filter writes
+`x-aigw-tenant`, `x-aigw-key`, `x-aigw-client-id`, `x-aigw-budget` and each
+`x-aigw-quota-<model>` from the token, and on every request it checks it
+first removes a client's own value of each (Envoy's documented
+`claim_to_headers` behaviour; since 1.38 also on requests that skip the
+check): a header holds the token's value or nothing. On the lab a request
+with a forged `x-aigw-tenant` was still refused by its own spent budget
+(2026-10-16). The budget and quota rules read these headers, so this is what
+keeps a tenant to its own counters.
+
+**Defense in depth.** On a listener without the hub's policy nothing removes
+them. The gateway chart's ClientTrafficPolicy already removes a client's
+`x-aigw-client-id` before any check; add `x-aigw-tenant`, `x-aigw-key` and
+`x-aigw-budget` to that list, and, with quotas by amount, each
+`x-aigw-quota-<model>` header (a ClientTrafficPolicy takes names, not a
+prefix). The backends the hub renders for a model server remove all of them
+before the request leaves the gateway; an entry route's backend keeps them,
+since the site it forwards to may count the request by its tenant.
 
 ## The tenants' own page
 

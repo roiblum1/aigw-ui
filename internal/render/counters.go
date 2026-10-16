@@ -104,6 +104,21 @@ func Counters(s State) []Counter {
 					})
 				}
 			}
+			if m.ByAmount {
+				// Each tenant is counted on its own under its amount's rule.
+				for _, q := range m.Quotas {
+					a, slot, ok := amountOf(m, q)
+					if q.TenantSlug == "" || !ok {
+						continue
+					}
+					out = append(out, Counter{
+						ModelSlug: m.Slug, TenantSlug: q.TenantSlug, Backend: backend,
+						Limit: q.Limit, Window: q.Window, Shadow: q.Shadow || overage || m.DryRun, Overage: overage,
+						stem: amountStem(prefix, first+slot, m, a, q.TenantSlug), prefix: prefix, std: st,
+					})
+				}
+				continue
+			}
 			for i, q := range rules {
 				if q.TenantSlug == "" {
 					continue // a placeholder, which counts nothing

@@ -50,7 +50,7 @@ func authPolicy(s State) *unstructured.Unstructured {
 		}
 	}
 	if s.Identity.tokens() {
-		jwt := map[string]any{"providers": []any{jwtProvider(s.Identity)}}
+		jwt := map[string]any{"providers": []any{jwtProvider(s.Identity, QuotaClaimHeaders(s.Models))}}
 		if s.Identity.Mode == IdentityBoth {
 			// A request with an API key has no token. The API key check
 			// still has to pass, and the rules below refuse a token that

@@ -19,7 +19,7 @@ import { TenantBudgetCard, TenantModelsCard } from "./TenantBudget";
 import TenantQuotas from "./TenantQuotas";
 import { REFRESH_MS } from "./Usage";
 
-/** A live token created before the tenant's budget or models last changed: it carries the old ones. */
+/** A live token created before the tenant's budget, models or quotas last changed: it carries the old ones. */
 function olderLimits(k: ApiKey, t: Tenant): boolean {
   return k.kind === "token" && !k.revoked_at && !expired(k) && !!t.limits_changed_at && new Date(k.created_at) < new Date(t.limits_changed_at);
 }
@@ -363,9 +363,9 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
                       <div>
                         <span
                           className="tag warn"
-                          title="The token carries the budget and the list of models the tenant had when it was created. Create a new token and revoke this one."
+                          title="The token carries the budget, the list of models and the amount of each quota the tenant had when it was created. Create a new token and revoke this one."
                         >
-                          older budget or models
+                          older limits
                         </span>
                       </div>
                     )}
@@ -394,6 +394,7 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
 
       <TenantQuotas
         tenant={tenant}
+        tokensOnly={data.signing.identity === "tokens"}
         quotas={quotas}
         models={data.models}
         usage={usage.data ?? null}

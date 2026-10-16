@@ -34,7 +34,7 @@ func backend(s State, m Model) *unstructured.Unstructured {
 func aiServiceBackend(s State, m Model) *unstructured.Unstructured {
 	u := object(aigwAPI, "AIServiceBackend", s.Namespace, m.Slug)
 	spec := serviceBackendSpec(m.Slug)
-	if h := backendHeaders(s, ""); h != nil {
+	if h := backendHeaders(s, "", true); h != nil {
 		spec["headerMutation"] = h
 	}
 	u.Object["spec"] = spec
@@ -44,20 +44,43 @@ func aiServiceBackend(s State, m Model) *unstructured.Unstructured {
 // backendHeaders is the header mutation of a backend this tool renders: the
 // request class it sets, when objective is not empty, and the credentials it
 // removes while the gateway takes tokens. Nil when there is neither.
-func backendHeaders(s State, objective string) map[string]any {
+//
+// A backend that is a model server (modelServer) also loses the headers the
+// gateway wrote to tell tenants apart: the model server has no use for them.
+// A backend that forwards to another site's gateway keeps them, since a
+// route there may count the request by its tenant too.
+func backendHeaders(s State, objective string, modelServer bool) map[string]any {
 	var h map[string]any
 	if objective != "" {
 		h = objectiveHeader(objective)
 	}
+	var remove []any
 	if s.AuthEnabled && s.Identity.tokens() {
+		remove = append(remove, credentialsRemoved()["remove"].([]any)...)
+	}
+	if s.AuthEnabled && modelServer {
+		for _, name := range identityHeaders(s) {
+			remove = append(remove, name)
+		}
+	}
+	if len(remove) > 0 {
 		if h == nil {
 			h = map[string]any{}
 		}
-		for k, v := range credentialsRemoved() {
-			h[k] = v
-		}
+		h["remove"] = remove
 	}
 	return h
+}
+
+// identityHeaders are the headers the gateway writes from a key or a token:
+// the tenant, the key, the client ID, the budget and the amount of each own
+// quota.
+func identityHeaders(s State) []string {
+	names := []string{TenantHeader, KeyHeader, ClientIDHeader, BudgetHeader}
+	for _, q := range QuotaClaimHeaders(s.Models) {
+		names = append(names, q["header"].(string))
+	}
+	return names
 }
 
 // serviceBackendSpec is the spec of an AIServiceBackend in front of the

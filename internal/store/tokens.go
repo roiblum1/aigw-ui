@@ -193,19 +193,40 @@ func (s *Store) CreateToken(ctx context.Context, tenantID, name string, set Toke
 }
 
 // tokenLimits writes what the gateway holds a tenant to into its token's
-// claims: its budget across models and, when it is held to some, its
-// models by the names clients send.
+// claims: its budget across models, the amount of each own quota by model
+// slug and, when it is held to some, its models by the names clients send.
 func tokenLimits(ctx context.Context, tx pgx.Tx, t Tenant, c *token.Claims) error {
 	if t.Budget != nil {
 		if unit := render.BudgetUnits[t.Budget.Window]; unit != "" {
 			c.RequestsPerUnit, c.Unit = t.Budget.Credits, unit
 		}
 	}
+	// The amount of each own quota, by model slug.
+	rows, err := tx.Query(ctx, `SELECT m.slug, q.token_limit, q.window_size, q.shadow FROM quotas q JOIN models m ON m.id = q.model_id WHERE q.tenant_id = $1`, t.ID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var slug, window string
+		var limit int64
+		var shadow bool
+		if err := rows.Scan(&slug, &limit, &window, &shadow); err != nil {
+			rows.Close()
+			return err
+		}
+		if c.Quotas == nil {
+			c.Quotas = map[string]string{}
+		}
+		c.Quotas[slug] = render.QuotaAmountName(limit, window, shadow)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
 	if t.Models == nil {
 		return nil
 	}
 	names := []string{}
-	rows, err := tx.Query(ctx, `SELECT name FROM models WHERE id::text = ANY($1) ORDER BY name`, t.Models)
+	rows, err = tx.Query(ctx, `SELECT name FROM models WHERE id::text = ANY($1) ORDER BY name`, t.Models)
 	if err != nil {
 		return err
 	}

@@ -55,8 +55,10 @@ func (i Identity) tokens() bool { return i.Mode == IdentityBoth || i.Mode == Ide
 // jwtProvider is the hub as the gateway's JWT provider. A token is read from
 // where an API key is: Authorization, as OpenAI clients send it, and
 // x-api-key, as Anthropic clients do. Once no API key is left, the provider
-// also writes the client ID, which no API key policy writes any more.
-func jwtProvider(i Identity) map[string]any {
+// also writes the client ID, which no API key policy writes any more, and
+// the amount of each own quota the token names (quotas, from
+// QuotaClaimHeaders).
+func jwtProvider(i Identity, quotas []map[string]any) map[string]any {
 	claims := []any{
 		map[string]any{"header": TenantHeader, "claim": "sub"},
 		map[string]any{"header": KeyHeader, "claim": "jti"},
@@ -69,6 +71,9 @@ func jwtProvider(i Identity) map[string]any {
 			map[string]any{"header": ClientIDHeader, "claim": "cid"},
 			// A token with a budget across models: the budget rule matches it.
 			map[string]any{"header": BudgetHeader, "claim": BudgetClaim})
+		for _, q := range quotas {
+			claims = append(claims, q)
+		}
 	}
 	return map[string]any{
 		"name":      TokenProvider,
