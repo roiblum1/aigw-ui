@@ -5,6 +5,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { budgetsOf } from "./usage.mjs";
 
 export const dir = process.env.AIGW_USAGE_DIR || join(homedir(), ".claude", "aigw-usage");
 
@@ -70,7 +71,7 @@ export async function refresh({ hub, key }, maxAge, now = Date.now()) {
     const res = await fetch(`${hub}/api/v1/my/usage`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(4000) });
     if (res.ok) {
       const body = await res.json();
-      next = { hub, fetched: now, tenant: body.tenant, usage_enabled: body.usage_enabled, budgets: body.budgets ?? [] };
+      next = { hub, fetched: now, tenant: body.tenant, usage_enabled: body.usage_enabled, budgets: budgetsOf(body) };
     } else {
       const reasons = { 401: "the hub does not accept this API key", 404: "the hub has the tenants' page turned off", 429: "too many wrong keys; the hub will answer again in a minute" };
       next = { hub, fetched: now, status: res.status, error: reasons[res.status] ?? `the hub answered ${res.status}` };

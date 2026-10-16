@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { amount, BEST_EFFORT, dollars, due, level, line, NEAR, OK, percent, pick, REFUSED, SPENT, tokens, warning } from "./usage.mjs";
+import { ALL_MODELS, amount, BEST_EFFORT, budgetsOf, dollars, due, level, line, NEAR, OK, percent, pick, REFUSED, SPENT, tokens, warning } from "./usage.mjs";
 
 const now = new Date("2026-10-11T10:00:00");
 const b = (over = {}) => ({ model_name: "GLM5.3", unit: "credits", limit: 5_000_000, window: "1d", used: 318_400, resets_at: "2026-10-11T18:00:00", enforced: true, best_effort_used: 0, ...over });
@@ -83,4 +83,20 @@ test("takes the hub and the personal key aigw-token signed in with", async () =>
   assert.equal(c.key, "aigw-pk-x");
   // A key set for the plugin comes first.
   assert.equal(config({ AIGW_CONFIG_DIR: d, AIGW_API_KEY: "mine" }).key, "mine");
+});
+
+test("the budget across models", () => {
+  const body = {
+    budgets: [b({ model_name: "e2e-opus", limit: 500_000, used: 100_000, window: "1h" })],
+    budget: { limit: 200_000, window: "1h", used: 190_000, resets_at: "2026-10-11T11:00:00", enforced: true },
+  };
+  const all = budgetsOf(body);
+  assert.equal(all.length, 2);
+  assert.equal(line(all[1], now), "All models $1.90 of $2.00 (95%) · resets 11:00");
+  // It holds on every model, so it is shown when it is further gone than the model's own.
+  assert.equal(pick(all, "e2e-opus").model_name, ALL_MODELS);
+  assert.equal(pick(all, "qwen-tiny").model_name, ALL_MODELS);
+  assert.equal(pick(budgetsOf({ budgets: body.budgets, budget: { ...body.budget, used: 0 } }), "e2e-opus").model_name, "e2e-opus");
+  assert.equal(warning(all[1], now), "All models: 95% of your budget is used ($1.90 of $2.00). It resets at 11:00.");
+  assert.deepEqual(budgetsOf({}), []);
 });

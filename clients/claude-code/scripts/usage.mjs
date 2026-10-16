@@ -34,6 +34,22 @@ export function clock(iso, now = new Date()) {
   return t.toDateString() === now.toDateString() ? time : `${t.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} ${time}`;
 }
 
+/** The name the budget across models is shown under. */
+export const ALL_MODELS = "All models";
+
+/**
+ * The budgets in an answer of the hub's /my/usage: one per model, and the
+ * tenant's budget across models, which holds on whatever model is used.
+ */
+export function budgetsOf(body) {
+  const out = [...(body.budgets ?? [])];
+  const all = body.budget;
+  if (all) {
+    out.push({ model_name: ALL_MODELS, across: true, unit: "credits", limit: all.limit, window: all.window, used: all.used, resets_at: all.resets_at, enforced: all.enforced });
+  }
+  return out;
+}
+
 // How far a budget is gone. A higher level is worth telling the user about
 // once more.
 export const OK = 0, NEAR = 1, SPENT = 2, BEST_EFFORT = 3, REFUSED = 4;
@@ -47,13 +63,13 @@ export function level(b, warnAt = 90) {
 }
 
 /**
- * The budget to show for a model: the one of that model that is furthest
- * gone, since a model can have an hourly and a daily budget. Without a
- * budget on the model, the furthest gone of all.
+ * The budget to show for a model: of the model's own and the budget across
+ * models, the one that is furthest gone, since a model can have an hourly
+ * and a daily budget. Without either, the furthest gone of all.
  */
 export function pick(budgets, model) {
   const name = (model ?? "").toLowerCase();
-  const mine = budgets.filter((b) => b.model_name.toLowerCase() === name);
+  const mine = budgets.filter((b) => b.across || b.model_name.toLowerCase() === name);
   const from = mine.length ? mine : budgets;
   return [...from].sort((a, b) => level(b) - level(a) || percent(b) - percent(a))[0];
 }
