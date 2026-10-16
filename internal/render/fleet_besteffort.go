@@ -20,6 +20,13 @@ const (
 	ObjectiveStandard   = "standard"
 	ObjectiveBestEffort = "best-effort"
 
+	// FairnessHeader names the flow a serving site's scheduler shares a
+	// class out by, once its flow control is on: the tenant, so one tenant
+	// cannot crowd out the others of its class. The gateway writes it from
+	// a token (jwtProvider). A request with a plain API key has none and
+	// joins the scheduler's default flow.
+	FairnessHeader = "x-llm-d-inference-fairness-id"
+
 	// MaxOverageTenants is how many tenants one best-effort route lists.
 	// The list is one regular expression in the gateway's route table.
 	MaxOverageTenants = 200
@@ -90,15 +97,11 @@ type Pool struct {
 	Group     string
 }
 
-// objectives returns the request class "best-effort" for every pool that
-// serves a model in best-effort mode on this cluster. The class is what the
-// header of the best-effort route names; without it the serving site treats
-// the request like any other.
-//
-// A class is found by its name within a namespace, so a namespace has one.
-// Where two pools of best-effort models share a namespace, the first by
-// name gets it.
-func objectives(s State) []*unstructured.Unstructured {
+// classPools returns, by namespace, the pool the request class
+// "best-effort" there is for. A class is found by its name within a
+// namespace, so a namespace has one. Where two pools of best-effort models
+// share a namespace, the first by name gets it.
+func classPools(s State) map[string]Pool {
 	byNamespace := map[string]Pool{}
 	for _, m := range s.Models {
 		for _, p := range m.BestEffortPools {
@@ -107,6 +110,40 @@ func objectives(s State) []*unstructured.Unstructured {
 			}
 		}
 	}
+	return byNamespace
+}
+
+// BestEffortGaps says, for each pool of a best-effort model that the class
+// is not for, that best-effort requests rank there with everyone else's. A
+// scheduler takes only the classes that name its own pool (llm-d router
+// v0.10.0, inferenceobjective_reconciler.go), so on such a pool the class is
+// unknown, a request naming it gets priority 0 as a regular tenant's does,
+// and it is not the first refused when the pool is full.
+func BestEffortGaps(s State) []string {
+	byNamespace := classPools(s)
+	seen := map[Pool]bool{}
+	var gaps []string
+	for _, m := range s.Models {
+		for _, p := range m.BestEffortPools {
+			if have := byNamespace[p.Namespace]; p == have || seen[p] {
+				continue
+			}
+			seen[p] = true
+			gaps = append(gaps, "Best-effort requests rank with regular tenants' on InferencePool "+p.Namespace+"/"+p.Name+
+				": a namespace takes one request class best-effort, and in "+p.Namespace+" it is for "+byNamespace[p.Namespace].Name+
+				". Give the pool a namespace of its own.")
+		}
+	}
+	sort.Strings(gaps)
+	return gaps
+}
+
+// objectives returns the request class "best-effort" for every pool that
+// serves a model in best-effort mode on this cluster (classPools). The class
+// is what the header of the best-effort route names; without it the serving
+// site treats the request like any other.
+func objectives(s State) []*unstructured.Unstructured {
+	byNamespace := classPools(s)
 	namespaces := make([]string, 0, len(byNamespace))
 	for ns := range byNamespace {
 		namespaces = append(namespaces, ns)

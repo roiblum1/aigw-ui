@@ -167,6 +167,12 @@ picker down, the site answers 500 to every request of the model. The entry
 route tries the next site on a 500 since 0.29.0; with one site the client gets
 it. Run two replicas of the picker where that matters.
 
+**What the hub checks.** Each sync warns in the task message when, on a
+pool that serves a best-effort model, the scheduler runs without flow
+control, the site's own class `standard` does not rank above `best-effort` or
+is below 0, or the class `best-effort` is for another pool of the same
+namespace. See [architecture](architecture.md#best-effort-route).
+
 **What should make the class count.** Flow control: with it, requests wait in
 the picker when the pool is saturated, ordered by priority, and the lowest
 band is refused first. It is switched on in the scheduler's settings, which

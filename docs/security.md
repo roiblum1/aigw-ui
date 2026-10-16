@@ -330,10 +330,16 @@ to what they belong to:
 - `QuotaPolicy` objects in the namespace of the model's `AIServiceBackend`,
   often the model's namespace;
 - the `InferenceObjective` `best-effort` next to each `InferencePool` that
-  serves a model with best-effort on;
+  serves a model with best-effort on. Each sync also gets the site's own
+  class `standard` there, to compare;
 - on `AIGatewayRoute`s a chart owns, it patches the annotation
   `gateway.envoyproxy.io/aigw-ui-quota-revision` and, for a priced model,
   adds its credits entry to `spec.llmRequestCosts`. It never deletes them.
+
+Through the gateway it sends each tenant's slug to the schedulers of the
+sites that serve the tenant's requests, in `x-llm-d-inference-fairness-id`,
+written from the token. A scheduler labels its request metrics with it (at
+most 1,000 values), so the slugs appear in each site's Prometheus.
 
 It reads, across the cluster, `LLMInferenceService`s and their configs, the
 workload pods, the nodes' labels, the `Deployment` or `LeaderWorkerSet`

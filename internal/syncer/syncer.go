@@ -202,6 +202,7 @@ func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, e
 	for _, skipped := range res.Skipped {
 		res.Held = append(res.Held, skipped+" was not created: the cluster does not have that kind. Requests sent as best-effort are served there like any other.")
 	}
+	res.Warnings = append(res.Warnings, render.BestEffortGaps(state)...)
 	// Only a sync that applied everything moves the cluster to the revision.
 	return res, s.st.SetFleetRevision(ctx, id, render.FleetRevision(state))
 }

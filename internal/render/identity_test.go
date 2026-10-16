@@ -60,7 +60,7 @@ func TestIdentityBoth(t *testing.T) {
 	}
 	providers, _, _ := unstructured.NestedSlice(pol.Object, "spec", "jwt", "providers")
 	p := providers[0].(map[string]any)
-	if fmt.Sprint(p["claimToHeaders"]) != "[map[claim:sub header:x-aigw-tenant] map[claim:jti header:x-aigw-key]]" ||
+	if fmt.Sprint(p["claimToHeaders"]) != "[map[claim:sub header:x-aigw-tenant] map[claim:jti header:x-aigw-key] map[claim:sub header:x-llm-d-inference-fairness-id]]" ||
 		fmt.Sprint(p["extractFrom"]) != "map[headers:[map[name:Authorization valuePrefix:Bearer ] map[name:x-api-key]]]" ||
 		fmt.Sprint(p["audiences"]) != "[aigw-fleet]" || p["issuer"] != "aigw-ui" {
 		t.Fatalf("provider: %v", p)
@@ -98,7 +98,8 @@ func TestIdentityTokens(t *testing.T) {
 	}
 	pol := find(t, objs, "SecurityPolicy", AuthPolicyName)
 	p := spec(t, pol)
-	if strings.Contains(p, "apiKeyAuth") || strings.Contains(p, "failOpen") || !strings.Contains(p, `{"claim":"cid","header":"x-aigw-client-id"}`) {
+	if strings.Contains(p, "apiKeyAuth") || strings.Contains(p, "failOpen") || !strings.Contains(p, `{"claim":"cid","header":"x-aigw-client-id"}`) ||
+		!strings.Contains(p, `{"claim":"sub","header":"x-llm-d-inference-fairness-id"}`) {
 		t.Fatalf("policy: %s", p)
 	}
 	rules, _, _ := unstructured.NestedSlice(pol.Object, "spec", "authorization", "rules")

@@ -411,7 +411,9 @@ treated both classes alike. See
    more specific than the model's entry route, so it wins for this tenant.
 3. Its backend sets the header `x-llm-d-inference-objective: best-effort`.
    The model's own entry route sets `standard`. Both replace whatever a
-   client sent.
+   client sent. A token also gives the scheduler the tenant
+   (`x-llm-d-inference-fairness-id`), so with flow control on, tenants of
+   one class share it evenly.
 4. The route has a `QuotaPolicy` of its own. It counts every tenant under
    the same rule as the model's policy and refuses nobody.
 

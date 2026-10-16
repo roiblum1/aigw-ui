@@ -334,7 +334,8 @@ func TestBestEffortNamesDoNotCollide(t *testing.T) {
 
 // A model in best-effort mode gets the request class next to each of its
 // pools on the cluster: one per namespace, with a priority below that of a
-// request without a class.
+// request without a class. A second pool in a namespace gets none, and that
+// is reported.
 func TestBestEffortClassPerPoolNamespace(t *testing.T) {
 	s := State{Namespace: "ai-gateway", Models: []Model{
 		{Name: "glm", Slug: "glm", BestEffortPools: []Pool{
@@ -366,6 +367,15 @@ func TestBestEffortClassPerPoolNamespace(t *testing.T) {
 	}
 	if got := classes[1].Object["spec"].(map[string]any)["poolRef"].(map[string]any)["group"]; got != "inference.networking.x-k8s.io" {
 		t.Errorf("the second class points at group %v, want the pool's own", got)
+	}
+	// The other pool's scheduler does not take that class: the sync says so.
+	gaps := BestEffortGaps(s)
+	if len(gaps) != 1 || !strings.Contains(gaps[0], "InferencePool glm/glm-inference-pool") || !strings.Contains(gaps[0], "it is for glm-b-inference-pool") {
+		t.Errorf("gaps = %v", gaps)
+	}
+	s.Models[0].BestEffortPools = s.Models[0].BestEffortPools[1:]
+	if gaps := BestEffortGaps(s); len(gaps) != 0 {
+		t.Errorf("one pool per namespace, yet gaps %v", gaps)
 	}
 
 	s.Fleet.BestEffortPriority = -10

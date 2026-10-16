@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ func (c *Client) readGatewayStatus(ctx context.Context, namespace string, desire
 	for i, ch := range res.Changes {
 		changed[ch.Kind+"/"+ch.Namespace+"/"+ch.Name] = i
 	}
+	var classes []*unstructured.Unstructured
 	for _, obj := range desired {
 		if obj.GetKind() == "EnvoyPatchPolicy" || obj.GetKind() == "BackendTrafficPolicy" {
 			c.readPatchStatus(ctx, namespace, obj, changed, res)
@@ -35,6 +37,10 @@ func (c *Client) readGatewayStatus(ctx context.Context, namespace string, desire
 		}
 		if obj.GetKind() == "SecurityPolicy" {
 			c.readSecurityStatus(ctx, namespace, obj, changed, res)
+			continue
+		}
+		if obj.GetKind() == render.ObjectiveKind {
+			classes = append(classes, obj)
 			continue
 		}
 		if obj.GroupVersionKind().Group != "aigateway.envoyproxy.io" {
@@ -66,6 +72,7 @@ func (c *Client) readGatewayStatus(ctx context.Context, namespace string, desire
 			res.Rejected = append(res.Rejected, Change{Kind: obj.GetKind(), Namespace: ns, Name: obj.GetName(), Gateway: kind, GatewayMessage: message})
 		}
 	}
+	c.readClasses(ctx, classes, res)
 }
 
 // readPatchStatus reports an EnvoyPatchPolicy or BackendTrafficPolicy the
@@ -149,6 +156,119 @@ func (c *Client) readSecurityStatus(ctx context.Context, namespace string, obj *
 	case "Accepted":
 	default:
 		res.Rejected = append(res.Rejected, Change{Kind: obj.GetKind(), Namespace: ns, Name: obj.GetName(), Gateway: verdict, GatewayMessage: message})
+	}
+}
+
+// readClasses checks that the hub's best-effort classes rank below regular
+// tenants' requests where they are served: the order of the classes
+// (readClassOrder), and flow control in the pools' schedulers (readFlowControl).
+func (c *Client) readClasses(ctx context.Context, classes []*unstructured.Unstructured, res *SyncResult) {
+	if len(classes) == 0 {
+		return
+	}
+	for _, obj := range classes {
+		c.readClassOrder(ctx, obj, res)
+	}
+	svcs, err := c.llmServices(ctx)
+	if err != nil {
+		return
+	}
+	bases := c.baseConfigs(ctx)
+	for _, obj := range classes {
+		readFlowControl(obj, svcs, bases, res)
+	}
+}
+
+// readFlowControl warns when an LLMInferenceService serves the pool of a
+// best-effort class with a scheduler that runs no flow control. Without it
+// the scheduler holds a best-effort request back only while it counts the
+// pool full (llm-d router v0.10.0, requestcontrol/admission.go), which its
+// default detector did not do in a lab test with 28 requests waiting in vLLM
+// (docs/optimization.md): regular tenants' requests then wait in vLLM behind
+// best-effort ones. Nothing is said when it cannot be told.
+func readFlowControl(obj *unstructured.Unstructured, svcs []unstructured.Unstructured, bases baseConfigs, res *SyncResult) {
+	group, _, _ := unstructured.NestedString(obj.Object, "spec", "poolRef", "group")
+	name, _, _ := unstructured.NestedString(obj.Object, "spec", "poolRef", "name")
+	for i := range svcs {
+		svc := &svcs[i]
+		if p, ok := pool(svc); !ok || p.Namespace != obj.GetNamespace() || p.Name != name || p.Group != group {
+			continue
+		}
+		configs, ok := bases.of(svc)
+		if !ok {
+			continue
+		}
+		if on, known := flowControl(svc, configs); known && !on {
+			res.Warnings = append(res.Warnings, "Best-effort requests are not held back on InferencePool "+obj.GetNamespace()+"/"+name+
+				" until its scheduler counts the pool full, which it may not: LLMInferenceService "+svc.GetNamespace()+"/"+svc.GetName()+
+				" runs it without flow control. Turn on featureGates: [flowControl] with the concurrency-detector (see the optimization guide).")
+		}
+	}
+}
+
+// flowControl reports whether an LLMInferenceService's scheduler runs flow
+// control: the feature gate of the scheduler config that applies, the
+// service's own or else that of the last config it is built on that has one,
+// as KServe applies them in order and the service last. None at all is the
+// scheduler's default, without flow control (KServe 0.21's preset sets
+// none). known is false when that config is in a ConfigMap, is not an
+// object, or a config could not be read.
+func flowControl(svc *unstructured.Unstructured, bases []Base) (on, known bool) {
+	own, _, _ := unstructured.NestedMap(svc.Object, "spec")
+	specs := []map[string]any{own}
+	for i := len(bases) - 1; i >= 0; i-- {
+		specs = append(specs, bases[i].Spec)
+	}
+	for _, spec := range specs {
+		if spec == nil {
+			return false, false
+		}
+		config, ok, _ := unstructured.NestedMap(spec, "router", "scheduler", "config")
+		if !ok {
+			continue
+		}
+		inline, ok := config["inline"].(map[string]any)
+		if !ok {
+			return false, false
+		}
+		gates, _, _ := unstructured.NestedStringSlice(inline, "featureGates")
+		return slices.Contains(gates, "flowControl"), true
+	}
+	return false, true
+}
+
+// readClassOrder warns when the site's own request class "standard" for the
+// pool of the hub's "best-effort" does not rank above it. Regular tenants'
+// requests name "standard": its scheduler then serves them with or after
+// best-effort ones, and below 0 refuses them as it does best-effort ones when
+// the pool is full (llm-d router v0.10.0, requestcontrol/admission.go). A
+// "standard" for another pool, or none, is priority 0 to this pool's
+// scheduler, and the hub's best-effort priority is below 0.
+func (c *Client) readClassOrder(ctx context.Context, obj *unstructured.Unstructured, res *SyncResult) {
+	gvr, _ := gvrFor(obj.GetKind())
+	live, err := c.dyn.Resource(gvr).Namespace(obj.GetNamespace()).Get(ctx, render.ObjectiveStandard, metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	pool := func(u *unstructured.Unstructured) string {
+		group, _, _ := unstructured.NestedString(u.Object, "spec", "poolRef", "group")
+		name, _, _ := unstructured.NestedString(u.Object, "spec", "poolRef", "name")
+		return group + "/" + name
+	}
+	if pool(live) != pool(obj) {
+		return
+	}
+	standard, _, _ := unstructured.NestedInt64(live.Object, "spec", "priority")
+	bestEffort, _, _ := unstructured.NestedInt64(obj.Object, "spec", "priority")
+	name, _, _ := unstructured.NestedString(obj.Object, "spec", "poolRef", "name")
+	where := "The request class standard of InferencePool " + obj.GetNamespace() + "/" + name + " has priority " + strconv.FormatInt(standard, 10)
+	switch {
+	case standard <= bestEffort:
+		res.Warnings = append(res.Warnings, where+", not above best-effort's "+strconv.FormatInt(bestEffort, 10)+
+			": regular tenants' requests are not served before best-effort ones there.")
+	case standard < 0:
+		res.Warnings = append(res.Warnings, where+
+			", below 0: when the pool is full, its scheduler refuses regular tenants' requests as it does best-effort ones.")
 	}
 }
 

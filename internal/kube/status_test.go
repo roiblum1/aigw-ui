@@ -196,3 +196,134 @@ func TestClientPort(t *testing.T) {
 		t.Errorf("no gateway: %d %v", got, err)
 	}
 }
+
+// The hub's best-effort class has to rank below the site's own "standard"
+// for the same pool, which regular tenants' requests name, and "standard"
+// must not be below 0. A "standard" for another pool, or none, is 0 to the
+// pool's scheduler.
+func TestClassOrder(t *testing.T) {
+	gvr, _ := gvrFor(render.ObjectiveKind)
+	class := func(name string, priority any, pool string) *unstructured.Unstructured {
+		spec := map[string]any{"poolRef": map[string]any{"group": "inference.networking.k8s.io", "kind": "InferencePool", "name": pool}}
+		if priority != nil {
+			spec["priority"] = priority
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "llm-d.ai/v1alpha2", "kind": render.ObjectiveKind,
+			"metadata": map[string]any{"name": name, "namespace": "llm-glm53"},
+			"spec":     spec,
+		}}
+	}
+	for name, tc := range map[string]struct {
+		standard   *unstructured.Unstructured
+		bestEffort int64
+		want       string
+	}{
+		"no standard":                {nil, -1, ""},
+		"standard at 0":              {class("standard", int64(0), "glm53-b200-inference-pool"), -1, ""},
+		"standard without priority":  {class("standard", nil, "glm53-b200-inference-pool"), -1, ""},
+		"standard equal":             {class("standard", int64(-1), "glm53-b200-inference-pool"), -1, "not above best-effort's -1"},
+		"standard below":             {class("standard", int64(-5), "glm53-b200-inference-pool"), -1, "has priority -5, not above"},
+		"standard above but below 0": {class("standard", int64(-1), "glm53-b200-inference-pool"), -10, "below 0"},
+		"standard of another pool":   {class("standard", int64(-5), "glm53-h200-inference-pool"), -1, ""},
+	} {
+		var objs []runtime.Object
+		if tc.standard != nil {
+			objs = append(objs, tc.standard)
+		}
+		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(gvr, "InferenceObjectiveList"), objs...)
+		var res SyncResult
+		desired := class("best-effort", tc.bestEffort, "glm53-b200-inference-pool")
+		(&Client{dyn: dyn}).readGatewayStatus(context.Background(), "gw", []*unstructured.Unstructured{desired}, &res)
+		switch {
+		case tc.want == "" && len(res.Warnings) != 0:
+			t.Errorf("%s: warnings %v", name, res.Warnings)
+		case tc.want != "" && (len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], tc.want) ||
+			!strings.Contains(res.Warnings[0], "InferencePool llm-glm53/glm53-b200-inference-pool")):
+			t.Errorf("%s: warnings %v, want %q", name, res.Warnings, tc.want)
+		}
+	}
+}
+
+// listKinds registers a list kind for the fake client, with the
+// LLMInferenceServices and their configs the class checks list.
+func listKinds(gvr schema.GroupVersionResource, kind string) map[schema.GroupVersionResource]string {
+	lists := map[schema.GroupVersionResource]string{gvr: kind}
+	for _, g := range llmServiceGVRs {
+		lists[g] = "LLMInferenceServiceList"
+	}
+	for _, g := range llmConfigGVRs {
+		lists[g] = "LLMInferenceServiceConfigList"
+	}
+	return lists
+}
+
+// A scheduler runs flow control when the config that applies has the gate:
+// the service's own, or else the last config it is built on that has one.
+// None at all is the default, without it. A config in a ConfigMap, or one
+// that could not be read, says nothing.
+func TestFlowControl(t *testing.T) {
+	config := func(v any) map[string]any {
+		return map[string]any{"router": map[string]any{"scheduler": map[string]any{"config": v}}}
+	}
+	gates := func(g ...any) map[string]any { return map[string]any{"inline": map[string]any{"featureGates": g}} }
+	svc := func(spec map[string]any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	}
+	preset := Base{Name: "kserve/kserve-config-llm-scheduler", Spec: map[string]any{"router": map[string]any{"scheduler": map[string]any{}}}}
+	for name, tc := range map[string]struct {
+		svc       *unstructured.Unstructured
+		bases     []Base
+		on, known bool
+	}{
+		"own config with the gate":      {svc(config(gates("flowControl"))), []Base{preset}, true, true},
+		"own config without it":         {svc(config(gates())), []Base{preset}, false, true},
+		"KServe's default":              {svc(map[string]any{}), []Base{preset}, false, true},
+		"a base config with the gate":   {svc(map[string]any{}), []Base{preset, {Name: "llm/fc", Spec: config(gates("flowControl"))}}, true, true},
+		"own config over a base config": {svc(config(gates())), []Base{{Name: "llm/fc", Spec: config(gates("flowControl"))}}, false, true},
+		"in a ConfigMap":                {svc(config(map[string]any{"ref": map[string]any{"name": "epp"}})), nil, false, false},
+		"inline as text":                {svc(config(map[string]any{"inline": "featureGates: [flowControl]"})), nil, false, false},
+		"a base config not read":        {svc(map[string]any{}), []Base{{Name: "llm/unknown"}}, false, false},
+	} {
+		if on, known := flowControl(tc.svc, tc.bases); on != tc.on || known != tc.known {
+			t.Errorf("%s: on %v known %v, want %v %v", name, on, known, tc.on, tc.known)
+		}
+	}
+}
+
+// The sync warns about a pool of a best-effort class whose service runs
+// without flow control, and only about that pool.
+func TestFlowControlWarning(t *testing.T) {
+	gvr, _ := gvrFor(render.ObjectiveKind)
+	service := func(name, pool string, gates ...any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": llmServiceGVRs[0].Group + "/" + llmServiceGVRs[0].Version, "kind": "LLMInferenceService",
+			"metadata": map[string]any{"name": name, "namespace": "llm-glm53"},
+			"spec": map[string]any{"router": map[string]any{"scheduler": map[string]any{
+				"config": map[string]any{"inline": map[string]any{"featureGates": gates}}}}},
+			"status": map[string]any{"router": map[string]any{"scheduler": map[string]any{"inferencePool": map[string]any{
+				"group": "inference.networking.k8s.io", "name": pool}}}},
+		}}
+	}
+	class := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "llm-d.ai/v1alpha2", "kind": render.ObjectiveKind,
+		"metadata": map[string]any{"name": "best-effort", "namespace": "llm-glm53"},
+		"spec": map[string]any{"priority": int64(-1),
+			"poolRef": map[string]any{"group": "inference.networking.k8s.io", "kind": "InferencePool", "name": "glm53-b200-inference-pool"}},
+	}}
+	for name, tc := range map[string]struct {
+		svc  *unstructured.Unstructured
+		warn bool
+	}{
+		"without flow control":   {service("glm53-b200", "glm53-b200-inference-pool"), true},
+		"with flow control":      {service("glm53-b200", "glm53-b200-inference-pool", "flowControl"), false},
+		"another pool's service": {service("glm53-h200", "glm53-h200-inference-pool"), false},
+	} {
+		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(gvr, "InferenceObjectiveList"), tc.svc)
+		var res SyncResult
+		(&Client{dyn: dyn}).readGatewayStatus(context.Background(), "gw", []*unstructured.Unstructured{class}, &res)
+		if got := len(res.Warnings) == 1 && strings.Contains(res.Warnings[0], "LLMInferenceService llm-glm53/glm53-b200 runs it without flow control"); got != tc.warn || len(res.Warnings) > 1 {
+			t.Errorf("%s: warnings %v", name, res.Warnings)
+		}
+	}
+}
