@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { api, type Model, type SigningKeys, type Tenant, type UsageReport, type Window } from "../api";
+import { api, type Model, type Quota, type SigningKeys, type Tenant, type UsageReport, type Window } from "../api";
 import { LimitInput, WindowSelect, formatDollars, limitText, limitValue, windowLabel } from "../components";
 import { UsageMeter, confirmBudgetReset } from "./Usage";
 
@@ -11,15 +11,19 @@ function held(identity: SigningKeys["identity"] | undefined): string | null {
     : "The gateways still take API keys. Until the last API key is revoked, the gateways do not hold tenants to a budget across models or to their models.";
 }
 
+/** A model with prices, in use or waiting for their day: a budget across models covers it. */
+export const hasPrices = (m: Model | undefined) => !!(m?.prices || m?.pending_prices);
+
 /**
  * A tenant's budget across every priced model. The amount travels in the
  * tenant's tokens and one gateway rule holds every tenant to its own, charged
- * with what each answer cost at the model's prices; the tenant's quotas per
- * model hold alongside it.
+ * with what each answer cost at the model's prices. On those models it is the
+ * tenant's only limit: a tenant has it or quotas of its own there, not both.
  */
 export function TenantBudgetCard(props: {
   tenant: Tenant;
   models: Model[];
+  quotas: Quota[];
   usage: UsageReport | null;
   identity: SigningKeys["identity"] | undefined;
   busy: boolean;
@@ -32,6 +36,8 @@ export function TenantBudgetCard(props: {
   const priced = props.models.filter((m) => m.prices);
   const unpriced = props.models.filter((m) => !m.prices || m.price_dry_run);
   const why = held(props.identity);
+  // Quotas of its own on models the budget would cover.
+  const own = props.quotas.filter((q) => hasPrices(props.models.find((m) => m.id === q.model_id))).map((q) => q.model_name);
 
   const save = (e: FormEvent) => {
     e.preventDefault();
@@ -43,8 +49,8 @@ export function TenantBudgetCard(props: {
   };
   const remove = () =>
     confirm(
-      `Remove the budget across models of ${tenant.slug}? Its quotas per model stay. ` +
-        "Set again in the same period, it comes back with what was used.",
+      `Remove the budget across models of ${tenant.slug}? On each model it is then held by the model's standard, ` +
+        "or its pool, until it gets quotas of its own. Set again in the same period, the budget comes back with what was used.",
     ) &&
     act(() => api.setTenantBudget(tenant.id, null, "1d"));
 
@@ -52,15 +58,22 @@ export function TenantBudgetCard(props: {
     <section className="card">
       <h2>Budget across models</h2>
       <p className="hint">
-        One amount in dollars for every model with prices, counted together: a cheaper model spends it more slowly.
-        Once it is spent the gateway refuses the tenant (HTTP 429) on every model, until the next{" "}
-        {tenant.budget ? windowLabel[tenant.budget.window] : "period"}. A quota per model holds alongside it. The
-        amount travels in the tenant's tokens: tokens created after a change carry the new one, older tokens the one
-        they were created with.
+        One amount in dollars for every model with prices, counted together: the tenant chooses what to spend it on,
+        and a cheaper model spends it more slowly. Once it is spent the gateway refuses the tenant (HTTP 429) on every
+        model, until the next {tenant.budget ? windowLabel[tenant.budget.window] : "period"}. On those models it is the
+        tenant's only limit: their standards and pools do not hold it, and it has no quotas of its own there. A tenant
+        has one budget across models or a budget per model, not both. The amount travels in the tenant's tokens:
+        tokens created after a change carry the new one, older tokens the one they were created with.
         {unpriced.length > 0 &&
           ` Models without prices, or with prices in a dry run, cost nothing from it, and are refused all the same once it is spent: ${unpriced.map((m) => m.name).join(", ")}.`}
       </p>
       {tenant.budget && why && <div className="banner warn">{why}</div>}
+      {tenant.budget && own.length > 0 && (
+        <div className="banner warn">
+          It also has quotas of its own on {own.join(", ")}, from before a tenant had one or the other. They hold
+          nothing while it has this budget: remove them under Quotas.
+        </div>
+      )}
       {edit ? (
         <form className="inline-form" onSubmit={save}>
           <LimitInput
@@ -124,6 +137,8 @@ export function TenantBudgetCard(props: {
             "No model has prices yet, so there is nothing to count it in."
           ) : why ? (
             why
+          ) : own.length > 0 ? (
+            `It has quotas of its own on ${own.join(", ")}. A tenant has one budget across models or a budget per model, not both: remove those quotas to give it one.`
           ) : (
             <button disabled={busy} onClick={() => setEdit({ limit: "", window: "1d" })}>
               Set a budget

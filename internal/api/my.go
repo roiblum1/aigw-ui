@@ -201,7 +201,9 @@ func (s *Server) getMyUsage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, q := range rep.Quotas {
-			if !calls(q.ModelID) {
+			// Where the budget across models holds the tenant, the model's
+			// limit is not its own: the budget is shown instead.
+			if !calls(q.ModelID) || q.Budget {
 				continue
 			}
 			mine[q.ModelID] = true

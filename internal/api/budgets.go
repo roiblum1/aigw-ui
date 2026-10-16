@@ -14,6 +14,11 @@ import (
 var errBudgetNeedsTokens = errors.New("a budget across models, and a list of models a tenant may call, need every tenant on tokens: the gateway reads the tenant from the token, and a request with an API key names none. " +
 	"Give every tenant a token and revoke its API keys first")
 
+// errBudgetOrQuotas is why a tenant cannot have a budget across models and
+// quotas of its own on models with prices: the budget holds it on every
+// such model, so a quota there would hold nothing.
+var errBudgetOrQuotas = errors.New("a tenant has either one budget across models, for every model with prices, or a budget per model, not both")
+
 // tokensOnly answers 409 and returns false unless the gateways take tokens
 // only. It asks what the gateways take now, not what a new key would change:
 // a model's standard or another tenant's budget does not stand in the way.
@@ -54,6 +59,15 @@ func (s *Server) setTenantBudget(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !s.tokensOnly(w, r) {
+			return
+		}
+		names, err := s.st.PricedQuotaModels(r.Context(), r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if len(names) > 0 {
+			writeError(w, http.StatusConflict, errBudgetOrQuotas.Error()+": remove its quotas on "+strings.Join(names, ", ")+" first.")
 			return
 		}
 		budget = &store.TenantBudget{Credits: *b.Credits, Window: b.Window}

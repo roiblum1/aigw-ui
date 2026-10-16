@@ -112,12 +112,17 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	budgets, err := s.st.AnyTenantBudget(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
 	snap := market.Current()
 	models := make([]modelOut, len(out))
 	for i := range out {
 		out[i].Warnings = s.modelWarnings(out[i], fleet, peers, len(bestEffort[out[i].ID]))
 		models[i] = withMarket(out[i], snap)
-		models[i].Rules, models[i].RulesPerTenant, models[i].StandardHeld = ruleCounts(out[i], mode, enabled)
+		models[i].Rules, models[i].RulesPerTenant, models[i].StandardHeld = ruleCounts(out[i], mode, enabled, budgets)
 	}
 	writeJSON(w, http.StatusOK, models)
 }
@@ -187,8 +192,9 @@ func (s *Server) deleteModel(w http.ResponseWriter, r *http.Request) {
 // would have with a rule for each of the enabled tenants in place of its
 // standard and its amounts, and why its standard is not rendered, if it is
 // not. Once the gateways take tokens only, the tenants' own quotas take a
-// rule per amount instead of one each.
-func ruleCounts(m store.Model, mode string, enabled int) (now, perTenant int, held string) {
+// rule per amount instead of one each, and while a tenant has a budget
+// across models (budgets), a model it is charged on has one more rule.
+func ruleCounts(m store.Model, mode string, enabled int, budgets bool) (now, perTenant int, held string) {
 	rm := render.Model{}
 	for i := 0; i < m.QuotaRules; i++ {
 		rm.Quotas = append(rm.Quotas, render.TenantQuota{TenantSlug: "t", Slot: i, Limit: 1, Window: "1d"})
@@ -203,6 +209,11 @@ func ruleCounts(m store.Model, mode string, enabled int) (now, perTenant int, he
 	now, perTenant = render.RuleCount(rm, enabled)
 	if mode == render.IdentityTokens {
 		rm.ByAmount = true
+		// The model's prices charge the budgets unless they are in a dry run.
+		rm.BudgetsHold, rm.Priced, rm.DryRun = budgets, m.Prices != nil, m.PriceDryRun
+		if rm.Priced {
+			rm.CostExpression = "credits"
+		}
 		for i := 0; i < m.QuotaAmounts; i++ {
 			rm.Amounts = append(rm.Amounts, render.QuotaAmount{Slot: i, Limit: 1, Window: "1d"})
 		}

@@ -83,8 +83,19 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	s.Models[0].Priced, s.Models[0].CostExpression = true, "input_tokens * 15u"
 	s.Budgets = []render.TenantBudget{{TenantSlug: "team-b", Limit: 300_000, Window: "1d"}, {TenantSlug: "team-a", Limit: 100_000, Window: "1h"}}
 	s.Restricted = []render.TenantModels{{TenantSlug: "team-a", Models: []string{"GLM5.3"}}}
+	s.Models[0].BudgetsHold = true
 	if _, err := c.Sync(ctx, ns, render.Objects(s), nil); err != nil {
 		t.Fatalf("budgets: the API server refused a rendered object: %v", err)
+	}
+	// The model's QuotaPolicy lets a tenant with a budget through: its last
+	// rule, as the CRD takes it.
+	if q, err = c.dyn.Resource(qp).Namespace(ns).Get(ctx, "glm-5-3", metav1.GetOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	quotas, _, _ = unstructured.NestedSlice(q.Object, "spec", "perModelQuotas")
+	rules = quotas[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
+	if last := fmt.Sprint(rules[len(rules)-1]); last != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-budget type:RegularExpression value:.+] map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1m limit:4294967295]]" {
+		t.Fatalf("the rule for budgets: %v", rules)
 	}
 	btp, _ := gvrFor("BackendTrafficPolicy")
 	bp, err := c.dyn.Resource(btp).Namespace(ns).Get(ctx, render.BudgetPolicyName, metav1.GetOptions{})
@@ -123,6 +134,7 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	}
 	// Without budgets the policy goes.
 	s.Budgets = nil
+	s.Models[0].BudgetsHold = false
 	if _, err := c.Sync(ctx, ns, render.Objects(s), nil); err != nil {
 		t.Fatal(err)
 	}

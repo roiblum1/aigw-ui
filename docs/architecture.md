@@ -199,6 +199,24 @@ what it last applied.
    listener, priced or not. The request that spends it is answered in full,
    so a tenant can end one request over its amount, more with requests in
    parallel.
+6. On a model with prices the budget is the tenant's only limit (0.25.0): a
+   tenant has a budget across models or quotas of its own on those models,
+   never both, and the hub refuses either while the other is there (HTTP
+   409). The model's `QuotaPolicy` ends with one more rule, which matches
+   `x-aigw-budget` (`RegularExpression` `.+`) and `x-aigw-tenant`
+   (`Distinct`) and holds 4,294,967,295 a minute: in `Shared` mode a request
+   passes while any bucket it matches has room, so a token with a budget is
+   not held by the model's standard, its pool or a quota it had from before.
+   The rule is last, so the rules before it keep their positions and their
+   counters; the pool's counter is named after the number of rules, so its
+   count starts again when the rule comes or goes. It is rendered while an
+   enabled tenant has a budget, on a model whose prices charge the budgets
+   (not in a dry run), and such a model then gets its `QuotaPolicy` even
+   without a quota or a standard, so that its pool holds the tenants with
+   neither. The tenant's counters there only count (`Counter.Budget`): the
+   Usage page shows what it used inside its budget, and the best-effort
+   mover never moves it. It is one more key in the same call to the quota's
+   rate limit service, not another round trip.
 
 It needs tokens only, as a standard does: the rule reads the tenant header.
 And it needs global rate limiting enabled in the Envoy Gateway configuration

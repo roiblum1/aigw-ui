@@ -17,6 +17,9 @@ type bucket struct {
 	limit                int64
 	window               string
 	shadow               bool
+	// budget is set when the tenant's budget across models holds it on the
+	// model, not the limit (render.Counter.Budget).
+	budget bool
 	// unit is what limit and the counters are in. dryRun is set for a model
 	// whose prices are being tried out: nobody is refused there.
 	unit   string
@@ -119,7 +122,7 @@ func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) (
 			if b == nil {
 				b = &bucket{
 					tenantID: id, tenantSlug: ct.TenantSlug, modelID: model.ID, modelName: model.Name,
-					limit: ct.Limit, window: ct.Window, shadow: ct.Shadow,
+					limit: ct.Limit, window: ct.Window, shadow: ct.Shadow, budget: ct.Budget,
 					unit: model.Unit, dryRun: model.PriceDryRun,
 				}
 				if model.SpentMode == store.SpentBestEffort {

@@ -50,6 +50,9 @@ type Quota struct {
 	Limit      int64  `json:"limit"`
 	Window     string `json:"window"`
 	Shadow     bool   `json:"shadow"`
+	// Budget is set when the tenant's budget across models holds it on the
+	// model: the limit then only counts (Shadow is set too).
+	Budget bool `json:"budget,omitempty"`
 	// Unit is what Limit, Used and OverageUsed are counted in: "tokens", or
 	// "credits" for a model with prices. A credit is 0.00001 dollars.
 	Unit string `json:"unit"`
@@ -194,7 +197,7 @@ func (s *Service) ReportAt(ctx context.Context, tenantID string, now time.Time) 
 		}
 		q := Quota{
 			TenantID: b.tenantID, TenantSlug: b.tenantSlug, ModelID: b.modelID, ModelName: b.modelName,
-			Limit: b.limit, Window: b.window, Shadow: b.shadow, Unit: b.unit, DryRun: b.dryRun,
+			Limit: b.limit, Window: b.window, Shadow: b.shadow, Budget: b.budget, Unit: b.unit, DryRun: b.dryRun,
 			Used: used, OverageUsed: overage, ResetsAt: resets, Counters: counters,
 			BestEffortLimit: b.bestEffortLimit,
 		}

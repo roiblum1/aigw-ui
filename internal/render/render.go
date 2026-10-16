@@ -127,6 +127,12 @@ type Model struct {
 	// while the gateway takes tokens only, as Standard is.
 	ByAmount bool
 	Amounts  []QuotaAmount
+	// BudgetsHold is set while some tenant has a budget across models. On a
+	// model the budget is charged on, the budget alone then holds such a
+	// tenant: the model's QuotaPolicy has one more rule that lets its
+	// requests through (budgetPassRule). It is set only while the gateway
+	// takes tokens only, as Standard is.
+	BudgetsHold bool
 }
 
 // Budget is a limit for each window.
@@ -225,7 +231,11 @@ func Objects(s State) []*unstructured.Unstructured {
 		case m.Existing == nil:
 			out = append(out, backend(s, m), aiServiceBackend(s, m), route(s, m))
 		}
-		if len(m.Quotas) > 0 || m.standard() != nil {
+		// While some tenant has a budget across models, a model the budgets
+		// are charged on gets its policy without any quota too: its pool
+		// then holds the tenants with neither a budget nor a quota of their
+		// own, as it does on a model with quotas.
+		if len(m.Quotas) > 0 || m.standard() != nil || m.passesBudgets() {
 			out = append(out, quotaPolicies(s, m)...)
 		}
 		if t, ok := m.overageTarget(); ok {

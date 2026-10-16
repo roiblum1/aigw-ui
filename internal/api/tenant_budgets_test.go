@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,5 +115,82 @@ func TestBudgetsNeedTokensOnly(t *testing.T) {
 	}
 	if code := allowed(); code != http.StatusConflict {
 		t.Fatalf("with an API key: %d", code)
+	}
+}
+
+// A tenant has one budget across models or quotas of its own on models with
+// prices, never both: each is refused while the other is there (HTTP 409),
+// naming what stands in the way. Prices that wait for their day count, and
+// a quota on a model without prices stays possible beside a budget.
+func TestBudgetOrQuotas(t *testing.T) {
+	st, ctx := openStore(t)
+	set := store.TokenSettings{Issuer: "aigw-ui", Audience: "aigw-fleet", Lifetime: 24 * time.Hour}
+	st.SetTokens(set)
+	s := &Server{st: st}
+	a, err := st.CreateTenant(ctx, "team-a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.CreateToken(ctx, a.ID, "t", set, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	opus, err := st.CreateModel(ctx, store.ModelInput{Name: "opus", DefaultLimit: 1, DefaultWindow: "1d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetPendingPrice(ctx, opus, store.Price{Input: 1_500_000, Output: 7_500_000, EffectiveAt: time.Now().Add(24 * time.Hour)}, false); err != nil {
+		t.Fatal(err)
+	}
+	free, err := st.CreateModel(ctx, store.ModelInput{Name: "free", DefaultLimit: 1, DefaultWindow: "1d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(h http.HandlerFunc, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPut, "/api/v1/tenants/"+a.ID, strings.NewReader(body))
+		r.SetPathValue("id", a.ID)
+		w := httptest.NewRecorder()
+		h(w, r)
+		return w
+	}
+
+	for _, m := range []string{opus, free} {
+		if err := st.UpsertQuota(ctx, a.ID, m, 100, "1d", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if names, err := st.PricedQuotaModels(ctx, a.ID); err != nil || strings.Join(names, ",") != "opus" {
+		t.Fatalf("quotas on models with prices: %v %v", names, err)
+	}
+	if w := put(s.setTenantBudget, `{"credits":100,"window":"1d"}`); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "remove its quotas on opus first") {
+		t.Fatalf("a budget beside a quota on opus: %d %s", w.Code, w.Body)
+	}
+
+	// Without the quota on opus the budget can be set; the quota on the
+	// model without prices stays beside it.
+	quotas, err := st.ListQuotas(ctx, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range quotas {
+		if q.ModelID == opus {
+			if _, err := st.DeleteQuota(ctx, q.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if names, err := st.PricedQuotaModels(ctx, a.ID); err != nil || len(names) != 0 {
+		t.Fatalf("after the removal: %v %v", names, err)
+	}
+	if _, err := st.SetTenantBudget(ctx, a.ID, &store.TenantBudget{Credits: 100, Window: "1d"}); err != nil {
+		t.Fatal(err)
+	}
+	if w := put(s.upsertQuota, `{"model_id":"`+opus+`","token_limit":5,"window":"1d"}`); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "Remove the budget first") {
+		t.Fatalf("a quota on opus beside the budget: %d %s", w.Code, w.Body)
+	}
+	if covered, err := st.BudgetCovers(ctx, a.ID, free); err != nil || covered {
+		t.Fatalf("the model without prices: %v %v", covered, err)
+	}
+	if _, err := st.BudgetCovers(ctx, "00000000-0000-0000-0000-000000000000", opus); err != store.ErrNotFound {
+		t.Fatalf("an unknown tenant: %v", err)
 	}
 }

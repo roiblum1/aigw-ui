@@ -48,7 +48,8 @@ func quotaRevision(m Model) string {
 		DryRun   bool          `json:",omitempty"`
 		Standard *Budget       `json:",omitempty"`
 		Amounts  []QuotaAmount `json:",omitempty"`
-	}{rules, limit, window, m.CostExpression, m.DryRun, m.standard(), amounts})
+		Budgets  bool          `json:",omitempty"`
+	}{rules, limit, window, m.CostExpression, m.DryRun, m.standard(), amounts, m.passesBudgets()})
 	if err != nil {
 		return ""
 	}
@@ -139,6 +140,11 @@ func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *uns
 		}
 		rules = append(rules, rule)
 	}
+	if m.passesBudgets() {
+		// Last, so the positions before it and the counters named after
+		// them stay as they are.
+		rules = append(rules, budgetPassRule(overage))
+	}
 	defaultLimit, defaultWindow := m.defaultBucket(overage)
 
 	// One target per backend and one quota entry per distinct model name.
@@ -215,13 +221,16 @@ func tenantMatch(m Model, slug string) map[string]any {
 
 // ruleCount is how many bucket rules the model's QuotaPolicy has before its
 // default bucket: the standard's, then one per position of the tenant
-// quotas, or of the amounts.
+// quotas, or of the amounts, then the one for budgets across models.
 func (m Model) ruleCount() int {
 	n := len(tenantRules(m))
 	if m.ByAmount {
 		n = len(amountRules(m))
 	}
 	if m.standard() != nil {
+		n++
+	}
+	if m.passesBudgets() {
 		n++
 	}
 	return n

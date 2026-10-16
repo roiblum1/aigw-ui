@@ -234,7 +234,8 @@ A tenant is a team.
 3. **Add quota**. Pick a model, a number of tokens and a window (minute, hour or day).
    Tick **Dry run** to count usage against the quota without rejecting
    requests, and press **Enforce** on the quota when you are ready. The
-   list only offers models the tenant has no quota on yet.
+   list only offers models the tenant has no quota on yet, and, for a
+   tenant with a budget across models, models without prices only.
 
 Clients send the token where they send an API key: `Authorization: Bearer
 eyJ...`, or the header `x-api-key`, which is what Anthropic's clients do by
@@ -250,6 +251,29 @@ clients and `/anthropic/v1/messages` for Anthropic-style ones.
 | Delete a tenant | Removes the tenant, its keys and its quotas |
 
 A quota is one budget for the tenant on that model across all sites.
+
+**One budget across models, or a budget per model.** On the models with
+prices a tenant is held one way or the other, never both:
+
+- **A budget across models**: one amount in dollars, any amount ($10, $20,
+  $26), for every model with prices together. The tenant chooses what to
+  spend it on, and the models' standards and pools do not hold it there.
+- **A budget per model**: a quota of its own on each model it should have,
+  each with its own amount. $5 on Opus and $5 on Sonnet are two budgets of
+  $5, not one of $10. On a model it has no quota on, it is held by the
+  model's standard, or its pool.
+
+While a tenant has one, the hub refuses the other (HTTP 409) and says what
+to remove first. Models without prices are not in a budget across models:
+a tenant with one can still have quotas of its own on them, in tokens. A
+tenant that had both before 0.25.0 is marked on its page: its budget holds
+it, and its quotas on models with prices hold nothing until they are
+removed.
+
+A model needs no standard when every tenant gets dollars of its own: a
+tenant with neither a budget across models nor a quota on the model is
+then held by the model's pool, and a pool of the smallest amount closes the
+model to it.
 
 **A standard budget.** **Standard budget** in a model's row on the Models
 page gives every tenant the same budget on the model, each with a count of
@@ -283,15 +307,20 @@ travels in the tenant's tokens, as a budget across models does:
   is replaced; the Keys card marks it **older limits**.
 - A changed amount starts the tenant's count on that model again.
 - **A model with prices and no standard** is marked on the Models page:
-  its tenants without a quota of their own have no budget of their own
-  there and share the model's pool. A pool of the smallest amount (1)
-  closes the model to them, which is what a new model has: a quota or a
-  standard is how a tenant gets in.
+  its tenants without a quota of their own or a budget across models have
+  no budget of their own there and share the model's pool. A pool of the
+  smallest amount (1) closes the model to them, which is what a new model
+  has: a quota, a standard or a budget across models is how a tenant gets
+  in. While any tenant has a budget across models, a model with prices gets
+  its `QuotaPolicy` even with no quota and no standard, so that its pool
+  holds the tenants with neither.
 
 **A budget across models.** **Budget across models** on a tenant's page
 gives it one amount in dollars per minute, hour or day for every model with
-prices, counted together: a cheaper model spends it more slowly. Its quotas
-per model hold alongside it. The gateway refuses the tenant (HTTP 429) once
+prices, counted together: a cheaper model spends it more slowly. On those
+models it is the tenant's only limit: the tenant has no quota of its own
+there, and the model's standard and pool do not hold it. Each such model's
+`QuotaPolicy` has one more rule, which lets a token with a budget through. The gateway refuses the tenant (HTTP 429) once
 it is spent, on every model, until the next period. It is enforced by
 the gateways themselves: the amount travels in the tenant's tokens, one
 rule that every cluster gets holds each tenant to the amount in its token,

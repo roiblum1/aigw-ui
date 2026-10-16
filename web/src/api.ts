@@ -366,6 +366,8 @@ export interface UsageQuota {
   limit: number;
   window: Window;
   shadow: boolean;
+  /** The tenant's budget across models holds it on the model: the limit only counts (shadow is set too). */
+  budget?: boolean;
   /** Highest counter; each counter is held to the limit on its own. */
   used: number;
   /** Tokens used as best-effort, after the budget was spent. */

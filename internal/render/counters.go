@@ -29,6 +29,10 @@ type Counter struct {
 	// Standard marks a tenant's counter under the model's standard, for a
 	// tenant without a quota of its own on the model.
 	Standard bool
+	// Budget marks a counter of a tenant with a budget across models, on a
+	// model the budget is charged on: the budget holds the tenant there, so
+	// the counter only counts (Shadow).
+	Budget bool
 	// stem is the Redis key without the key prefix and the window start;
 	// prefix is the part of it every counter of the model's QuotaPolicy on
 	// the backend shares, and std the model's standard, if any.
@@ -51,7 +55,14 @@ func (c Counter) StandardFor(slug string) (Counter, bool) {
 // Counters lists the counter of every tenant quota the state renders.
 func Counters(s State) []Counter {
 	var out []Counter
+	budgeted := map[string]bool{}
+	for _, b := range s.budgets() {
+		budgeted[b.TenantSlug] = true
+	}
 	for _, m := range s.Models {
+		// held reports whether the tenant's budget across models holds it on
+		// the model instead of the model's rules.
+		held := func(slug string) bool { return m.passesBudgets() && budgeted[slug] }
 		rules := tenantRules(m)
 		seen := map[string]bool{}
 		targets := m.targets()
@@ -99,8 +110,8 @@ func Counters(s State) []Counter {
 					}
 					out = append(out, Counter{
 						ModelSlug: m.Slug, TenantSlug: slug, Backend: backend,
-						Limit: st.Limit, Window: st.Window, Shadow: overage || m.DryRun, Overage: overage, Standard: true,
-						stem: prefix + "rule-0-" + TenantHeader + "-match-0_" + slug + "_", prefix: prefix, std: st,
+						Limit: st.Limit, Window: st.Window, Shadow: overage || m.DryRun || held(slug), Overage: overage, Standard: true,
+						Budget: held(slug), stem: prefix + "rule-0-" + TenantHeader + "-match-0_" + slug + "_", prefix: prefix, std: st,
 					})
 				}
 			}
@@ -113,8 +124,8 @@ func Counters(s State) []Counter {
 					}
 					out = append(out, Counter{
 						ModelSlug: m.Slug, TenantSlug: q.TenantSlug, Backend: backend,
-						Limit: q.Limit, Window: q.Window, Shadow: q.Shadow || overage || m.DryRun, Overage: overage,
-						stem: amountStem(prefix, first+slot, m, a, q.TenantSlug), prefix: prefix, std: st,
+						Limit: q.Limit, Window: q.Window, Shadow: q.Shadow || overage || m.DryRun || held(q.TenantSlug), Overage: overage,
+						Budget: held(q.TenantSlug), stem: amountStem(prefix, first+slot, m, a, q.TenantSlug), prefix: prefix, std: st,
 					})
 				}
 				continue
@@ -132,8 +143,8 @@ func Counters(s State) []Counter {
 				}
 				out = append(out, Counter{
 					ModelSlug: m.Slug, TenantSlug: q.TenantSlug, Backend: backend,
-					Limit: q.Limit, Window: q.Window, Shadow: q.Shadow || overage || m.DryRun, Overage: overage,
-					stem: prefix + rule + "_" + rule + "_", prefix: prefix, std: st,
+					Limit: q.Limit, Window: q.Window, Shadow: q.Shadow || overage || m.DryRun || held(q.TenantSlug), Overage: overage,
+					Budget: held(q.TenantSlug), stem: prefix + rule + "_" + rule + "_", prefix: prefix, std: st,
 				})
 			}
 		}

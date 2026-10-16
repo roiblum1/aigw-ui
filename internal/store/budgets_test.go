@@ -58,8 +58,8 @@ func TestTenantBudgetAndModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Budgets) != 0 || len(st.Restricted) != 0 {
-		t.Fatalf("rendered while on API keys: %+v %+v", st.Budgets, st.Restricted)
+	if len(st.Budgets) != 0 || len(st.Restricted) != 0 || st.Models[0].BudgetsHold {
+		t.Fatalf("rendered while on API keys: %+v %+v %v", st.Budgets, st.Restricted, st.Models[0].BudgetsHold)
 	}
 	// With tokens only, both are rendered; the list names the model.
 	if _, _, err := s.CreateToken(ctx, a.ID, "t", tokenSet, time.Now()); err != nil {
@@ -70,6 +70,10 @@ func TestTenantBudgetAndModels(t *testing.T) {
 	}
 	if len(st.Budgets) != 1 || st.Budgets[0] != (render.TenantBudget{TenantSlug: "team-a", Limit: 300_000, Window: "1d"}) {
 		t.Fatalf("budgets %+v", st.Budgets)
+	}
+	// The budget holds team-a on the models in place of their own rules.
+	if !st.Models[0].BudgetsHold {
+		t.Fatal("a budget, yet the models do not let it hold")
 	}
 	if len(st.Restricted) != 1 || st.Restricted[0].TenantSlug != "team-b" || len(st.Restricted[0].Models) != 1 || st.Restricted[0].Models[0] != "glm" {
 		t.Fatalf("restricted %+v", st.Restricted)
@@ -87,8 +91,8 @@ func TestTenantBudgetAndModels(t *testing.T) {
 	if st, err = s.RenderStateWithoutKeys(ctx, site.ID); err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Budgets) != 0 || len(st.Restricted) != 1 || len(st.Restricted[0].Models) != 0 {
-		t.Fatalf("after disabling a and emptying b: %+v %+v", st.Budgets, st.Restricted)
+	if len(st.Budgets) != 0 || len(st.Restricted) != 1 || len(st.Restricted[0].Models) != 0 || st.Models[0].BudgetsHold {
+		t.Fatalf("after disabling a and emptying b: %+v %+v %v", st.Budgets, st.Restricted, st.Models[0].BudgetsHold)
 	}
 	// Back to every model, and the budget removed.
 	if b, err = s.SetTenantModels(ctx, b.ID, nil); err != nil || b.Models != nil {
