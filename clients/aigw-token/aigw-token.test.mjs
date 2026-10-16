@@ -85,6 +85,25 @@ test("the hub cannot be reached and no token is kept", async () => {
   assert.match(r.stderr, /HTTP 000/);
 });
 
+test("reads the key from stdin, with or without a newline at the end", async () => {
+  const h = await hub();
+  try {
+    for (const input of [key, key + "\n"]) {
+      const env = { AIGW_CONFIG_DIR: mkdtempSync(join(tmpdir(), "aigw-")) };
+      const r = await new Promise((resolve) => {
+        const child = execFile(helper, ["login", h.url], { env: { ...process.env, ...env } }, (err, stdout, stderr) =>
+          resolve({ code: err ? err.code : 0, stdout, stderr }),
+        );
+        child.stdin.end(input);
+      });
+      assert.equal(r.code, 0, r.stderr);
+      assert.equal(readFileSync(join(env.AIGW_CONFIG_DIR, "personal-key"), "utf8"), key + "\n");
+    }
+  } finally {
+    h.close();
+  }
+});
+
 test("refuses what is not a personal key", async () => {
   const r = await run(["login", "http://127.0.0.1:9", "sk-abc"], { AIGW_CONFIG_DIR: mkdtempSync(join(tmpdir(), "aigw-")) });
   assert.notEqual(r.code, 0);

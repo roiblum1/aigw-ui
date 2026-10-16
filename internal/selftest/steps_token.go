@@ -180,7 +180,9 @@ func (t *test) tenantHeader() (string, string) {
 		if err != nil {
 			return Failed, "Redis: " + err.Error()
 		}
-		if now.Used > before.Used {
+		// On a model in best-effort mode the step before moved the tenant
+		// to the best-effort route, which counts apart.
+		if now.Used+now.OverageUsed > before.Used+before.OverageUsed {
 			theirs, _, err := t.r.usage.StandardUsed(t.ctx, t.model.Slug, other, time.Now())
 			if err != nil {
 				return Failed, "Redis: " + err.Error()

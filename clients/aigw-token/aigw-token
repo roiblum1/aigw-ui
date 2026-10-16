@@ -31,7 +31,8 @@ login)
 		key=$3
 	else
 		printf 'Personal key: ' >&2
-		IFS= read -r key
+		# A key piped in without a newline at the end is read all the same.
+		IFS= read -r key || [ -n "$key" ] || fail "no personal key given"
 	fi
 	case $key in aigw-pk-*) ;; *) fail "a personal key starts with aigw-pk-" ;; esac
 	mkdir -p "$dir"
