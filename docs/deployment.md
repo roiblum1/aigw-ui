@@ -137,7 +137,7 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --set auth.existi
 |---|---|---|
 | Server pod on the hub | Kubernetes API of every LLM cluster | usually 6443 |
 | Browsers and the self-service portal | The Route | 443 |
-| Rate limit service on every LLM cluster | Redis on the hub (deployed separately) | your Redis port |
+| Rate limit service on every LLM cluster | The Redis the gateways share (deployed separately; in production not on the hub) | your Redis port |
 
 ## Before the first entry route on a cluster
 

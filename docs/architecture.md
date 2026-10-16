@@ -699,7 +699,7 @@ removed.
   `AIServiceBackend` as `aigateway.envoyproxy.io/v1beta1`, and `QuotaPolicy`
   as `v1alpha1`, the only version it has. Up to 0.11.0 it wrote all three as
   `v1alpha1`, which both gateway versions still serve but call deprecated.
-- For quotas: the dedicated quota rate limit service, pointed at the hub Redis. The AI gateway Helm chart does not deploy it.
+- For quotas: the dedicated quota rate limit service, pointed at the Redis the gateways share (not on the hub in production). The AI gateway Helm chart does not deploy it.
 - For budgets across models: global rate limiting in the Envoy Gateway
   configuration (`rateLimit.backend` with the shared Redis and `timeout` of a
   few seconds); Envoy Gateway then runs its own rate limit service next to
