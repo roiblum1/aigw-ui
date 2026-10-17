@@ -196,13 +196,49 @@ spec:
             - type: concurrency-detector
               parameters:
                 concurrencyMode: requests
-                maxConcurrency: 64   # per pod: what vLLM runs at once (--max-num-seqs)
+                maxConcurrency: 2    # per endpoint, not per pod: see below
             # plus the plugins the model uses today
           flowControl:
             saturationDetector:
               pluginRef: concurrency-detector
+            defaultRequestTTL: 300s  # left out, 60s: see below
+            defaultNegativePriorityBand:
+              maxRequests: 4         # best-effort requests that may wait; more are refused at once
           # plus the scheduling profile the model uses today
 ```
+
+**How many at once: `maxConcurrency`.** It is counted per endpoint, and an
+endpoint is each port the model's `InferencePool` lists: a pod with eight
+data-parallel ranks is eight endpoints. The picker holds requests back as
+the pool fills toward endpoints × `maxConcurrency` in flight, and only
+requests it holds are ordered by class and taken in the tenants' turns.
+Left out, it is 100 per endpoint (llm-d router v0.10.0): a pool of 16 rank
+endpoints would let about 1,600 requests through first, and in practice
+nothing would be held back.
+
+- Not more than each rank's `--max-num-seqs`: above it vLLM queues the
+  requests itself, first come first served, where neither the classes nor
+  the tenants' turns reach.
+- Lower, to keep the answers fast: the hub's capacity measurement of the
+  model finds the most requests in flight one instance takes within the
+  latency targets ([capacity](capacity.md#how-a-measurement-works)). Divide
+  it by the instance's endpoints. If 32 in flight is where the measurement
+  stops meeting its targets on a pod of 16 rank endpoints, that is 2.
+
+**How long a request may wait: `defaultRequestTTL`.** Left out, it is 60 s,
+and a request that waited longer is refused with an error the client may
+retry. On the lab one request already waited 45 to 48 s (below), and a
+coding agent's prompt of 100,000 tokens takes a while to be served once its
+turn comes. Set it above the longest wait you accept, or to `0s` for none:
+the client's own timeout then ends the wait, and the bands' `maxRequests`
+bound the queue.
+
+**How many best-effort requests may wait: `defaultNegativePriorityBand`.**
+A template for every priority below 0, which is where the hub's class
+`best-effort` is (`-1` by default). A small `maxRequests` refuses
+best-effort requests at once when the pool is full instead of queuing
+them; `0` counts as unset, which is 5,000. A band of `priorityBands` with
+`priority: -1` does the same for that one priority.
 
 **Before flow control: one ext_proc filter per pool.** Envoy AI Gateway up
 to 1.2.0 adds the pool's ext_proc filter once per route match that sends to
@@ -258,8 +294,18 @@ chart (beside the flow control settings above):
 A band of priority 0 of its own that names no fairness policy runs the
 default again. A request with a plain API key carries no fairness ID; all
 such requests are one flow. The sync warns about a pool of a best-effort
-model whose band of priority 0 does not take tenants in turn; a pool
-without best-effort models is not checked.
+model whose band of priority 0 does not take tenants in turn, through
+either `defaultPriorityBand` or a band of priority 0; a pool without
+best-effort models is not checked. Turns only matter once requests wait in
+the picker, so they need a `maxConcurrency` the pool reaches (above).
+
+A client cannot choose its turn or its class on the routes the hub renders:
+the token check writes the fairness ID from the token and drops one a
+client sent, and the hub's backends set `x-llm-d-inference-objective`,
+replacing a client's. On a model's own route, which the hub does not
+render, a client's `x-llm-d-inference-objective` reaches the scheduler as
+it is: a site that defines a class above `standard` should not offer such a
+route on the listener clients use.
 
 ## Side by side
 
