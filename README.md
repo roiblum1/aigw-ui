@@ -100,6 +100,7 @@ The same documents are in the website, on the **Docs** page.
 | [docs/api.md](docs/api.md) | REST API reference with examples |
 | [docs/operations.md](docs/operations.md) | Backup, restore, troubleshooting |
 | [docs/release-notes/](docs/release-notes/README.md) | What changed in each version |
+| [docs/upgrades/0.12.3-to-0.32.1.md](docs/upgrades/0.12.3-to-0.32.1.md) | Upgrading a hub from 0.12.3 straight to 0.32.1, step by step, written for an agent |
 
 ## Repository layout
 
