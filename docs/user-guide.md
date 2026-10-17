@@ -562,7 +562,12 @@ keys. The sign-in page of the hub links to it.
 | Your models | The models the tenant may call, when it is held to some; the budgets and prices below are of those only |
 | Your budgets | For each model the tenant has a budget on: what is used and left in the running period, when the next period starts, and whether its requests are served as best-effort or refused |
 | Usage over time | Its usage per day for 30 days, or per hour for 2 days, by model |
+| Your workload | Its requests and the input, cached and output tokens of their answers, as the gateways counted them: totals, the share of the prompt read from the model's cache, prompt and output tokens per request, what the cache saved at the cached price, tokens, cache share and requests per day or hour, and the same per model. A model whose answers report no token counts, or that served nothing from its cache, is named with what to do |
 | Prices | What a million input, cached input and output tokens cost on its priced models |
+
+Prompts and answers are never on it: the gateways count numbers, and the
+hub keeps nothing else. The workload needs `redis.tokenCounts` (on by
+default) and tenants on tokens; see [deployment](deployment.md#token-counts-on-every-route).
 
 It shows that tenant and no other. Nothing can be changed there. The key
 stays in the browser tab until it is closed. Turn the page off with

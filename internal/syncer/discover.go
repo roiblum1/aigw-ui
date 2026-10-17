@@ -88,7 +88,7 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 	exposed := map[string]bool{}
 	for _, f := range found {
 		exposed[f.Name] = true
-		m := store.DiscoveredModel{Name: f.Name}
+		m := store.DiscoveredModel{Name: f.Name, OnlyIfKnown: f.OnlyIfKnown}
 		for _, b := range f.Backends {
 			ns := b.Namespace
 			if ns == c.Namespace {
@@ -224,13 +224,24 @@ func (s *Syncer) discoverViaGateway(ctx context.Context, c store.Cluster, client
 	if err != nil {
 		return nil, fmt.Errorf("list models from the gateway: %w", err)
 	}
+	return gatewayModels(names, routes), nil
+}
+
+// gatewayModels are the models the gateway lists, with the backends of the
+// cluster's own routes that serve them. A name no route of the cluster's own
+// serves is one of the hub's routes, or one the gateway still lists after
+// the hub removed its route: a model deleted by hand came back 13 s later
+// that way (the lab, 2026-10-17). It updates a model that exists and adds
+// none.
+func gatewayModels(names []string, routes []kube.DiscoveredModel) []kube.DiscoveredModel {
 	byName := make(map[string]kube.DiscoveredModel, len(routes))
 	for _, r := range routes {
 		byName[r.Name] = r
 	}
 	found := make([]kube.DiscoveredModel, 0, len(names))
 	for _, name := range names {
-		found = append(found, kube.DiscoveredModel{Name: name, Backends: byName[name].Backends})
+		r, own := byName[name]
+		found = append(found, kube.DiscoveredModel{Name: name, Backends: r.Backends, OnlyIfKnown: !own})
 	}
-	return found, nil
+	return found
 }

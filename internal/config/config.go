@@ -38,6 +38,9 @@ type Config struct {
 	RedisKeyPrefix   string
 	// RedisAllowReset lets an admin delete a quota's counter to reset its usage.
 	RedisAllowReset bool
+	// RedisTokenCounts has the gateways count each tenant's requests and
+	// tokens by model, for the tenant's own page. It needs RedisURL.
+	RedisTokenCounts bool
 
 	// OverageEvery is how often the counters are read to find the tenants
 	// whose budget is nearly spent, for the models in best-effort mode.
@@ -95,6 +98,7 @@ func Load() (*Config, error) {
 		RedisTLSInsecure: os.Getenv("REDIS_TLS_INSECURE") == "true",
 		RedisKeyPrefix:   os.Getenv("REDIS_KEY_PREFIX"),
 		RedisAllowReset:  os.Getenv("REDIS_ALLOW_RESET") == "true",
+		RedisTokenCounts: os.Getenv("REDIS_TOKEN_COUNTS") == "true",
 	}
 	c.Fleet = render.FleetConfig{
 		PeerSNI:      os.Getenv("FLEET_PEER_SNI"),

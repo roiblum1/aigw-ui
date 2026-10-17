@@ -27,7 +27,8 @@ func (s *Store) renderState(ctx context.Context, clusterID string, withKeys bool
 	if err != nil {
 		return render.State{}, err
 	}
-	st := render.State{Namespace: c.Namespace, GatewayName: c.GatewayName, ClientListener: c.ClientListener, AuthEnabled: c.AuthEnabled, Fleet: s.fleet}
+	st := render.State{Namespace: c.Namespace, GatewayName: c.GatewayName, ClientListener: c.ClientListener, AuthEnabled: c.AuthEnabled, Fleet: s.fleet,
+		TokenCounts: s.tokenCounts}
 	if st.Identity, err = s.Identity(ctx); err != nil {
 		return st, err
 	}

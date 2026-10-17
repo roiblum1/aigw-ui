@@ -77,9 +77,9 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 
 	// Before any policy is written: the gateway's controller looks at a
 	// route when its policy changes, and the mark has to be there by then.
-	priced := pricedPolicies(desired)
+	priced, tokens := pricedPolicies(desired), countsTokens(desired)
 	for _, obj := range desired {
-		if err := c.markRoutes(ctx, namespace, obj, priced, &res); err != nil {
+		if err := c.markRoutes(ctx, namespace, obj, priced, tokens, &res); err != nil {
 			return res, err
 		}
 	}
@@ -123,13 +123,15 @@ func objectKey(kind, namespace, name string) string { return kind + "/" + namesp
 // already. On a route somebody else renders, the annotation is the one thing
 // this tool writes, and, for a priced model, the cost of a request in
 // credits among the route's request costs, which the tenants' budgets
-// across models are charged with. Any other cost the route has stays.
+// across models are charged with, and while the gateway counts tokens, the
+// keys it writes an answer's token counts under. Any other cost the route
+// has stays.
 //
 // The cost is worked out from every priced model whose backends the route
 // sends to, not from this policy alone: a route that serves two priced
 // models charges each its own prices, and one model's sync does not
 // overwrite the other's.
-func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstructured.Unstructured, priced []pricedPolicy, res *SyncResult) error {
+func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstructured.Unstructured, priced []pricedPolicy, tokens bool, res *SyncResult) error {
 	revision := policy.GetAnnotations()[render.QuotaRevisionAnnotation]
 	if policy.GetKind() != "QuotaPolicy" || revision == "" {
 		return nil
@@ -157,7 +159,7 @@ func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstr
 		if route.GetLabels()[render.ManagedLabel] == render.ManagedValue || !sendsTo(route, backends) {
 			continue
 		}
-		costs, costsChanged := withCredits(route, routeCredits(route, namespace, priced))
+		costs, costsChanged := withCosts(route, routeCredits(route, namespace, priced), tokens)
 		if route.GetAnnotations()[render.QuotaRevisionAnnotation] == revision && !costsChanged {
 			continue
 		}
@@ -227,6 +229,52 @@ func routeCredits(route unstructured.Unstructured, namespace string, priced []pr
 		return ""
 	}
 	return render.ModelCredits(byModel)
+}
+
+// countsTokens reports whether the sync's budget policy counts tokens
+// (render.TokenCountsAnnotation).
+func countsTokens(desired []*unstructured.Unstructured) bool {
+	for _, obj := range desired {
+		if obj.GetKind() == "BackendTrafficPolicy" && obj.GetName() == render.BudgetPolicyName {
+			return obj.GetAnnotations()[render.TokenCountsAnnotation] == "true"
+		}
+	}
+	return false
+}
+
+// withCosts returns the route's request costs with the cost in credits set
+// to the expression, or taken out when it is empty, and the token keys there
+// while tokens are counted and taken out otherwise, and whether that is a
+// change. Every other entry is kept as it is.
+func withCosts(route unstructured.Unstructured, credits string, tokens bool) ([]any, bool) {
+	costs, changed := withCredits(route, credits)
+	want := map[string]any{}
+	for _, c := range render.TokenCosts() {
+		want[c.(map[string]any)["metadataKey"].(string)] = c
+	}
+	var out []any
+	have := map[string]bool{}
+	for _, c := range costs {
+		cost, _ := c.(map[string]any)
+		key, _ := cost["metadataKey"].(string)
+		w, ours := want[key]
+		switch {
+		case !ours:
+			out = append(out, c)
+		case tokens && cost["type"] == w.(map[string]any)["type"] && cost["cel"] == nil:
+			out, have[key] = append(out, c), true
+		default:
+			changed = true
+		}
+	}
+	if tokens {
+		for _, c := range render.TokenCosts() {
+			if !have[c.(map[string]any)["metadataKey"].(string)] {
+				out, changed = append(out, c), true
+			}
+		}
+	}
+	return out, changed
 }
 
 // withCredits returns the route's request costs with the cost in credits

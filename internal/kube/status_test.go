@@ -292,15 +292,21 @@ func TestFlowControl(t *testing.T) {
 }
 
 // The sync warns about a pool of a best-effort class whose service runs
-// without flow control, and only about that pool.
+// without flow control, or with it but takes its regular tenants oldest
+// first, and only about that pool.
 func TestFlowControlWarning(t *testing.T) {
 	gvr, _ := gvrFor(render.ObjectiveKind)
-	service := func(name, pool string, gates ...any) *unstructured.Unstructured {
+	fair := map[string]any{"defaultPriorityBand": map[string]any{"fairnessPolicyRef": "round-robin-fairness-policy"}}
+	service := func(name, pool string, flow map[string]any, gates ...any) *unstructured.Unstructured {
+		inline := map[string]any{"featureGates": gates, "plugins": []any{map[string]any{"type": "round-robin-fairness-policy"}}}
+		if flow != nil {
+			inline["flowControl"] = flow
+		}
 		return &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": llmServiceGVRs[0].Group + "/" + llmServiceGVRs[0].Version, "kind": "LLMInferenceService",
 			"metadata": map[string]any{"name": name, "namespace": "llm-glm53"},
 			"spec": map[string]any{"router": map[string]any{"scheduler": map[string]any{
-				"config": map[string]any{"inline": map[string]any{"featureGates": gates}}}}},
+				"config": map[string]any{"inline": inline}}}},
 			"status": map[string]any{"router": map[string]any{"scheduler": map[string]any{"inferencePool": map[string]any{
 				"group": "inference.networking.k8s.io", "name": pool}}}},
 		}}
@@ -313,17 +319,57 @@ func TestFlowControlWarning(t *testing.T) {
 	}}
 	for name, tc := range map[string]struct {
 		svc  *unstructured.Unstructured
-		warn bool
+		warn string
 	}{
-		"without flow control":   {service("glm53-b200", "glm53-b200-inference-pool"), true},
-		"with flow control":      {service("glm53-b200", "glm53-b200-inference-pool", "flowControl"), false},
-		"another pool's service": {service("glm53-h200", "glm53-h200-inference-pool"), false},
+		"without flow control":            {service("glm53-b200", "glm53-b200-inference-pool", nil), "LLMInferenceService llm-glm53/glm53-b200 runs it without flow control"},
+		"with flow control, oldest first": {service("glm53-b200", "glm53-b200-inference-pool", nil, "flowControl"), "queues priority 0 under global-strict-fairness-policy"},
+		"with flow control, in turn":      {service("glm53-b200", "glm53-b200-inference-pool", fair, "flowControl"), ""},
+		"another pool's service":          {service("glm53-h200", "glm53-h200-inference-pool", nil), ""},
 	} {
 		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(gvr, "InferenceObjectiveList"), tc.svc)
 		var res SyncResult
 		(&Client{dyn: dyn}).readGatewayStatus(context.Background(), "gw", []*unstructured.Unstructured{class}, &res)
-		if got := len(res.Warnings) == 1 && strings.Contains(res.Warnings[0], "LLMInferenceService llm-glm53/glm53-b200 runs it without flow control"); got != tc.warn || len(res.Warnings) > 1 {
+		ok := len(res.Warnings) == 0
+		if tc.warn != "" {
+			ok = len(res.Warnings) == 1 && strings.Contains(res.Warnings[0], tc.warn)
+		}
+		if !ok {
 			t.Errorf("%s: warnings %v", name, res.Warnings)
+		}
+	}
+}
+
+// A scheduler takes the regular tenants in turn when the band of priority 0,
+// its own or the default one, names a round-robin fairness plugin. A band
+// without a fairness policy runs the default, which serves the oldest
+// request first.
+func TestTenantFairness(t *testing.T) {
+	plugins := []any{map[string]any{"type": "round-robin-fairness-policy"}, map[string]any{"type": "round-robin-fairness-policy", "name": "fair"},
+		map[string]any{"type": "global-strict-fairness-policy"}}
+	config := func(flow map[string]any) map[string]any {
+		return map[string]any{"plugins": plugins, "flowControl": flow}
+	}
+	band := func(priority int64, ref string) map[string]any {
+		b := map[string]any{"priority": priority}
+		if ref != "" {
+			b["fairnessPolicyRef"] = ref
+		}
+		return b
+	}
+	for name, tc := range map[string]struct {
+		config map[string]any
+		fair   bool
+	}{
+		"no flow control section": {map[string]any{"plugins": plugins}, false},
+		"default band in turn":    {config(map[string]any{"defaultPriorityBand": band(0, "round-robin-fairness-policy")}), true},
+		"band 0 by plugin name":   {config(map[string]any{"priorityBands": []any{band(10, ""), band(0, "fair")}}), true},
+		"band 0 strict":           {config(map[string]any{"priorityBands": []any{band(0, "global-strict-fairness-policy")}}), false},
+		"band 0 without a policy": {config(map[string]any{"defaultPriorityBand": band(0, "fair"), "priorityBands": []any{band(0, "")}}), false},
+		"only another band":       {config(map[string]any{"priorityBands": []any{band(-1, "fair")}}), false},
+		"a plugin not declared":   {config(map[string]any{"defaultPriorityBand": band(0, "missing")}), false},
+	} {
+		if got := tenantFairness(tc.config); got != tc.fair {
+			t.Errorf("%s: %v, want %v", name, got, tc.fair)
 		}
 	}
 }

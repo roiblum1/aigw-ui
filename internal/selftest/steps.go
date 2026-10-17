@@ -28,6 +28,7 @@ const (
 	stepSpoof    = "client-id"
 	stepTenant   = "tenant-header"
 	stepCached   = "cached-tokens"
+	stepTokens   = "token-counts"
 	stepSize     = "long-prompt"
 	stepSticky   = "sticky"
 	stepFleet    = "fleet-revision"
@@ -43,6 +44,7 @@ func plan() []Step {
 		{ID: stepKey, Title: "A request with the new key is answered", Status: Pending},
 		{ID: stepBadKey, Title: "A request with an unknown key, a forged token or an expired one is refused", Status: Pending},
 		{ID: stepCounter, Title: "The tokens are counted where the Usage page reads them", Status: Pending},
+		{ID: stepTokens, Title: "The tenant's requests and tokens are counted by model", Status: Pending},
 		{ID: stepLimit, Title: "A request over the quota is refused", Status: Pending},
 		{ID: stepOverage, Title: "A tenant past its budget is served as best-effort", Status: Pending},
 		{ID: stepReset, Title: "A usage reset lets the tenant through again", Status: Pending},
@@ -119,6 +121,7 @@ func (t *test) steps() {
 		{stepKey, t.firstRequest, true},
 		{stepBadKey, t.unknownKey, false},
 		{stepCounter, t.counter, false},
+		{stepTokens, t.tokenCounts, false},
 		{stepLimit, t.limit, false},
 		{stepOverage, t.overage, false},
 		{stepReset, t.reset, false},

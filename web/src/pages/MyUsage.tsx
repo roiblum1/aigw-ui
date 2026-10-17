@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { LogOut } from "lucide-react";
 import { api, Unauthorized, type MyBudget, type MyUsage as Report, type Unit } from "../api";
 import BrandMark from "../BrandMark";
 import { CreditsTrigger, Footer } from "../Credits";
-import { Bar } from "../charts";
-import { ErrorBanner, formatAmount, formatNumber, formatPrice, windowLabel } from "../components";
+import { Bar, Legend, TimeBars, fmt, paletteColor } from "../charts";
+import { ErrorBanner, formatAmount, formatDollars, formatNumber, formatPrice, windowLabel } from "../components";
+import { stepLabel } from "../history";
+import { byModel, cacheOver, percent, requestsOver, shortTokens, tokensOver, totals } from "../workload";
 import { HistoryView, Seg } from "./History";
 
 // The key is kept for this tab only: closing the tab signs out.
@@ -80,6 +82,152 @@ function Budget({ b }: { b: MyBudget }) {
         </p>
       )}
     </div>
+  );
+}
+
+const timeOptions = [
+  { value: "hours" as const, label: "2 days" },
+  { value: "days" as const, label: "30 days" },
+];
+
+/** A chart of the workload, with its title. */
+function Chart(props: { title: string; children: ReactNode }) {
+  return (
+    <figure className="workload-chart">
+      <h3>{props.title}</h3>
+      {props.children}
+    </figure>
+  );
+}
+
+/**
+ * What the team sent, as the gateways counted it from each answer: requests,
+ * and input, cached and output tokens, per model. Numbers only.
+ */
+function Workload(props: { report: Report; range: "hours" | "days"; onRange: (r: "hours" | "days") => void; now: Date }) {
+  const { report, range, now } = props;
+  const points = range === "days" ? report.token_days : report.token_hours;
+  const from = range === "days" ? report.days_from : report.hours_from;
+  const step = range === "days" ? "day" : "hour";
+  const all = useMemo(() => totals(points, report.prices), [points, report.prices]);
+  const rows = useMemo(() => byModel(points, report.prices), [points, report.prices]);
+  const tokens = useMemo(() => tokensOver(points, from, step, now), [points, from, step, now]);
+  const cache = useMemo(() => cacheOver(points, from, step, now), [points, from, step, now]);
+  const requests = useMemo(() => requestsOver(points, from, step, now), [points, from, step, now]);
+  const label = (at: Date) => stepLabel(at, step);
+  const silent = rows.filter((r) => r.noTokens).map((r) => r.model);
+  const uncached = rows.filter((r) => r.input > 0 && r.cached === 0).map((r) => r.model);
+  return (
+    <section className="card">
+      <div className="dash-head">
+        <div>
+          <h2>Your workload</h2>
+          <p className="hint">
+            The requests your team sent and the tokens of their answers, per model, as the gateways counted them. Only
+            these numbers are kept: no prompt or answer ever reaches this page.
+          </p>
+        </div>
+        <Seg label="Time" value={range} onChange={props.onRange} options={timeOptions} />
+      </div>
+      {!report.token_counts ? (
+        <p className="hint">Requests and tokens are not counted by team on this installation.</p>
+      ) : points.length === 0 ? (
+        <p className="hint">Nothing is recorded for this time.</p>
+      ) : (
+        <>
+          <div className="stat-row">
+            <div>
+              <b>{fmt(all.requests)}</b>
+              <span>requests</span>
+            </div>
+            <div>
+              <b>{shortTokens(all.input)}</b>
+              <span>prompt tokens, {percent(all.cacheShare)} of them from the cache</span>
+            </div>
+            <div>
+              <b>{shortTokens(all.output)}</b>
+              <span>output tokens</span>
+            </div>
+            <div>
+              <b>{all.promptPerRequest === null ? "—" : shortTokens(all.promptPerRequest)}</b>
+              <span>prompt tokens per request</span>
+            </div>
+            <div>
+              <b>{all.answerPerRequest === null ? "—" : shortTokens(all.answerPerRequest)}</b>
+              <span>output tokens per request</span>
+            </div>
+            {all.saved !== null && (
+              <div>
+                <b>{formatDollars(all.saved)}</b>
+                <span>saved by the cache: cached tokens at the cached price</span>
+              </div>
+            )}
+          </div>
+          <div className="workload-charts">
+            <Chart title={`Tokens per ${step}`}>
+              <TimeBars steps={tokens.steps} series={tokens.series} peak={tokens.peak} label={label} format={shortTokens} title={`Tokens per ${step}`} />
+              <Legend
+                format={shortTokens}
+                slices={tokens.series.map((s, i) => ({ label: s.label, value: s.values.reduce((a, b) => a + b, 0), color: paletteColor(i) }))}
+              />
+            </Chart>
+            <Chart title="Share of the prompt from the cache">
+              <TimeBars steps={cache.steps} series={cache.series} peak={cache.peak} label={label} format={(n) => `${n}%`} title="Share of the prompt from the cache" />
+            </Chart>
+            <Chart title={`Requests per ${step}`}>
+              <TimeBars steps={requests.steps} series={requests.series} peak={requests.peak} label={label} format={fmt} title={`Requests per ${step}`} />
+            </Chart>
+          </div>
+          <div className="table-scroll">
+            <table className="plain">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th className="text-right">Requests</th>
+                  <th className="text-right">Prompt</th>
+                  <th className="text-right">Cached</th>
+                  <th className="text-right">Output</th>
+                  <th className="text-right" title="Prompt and output tokens per request, on average">
+                    Per request
+                  </th>
+                  <th className="text-right">Saved</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.model}>
+                    <td className="strong">{r.model}</td>
+                    <td className="text-right tabular-nums">{fmt(r.requests)}</td>
+                    <td className="text-right tabular-nums">{shortTokens(r.input)}</td>
+                    <td className="text-right tabular-nums">{percent(r.cacheShare)}</td>
+                    <td className="text-right tabular-nums">{shortTokens(r.output)}</td>
+                    <td className="text-right tabular-nums">
+                      {r.promptPerRequest === null || r.answerPerRequest === null
+                        ? "—"
+                        : `${shortTokens(r.promptPerRequest)} in, ${shortTokens(r.answerPerRequest)} out`}
+                    </td>
+                    <td className="text-right tabular-nums">{r.saved === null ? "—" : formatDollars(r.saved)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {silent.length > 0 && (
+            <p className="detail">
+              {silent.join(", ")}: the requests are counted, but the answers report no token counts to the gateway, so
+              their tokens show as 0.
+            </p>
+          )}
+          {uncached.length > 0 && (
+            <p className="detail">
+              {uncached.join(", ")} served nothing from its cache in this time. A prompt that starts the way an earlier
+              one did, with the same system prompt, tools and earlier turns, is read from the model server&apos;s cache:
+              it is answered sooner and its cached part costs the lower cached price.
+            </p>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -284,15 +432,7 @@ export default function MyUsage() {
                 {present.length > 1 && (
                   <Seg label="Unit" value={unit} onChange={setPickedUnit} options={present.map((u) => ({ value: u, label: unitLabel[u] }))} />
                 )}
-                <Seg
-                  label="Time"
-                  value={range}
-                  onChange={setRange}
-                  options={[
-                    { value: "hours", label: "2 days" },
-                    { value: "days", label: "30 days" },
-                  ]}
-                />
+                <Seg label="Time" value={range} onChange={setRange} options={timeOptions} />
               </div>
               {points.length === 0 ? (
                 <p className="hint">Nothing is recorded for this time.</p>
@@ -307,6 +447,8 @@ export default function MyUsage() {
                 />
               )}
             </section>
+
+            <Workload report={report} range={range} onRange={setRange} now={now} />
 
             {report.prices.length > 0 && (
               <section className="card">

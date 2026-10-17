@@ -13,10 +13,18 @@ func modelRoute(namespace, name string, m Model) *unstructured.Unstructured {
 
 // routeSpec adds to the spec of a model's route what every route of the
 // model carries: for a priced model, the cost of a request in credits,
-// unless its prices are in a dry run.
-func routeSpec(m Model, spec map[string]any) map[string]any {
+// unless its prices are in a dry run, and while the gateway counts tokens,
+// the token counts of each answer.
+func routeSpec(s State, m Model, spec map[string]any) map[string]any {
+	var costs []any
 	if m.chargesBudgets() {
-		spec["llmRequestCosts"] = creditsCost(m)
+		costs = creditsCost(m)
+	}
+	if s.CountsTokens() {
+		costs = append(costs, TokenCosts()...)
+	}
+	if len(costs) > 0 {
+		spec["llmRequestCosts"] = costs
 	}
 	return spec
 }
@@ -92,7 +100,7 @@ func clientOnlyFields() []any { return []any{"kv_transfer_params"} }
 
 func route(s State, m Model) *unstructured.Unstructured {
 	u := modelRoute(s.Namespace, m.Slug, m)
-	u.Object["spec"] = routeSpec(m, map[string]any{
+	u.Object["spec"] = routeSpec(s, m, map[string]any{
 		"parentRefs": []any{
 			map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName},
 		},

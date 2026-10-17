@@ -33,6 +33,9 @@ type ModelBackend struct {
 type DiscoveredModel struct {
 	Name     string
 	Backends []ModelBackend
+	// OnlyIfKnown is set for a name only the gateway's model list has
+	// (store.DiscoveredModel.OnlyIfKnown).
+	OnlyIfKnown bool
 }
 
 // Gateway names a cluster's gateway and the listener clients come in on.

@@ -244,6 +244,11 @@ not revoked.
 - **What it shows.** The tenant the key belongs to, taken from the key and
   from nothing the caller sends. There is no parameter to ask for another
   tenant. Cluster names, backends and other tenants are not in the answer.
+- **Token counts are numbers.** The gateways count each tenant's requests
+  and tokens per model and hour in the shared Redis, under keys that hold
+  the tenant's slug and the model's name, as the budget counters do. The
+  hub copies the numbers into `token_hours`. No prompt or answer reaches the
+  hub or Redis.
 - **The key comes to the hub.** The hub already holds every key, so it
   learns nothing new. Still, it is the one place where a tenant types its
   key into something other than its client. The page is served over the

@@ -698,6 +698,9 @@ proves the gateway replaces the header after it has checked the key. The
 other reads `usage.prompt_tokens_details.cached_tokens` from the answer to a
 repeated prompt.
 
+A step reads the temporary tenant's token counters on the model, as the
+history does, and passes when its requests and input tokens were counted.
+
 These are the server's own test requests. A client's request never passes
 through the server.
 
@@ -727,25 +730,75 @@ Two things follow from that name:
   the next new quota on that model takes it over. Adding or removing one
   tenant's quota therefore never renames another tenant's counter.
 - **The pool is named after the number of rules.** The pool's counter starts
-  again from zero for the current window when the number of rules changes,
-  which happens when a quota is added at the end or the last one is removed.
-  The self-test does both. With the default pool of 1 token this does not
-  matter; with a large shared pool, expect the pool's usage to restart.
+  again from zero for the current window when the number of rules changes:
+  when a quota or an amount is added at the end or the last one is removed,
+  and when the first budget across models is set or the last one removed (its
+  rule comes last). The self-test does both. With the default pool of 1 token
+  this does not matter; a large shared pool can let up to twice its limit
+  through in that window. On the lab, 2026-10-17, a pool of 20 credits an hour
+  counted under rule 5, 10 and 11 within one hour and let 78 through. The AI
+  gateway names the pool's counter after its position; the hub cannot keep it
+  still without padding every policy with empty rules.
+
+## Token counts
+
+While the hub reads Redis (`redis.tokenCounts`, on by default) and the
+gateways take tokens only, each gateway counts every tenant's requests and
+the input, cached and output tokens of their answers, per model and hour.
+Nothing passes through the hub for it.
+
+- The budget policy `aigw-ui-tenant-budgets` on the client listener gets four
+  rules after its budget rule: requests, input, cached, output. Each matches
+  `x-aigw-tenant` and `x-ai-eg-model` with `type: Distinct`, is `shared`,
+  counts by the hour, and is in `shadowMode` with the largest limit, so it
+  never refuses. The requests rule adds 1 per request; the others add the
+  answer's count when it ends. The policy is rendered for these rules alone
+  when no tenant has a budget, and the budget rule stays first, so no rule
+  moves.
+- The routes the hub renders write the counts into the request's metadata
+  under `aigw_ui_input` (`InputToken`, cached tokens included),
+  `aigw_ui_cached` (`CachedInputToken`) and `aigw_ui_output` (`OutputToken`).
+  The sync adds the same keys to the routes of a cluster's own that it marks
+  (those of a model with quotas or budgets). A route it does not touch writes
+  them only when the site's `GatewayConfig` declares them
+  (`globalLLMRequestCosts`, see [deployment](deployment.md#token-counts-on-every-route));
+  its requests are counted without tokens otherwise.
+- The counter of rule *i* (1 to 4) is
+  `<ns>/aigw-ui-tenant-budgets_<ns>/aigw-ui-tenant-budgets/rule/<i>_<ns>/aigw-ui-tenant-budgets/rule/<i>_rule-<i>-match-0_<tenant>_rule-<i>-match-1_<model>_<hour start>`
+  (`render.TokenCounterKey`, from Envoy Gateway 1.9.2's descriptors and the
+  rate limit service's key format; the self-test step "The tenant's requests
+  and tokens are counted by model" checks it on a gateway).
+
+The history reads the requests counter of every tenant and model it may
+call, and the other three only where a request was counted or it already
+follows the pair: about one key per tenant and model a minute, in batches of
+1,000 per `MGET`. The tenants' own page shows what it recorded.
 
 ## Usage history
 
 `internal/history` keeps what was used in the past. Every
-`USAGE_HISTORY_INTERVAL` (default 1 minute) it asks for the usage report
-and adds, per tenant and model, the growth of the counter since its last
-look to the row of the running hour in `usage_hours`. What the counter held
-at the last look is in `usage_cursors`.
+`USAGE_HISTORY_INTERVAL` (default 1 minute) it reads every counter it
+follows and adds what each grew by since its last look to the running hour:
+a quota's counters to `usage_hours`, the token counters to `token_hours`.
+Each counter is followed by its own Redis key in `usage_counter_cursors`
+(0.30.0; before, one cursor per tenant and model in `usage_cursors`).
 
 | Case | What is added |
 |---|---|
-| Same window as the last look | The counter minus the cursor |
+| Same key as at the last look | The counter minus the cursor |
 | The counter is lower than the cursor | The counter: it was reset |
 | A new window began | The new counter, and what the old window's counter grew by after the last look. That part goes to the last hour of the old window |
+| A key the hub no longer computes, in a window still running | What it grew by since the last look. It is read to the end of its window. That covers a rule that moved, such as a budget tenant's rule after a new amount |
 | Redis cannot be read | Nothing. The cursors stay, and the next look adds it |
+
+The counters a tenant has are those of its quota or budget, and while a
+token signed before its last change of limits may still be in use (the
+longer of `tokens.lifetimeDays` and `tokens.renewedLifetimeHours`), those of
+every other amount of the model: such a token is counted under the amount it
+names. A reset of a tenant's quota records the use since the last look
+first, so the reset does not take it out of the history. A quota's counter
+keeps a cursor at 0 too; a token counter while another of the pair's holds
+something.
 
 The counter of a window that ended is still in Redis: the rate limit
 service lets a key expire one window length and some jitter after its last
@@ -753,7 +806,7 @@ hit. That is how the end of a window is read after it.
 
 A look runs in one transaction that first takes an advisory lock, so two
 replicas never add the same usage twice. Rows older than 400 days are
-deleted once a day.
+deleted once a day, from both tables.
 
 The history is read by `GET /usage/history` and by the tenants' own page.
 
@@ -764,6 +817,12 @@ tenant's API key. The server finds the stored keys that start like it,
 opens them and compares in constant time; the tenant of the match is the
 only one the answer is about. The answer is built from the usage report of
 that tenant, its rows of the history and the prices of its models.
+
+The answer also carries the tenant's token history (`token_days`,
+`token_hours`): requests and input, cached and output tokens per model,
+for the models it may call. The page shows them as its workload: totals,
+the share of the prompt from the cache, tokens and requests over time, and
+per model what the cache saved at the model's prices.
 
 The UI serves it at `/my-usage`, a path of its own next to the admin
 pages, with its own sign-in. See [security](security.md#the-tenants-own-page).
@@ -816,6 +875,11 @@ server with cut-down CRDs but not against KServe or Envoy Gateway:
   that has no endpoint;
 - that Argo CD leaves the weights alone with the setting above.
 
+Not verified for token counts (0.30.0): the counter names on a live
+gateway (worked out from Envoy Gateway 1.9.2 and the rate limit service's
+source; the self-test checks them), and the extra latency of four more
+descriptors on every request.
+
 Also not verified: that the gateway accepts the placeholder rule that keeps a
 removed quota's position, a rule with an `Exact` match on a client ID no key
 has. If it does not, the task shows "Applied, not accepted" after a quota is
@@ -838,6 +902,15 @@ removed.
   configuration (`rateLimit.backend` with the shared Redis and `timeout` of a
   few seconds); Envoy Gateway then runs its own rate limit service next to
   the AI gateway's. See [deployment](deployment.md#before-the-first-budget-across-models).
+  Token counts need it too: with `redis.tokenCounts` on (the default) and
+  tokens only, the hub writes the budget policy for them even without a
+  budget. Turn the setting off for a site without it.
+- For tenants of one class to be served in turn when a pool is full: flow
+  control in the model's scheduler with `round-robin-fairness-policy` on the
+  band of priority 0. Its default, `global-strict-fairness-policy`, serves
+  the oldest request first whatever the tenant; the sync warns about it on
+  the pools of best-effort models. See
+  [optimization](optimization.md#tenants-in-turn).
 - A `ClientTrafficPolicy` on the Gateway with `connection.bufferLimit`, for
   example `50Mi`. Without it Envoy Gateway buffers 32 KiB of a request and
   the gateway answers 413 to every longer prompt. This tool does not write

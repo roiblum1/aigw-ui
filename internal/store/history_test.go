@@ -13,28 +13,56 @@ func TestUsageHistory(t *testing.T) {
 	day := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
 	ka, kb := UsageKey{a.ID, glm}, UsageKey{b.ID, glm}
 
-	record := func(deltas []UsageDelta, next []UsageCursor) map[UsageKey]UsageCursor {
+	record := func(found Look) Before {
 		t.Helper()
-		var seen map[UsageKey]UsageCursor
-		err := s.RecordUsage(ctx, func(c map[UsageKey]UsageCursor) ([]UsageDelta, []UsageCursor, error) {
-			seen = c
-			return deltas, next, nil
+		var seen Before
+		err := s.RecordUsage(ctx, func(b Before) (Look, error) {
+			seen = b
+			return found, nil
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return seen
 	}
-	if seen := record([]UsageDelta{
-		{UsageKey: ka, Hour: day.Add(9*time.Hour + 20*time.Minute), Unit: UnitCredits, Used: 100},
-		{UsageKey: ka, Hour: day.Add(9*time.Hour + 40*time.Minute), Unit: UnitCredits, Used: 50, BestEffort: 7},
-		{UsageKey: ka, Hour: day.Add(30 * time.Hour), Unit: UnitCredits, Used: 5},
-		{UsageKey: kb, Hour: day.Add(9 * time.Hour), Unit: UnitTokens, Used: 900},
-	}, []UsageCursor{{UsageKey: ka, Window: "1d", WindowStart: day, Used: 150, BestEffort: 7}}); len(seen) != 0 {
-		t.Errorf("cursors before the first look: %v", seen)
+	// A cursor from before 0.30.0 is handed to the first look only.
+	if _, err := s.db.Exec(ctx, `INSERT INTO usage_cursors (tenant_id, model_id, window_size, window_start, used, best_effort)
+		VALUES ($1, $2, '1d', $3, 40, 0)`, a.ID, glm, day); err != nil {
+		t.Fatal(err)
 	}
-	if seen := record(nil, nil); seen[ka].Used != 150 || seen[ka].BestEffort != 7 || !seen[ka].WindowStart.Equal(day) || seen[ka].Window != "1d" {
-		t.Errorf("cursor = %+v", seen[ka])
+	cursor := CounterCursor{Key: "k-a", UsageKey: ka, Kind: KindUsed, Unit: UnitCredits, Window: "1d", WindowStart: day, Value: 150}
+	if seen := record(Look{
+		Usage: []UsageDelta{
+			{UsageKey: ka, Hour: day.Add(9*time.Hour + 20*time.Minute), Unit: UnitCredits, Used: 100},
+			{UsageKey: ka, Hour: day.Add(9*time.Hour + 40*time.Minute), Unit: UnitCredits, Used: 50, BestEffort: 7},
+			{UsageKey: ka, Hour: day.Add(30 * time.Hour), Unit: UnitCredits, Used: 5},
+			{UsageKey: kb, Hour: day.Add(9 * time.Hour), Unit: UnitTokens, Used: 900},
+		},
+		Tokens: []TokenDelta{
+			{UsageKey: ka, Hour: day.Add(9*time.Hour + 20*time.Minute), Requests: 2, Input: 3000, Cached: 2000, Output: 100},
+			{UsageKey: ka, Hour: day.Add(9*time.Hour + 50*time.Minute), Requests: 1, Input: 500, Output: 20},
+			{UsageKey: kb, Hour: day.Add(33 * time.Hour), Requests: 4, Input: 40, Output: 4},
+		},
+		Cursors: []CounterCursor{cursor, {Key: "k-b", UsageKey: kb, Kind: "requests", Window: "1h", WindowStart: day, Value: 4}},
+	}); len(seen.Cursors) != 0 || seen.Legacy[ka].Used != 40 || !seen.Legacy[ka].WindowStart.Equal(day) {
+		t.Errorf("before the first look: %+v", seen)
+	}
+	// The next look gets the cursors by key and no legacy one; a cursor
+	// left out is dropped.
+	if seen := record(Look{Cursors: []CounterCursor{cursor}}); len(seen.Legacy) != 0 || len(seen.Cursors) != 2 || seen.Cursors["k-a"] != cursor {
+		t.Errorf("cursors = %+v", seen)
+	}
+	if seen := record(Look{}); len(seen.Cursors) != 1 {
+		t.Errorf("cursors after dropping k-b: %+v", seen.Cursors)
+	}
+
+	tokens, err := s.TokenHistory(ctx, day, StepHour, a.ID)
+	if err != nil || len(tokens) != 1 || tokens[0].Requests != 3 || tokens[0].Input != 3500 || tokens[0].Cached != 2000 || tokens[0].Output != 120 ||
+		tokens[0].ModelName != "glm" || !tokens[0].At.Equal(day.Add(9*time.Hour)) {
+		t.Errorf("token hours = %+v, %v", tokens, err)
+	}
+	if tokens, _ := s.TokenHistory(ctx, day, StepDay, ""); len(tokens) != 2 || tokens[1].TenantSlug != "team-b" || !tokens[1].At.Equal(day.Add(24*time.Hour)) {
+		t.Errorf("token days = %+v", tokens)
 	}
 
 	hours, err := s.UsageHistory(ctx, day, StepHour, a.ID)
@@ -48,8 +76,8 @@ func TestUsageHistory(t *testing.T) {
 
 	// A failed look writes nothing.
 	failed := errors.New("redis is down")
-	err = s.RecordUsage(ctx, func(map[UsageKey]UsageCursor) ([]UsageDelta, []UsageCursor, error) {
-		return []UsageDelta{{UsageKey: ka, Hour: day, Unit: UnitCredits, Used: 1}}, nil, failed
+	err = s.RecordUsage(ctx, func(Before) (Look, error) {
+		return Look{Usage: []UsageDelta{{UsageKey: ka, Hour: day, Unit: UnitCredits, Used: 1}}}, failed
 	})
 	if !errors.Is(err, failed) {
 		t.Errorf("err = %v", err)
@@ -59,6 +87,9 @@ func TestUsageHistory(t *testing.T) {
 	}
 	if days, _ := s.UsageHistory(ctx, day, StepDay, ""); len(days) != 1 || days[0].Used != 5 {
 		t.Errorf("after pruning: %+v", days)
+	}
+	if tokens, _ := s.TokenHistory(ctx, day, StepDay, ""); len(tokens) != 1 || tokens[0].Requests != 4 {
+		t.Errorf("token history after pruning: %+v", tokens)
 	}
 }
 

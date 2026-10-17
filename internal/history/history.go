@@ -22,20 +22,21 @@ const Keep = 400 * 24 * time.Hour
 
 // Store is what the recorder reads and writes in Postgres.
 type Store interface {
-	RecordUsage(ctx context.Context, look func(map[store.UsageKey]store.UsageCursor) ([]store.UsageDelta, []store.UsageCursor, error)) error
+	RecordUsage(ctx context.Context, look func(store.Before) (store.Look, error)) error
 	PruneUsage(ctx context.Context, before time.Time) error
 }
 
-// Usage reports the counters of the windows that contain a point in time.
+// Usage reads the counters.
 type Usage interface {
-	ReportAt(ctx context.Context, tenantID string, at time.Time) (usage.Report, error)
+	HistoryCounters(ctx context.Context, now time.Time, busy func(store.UsageKey) bool) ([]usage.HistoryCounter, error)
+	Values(ctx context.Context, keys []string) (map[string]int64, error)
 }
 
 type Service struct {
 	st    Store
 	usage Usage
 	every time.Duration
-	// pruned is the day old history was last deleted.
+	// pruned is the day old history was last deleted. Only Run uses it.
 	pruned time.Time
 }
 
@@ -48,8 +49,16 @@ func (s *Service) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.every)
 	defer ticker.Stop()
 	for {
-		if err := s.Tick(ctx, time.Now()); err != nil && ctx.Err() == nil {
+		now := time.Now()
+		if err := s.Tick(ctx, now); err != nil && ctx.Err() == nil {
 			slog.Warn("usage history: could not record; it is added at the next look", "err", err)
+		}
+		if day := now.UTC().Truncate(24 * time.Hour); day.After(s.pruned) {
+			if err := s.st.PruneUsage(ctx, now.Add(-Keep)); err != nil && ctx.Err() == nil {
+				slog.Warn("usage history: could not delete old history", "err", err)
+			} else {
+				s.pruned = day
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -59,59 +68,94 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 
-// Tick adds what was used since the last look to the history.
+// Tick adds what was used since the last look to the history. A reset calls
+// it first too, so that the use a reset takes away is in the history.
 //
-// A counter only grows within its window, so the usage since the last look
-// is the counter minus what it held then. When a window ended in between,
-// its counter is read once more for what was used after the last look: the
-// rate limit service keeps it for a while. A counter lower than at the last
-// look was reset, and counts from 0.
+// Each counter in Redis is followed on its own, by its key: it only grows
+// within its window, so what was used since the last look is the counter
+// minus what it held then, and a counter lower than that was reset and
+// counts from 0. A counter the last look saw that is no longer among the
+// counters (its window ended, its rule moved, or no token names its amount
+// any more) is read on to the end of its window: its rule may be gone, but
+// the rate limit service keeps it, and what it counted after the last look
+// is added. Use in a window that ended goes to its last hour.
 //
 // When Redis cannot be read nothing is written and the cursors stay, so the
 // usage is added at the next look that works.
 func (s *Service) Tick(ctx context.Context, now time.Time) error {
-	err := s.st.RecordUsage(ctx, func(cursors map[store.UsageKey]store.UsageCursor) ([]store.UsageDelta, []store.UsageCursor, error) {
-		rep, err := s.usage.ReportAt(ctx, "", now)
-		if err != nil {
-			return nil, nil, err
+	return s.st.RecordUsage(ctx, func(before store.Before) (store.Look, error) {
+		// The history follows a tenant's tokens on a model while it has a
+		// cursor of them.
+		busy := map[store.UsageKey]bool{}
+		for _, c := range before.Cursors {
+			if !quotaKind(c.Kind) {
+				busy[c.UsageKey] = true
+			}
 		}
-		ended := newEnded(ctx, s.usage)
-		var deltas []store.UsageDelta
-		var next []store.UsageCursor
-		for _, q := range rep.Quotas {
-			key := store.UsageKey{TenantID: q.TenantID, ModelID: q.ModelID}
-			start := render.WindowStart(q.Window, now)
-			last, seen := cursors[key]
-			if seen && last.Window == q.Window && last.WindowStart.Before(start) {
-				// The rest of the window that ended, in its last hour.
-				if old, ok := ended.quota(key, last.WindowStart); ok {
-					d := store.UsageDelta{UsageKey: key, Unit: q.Unit, Hour: render.WindowEnd(q.Window, last.WindowStart).Add(-time.Second),
-						Used: max(0, old.Used-last.Used), BestEffort: max(0, old.OverageUsed-last.BestEffort)}
-					if d.Used > 0 || d.BestEffort > 0 {
-						deltas = append(deltas, d)
-					}
+		current, err := s.usage.HistoryCounters(ctx, now, func(k store.UsageKey) bool { return busy[k] })
+		if err != nil {
+			return store.Look{}, err
+		}
+		var look store.Look
+		sum := newSums()
+		seen := map[string]bool{}
+		legacy := legacyBase(before.Legacy)
+		// A token counter that holds 0 keeps a cursor while another of the
+		// tenant's on the model does not.
+		sent := map[store.UsageKey]bool{}
+		for _, c := range current {
+			if !quotaKind(c.Kind) && c.Value > 0 {
+				sent[c.UsageKey] = true
+			}
+		}
+		for _, c := range current {
+			seen[c.Key] = true
+			start := render.WindowStart(c.Window, now)
+			last, ok := before.Cursors[c.Key]
+			used := since(c.Value, last.Value)
+			if !ok {
+				used = legacy.take(c, start)
+			}
+			sum.add(c.UsageKey, c.Kind, c.Unit, now, used)
+			// A quota's counter keeps its cursor at 0 too: what it counts
+			// in the last moments of its window is read after the window.
+			if quotaKind(c.Kind) || sent[c.UsageKey] {
+				look.Cursors = append(look.Cursors, store.CounterCursor{Key: c.Key, UsageKey: c.UsageKey, Kind: c.Kind, Unit: c.Unit,
+					Window: c.Window, WindowStart: start, Value: c.Value})
+			}
+		}
+		var gone []store.CounterCursor
+		var keys []string
+		for key, c := range before.Cursors {
+			if !seen[key] {
+				gone, keys = append(gone, c), append(keys, key)
+			}
+		}
+		if len(gone) > 0 {
+			values, err := s.usage.Values(ctx, keys)
+			if err != nil {
+				return store.Look{}, err
+			}
+			for _, c := range gone {
+				v, end, at := values[c.Key], render.WindowEnd(c.Window, c.WindowStart), now
+				if !now.Before(end) {
+					at = end.Add(-time.Second)
+				}
+				sum.add(c.UsageKey, c.Kind, c.Unit, at, since(v, c.Value))
+				if now.Before(end) {
+					c.Value = v
+					look.Cursors = append(look.Cursors, c)
 				}
 			}
-			if !seen || last.Window != q.Window || !last.WindowStart.Equal(start) {
-				last = store.UsageCursor{}
-			}
-			d := store.UsageDelta{UsageKey: key, Unit: q.Unit, Hour: now, Used: since(q.Used, last.Used), BestEffort: since(q.OverageUsed, last.BestEffort)}
-			if d.Used > 0 || d.BestEffort > 0 {
-				deltas = append(deltas, d)
-			}
-			next = append(next, store.UsageCursor{UsageKey: key, Window: q.Window, WindowStart: start, Used: q.Used, BestEffort: q.OverageUsed})
 		}
-		return deltas, next, ended.err
+		look.Usage, look.Tokens = sum.deltas()
+		return look, nil
 	})
-	if err != nil {
-		return err
-	}
-	if day := now.UTC().Truncate(24 * time.Hour); day.After(s.pruned) {
-		s.pruned = day
-		return s.st.PruneUsage(ctx, now.Add(-Keep))
-	}
-	return nil
 }
+
+// quotaKind reports whether a counter is a quota's, whose use goes to the
+// usage history, rather than a token counter.
+func quotaKind(kind string) bool { return kind == store.KindUsed || kind == store.KindBestEffort }
 
 // since is what was used between two looks at a counter of one window.
 func since(now, last int64) int64 {
@@ -121,38 +165,110 @@ func since(now, last int64) int64 {
 	return now - last
 }
 
-// ended reads the counters of windows that are over, once per window start.
-type ended struct {
-	ctx     context.Context
-	usage   Usage
-	reports map[time.Time]map[store.UsageKey]usage.Quota
-	err     error
+// legacy holds the cursors from before 0.30.0, one per tenant and model,
+// which the first look after the upgrade starts from: what a tenant's
+// counters of a kind held then, in the window that is still running, is
+// taken off what they hold now.
+type legacy map[legacyKey]int64
+
+type legacyKey struct {
+	store.UsageKey
+	kind  string
+	start time.Time
 }
 
-func newEnded(ctx context.Context, us Usage) *ended {
-	return &ended{ctx: ctx, usage: us, reports: map[time.Time]map[store.UsageKey]usage.Quota{}}
+func legacyBase(cursors map[store.UsageKey]store.UsageCursor) legacy {
+	out := legacy{}
+	for k, c := range cursors {
+		start := render.WindowStart(c.Window, c.WindowStart)
+		out[legacyKey{k, store.KindUsed, start}] = c.Used
+		out[legacyKey{k, store.KindBestEffort, start}] = c.BestEffort
+	}
+	return out
 }
 
-// quota returns the counters of a tenant on a model in the window that
-// began at start. After a failure nothing more is asked, and the look as a
-// whole fails, so the cursors stay for the next one.
-func (e *ended) quota(key store.UsageKey, start time.Time) (usage.Quota, bool) {
-	if e.err != nil {
-		return usage.Quota{}, false
+// take returns what a counter without a cursor counted since the last look:
+// all it holds, less what a cursor from before 0.30.0 still accounts for.
+func (l legacy) take(c usage.HistoryCounter, start time.Time) int64 {
+	k := legacyKey{c.UsageKey, c.Kind, start}
+	base := min(l[k], c.Value)
+	l[k] -= base
+	return c.Value - base
+}
+
+// sums adds the use of each tenant on each model up by hour.
+type sums struct {
+	usage  map[usageHour]*store.UsageDelta
+	tokens map[tokenHour]*store.TokenDelta
+	order  []any
+}
+
+type usageHour struct {
+	store.UsageKey
+	hour time.Time
+	unit string
+}
+
+type tokenHour struct {
+	store.UsageKey
+	hour time.Time
+}
+
+func newSums() *sums {
+	return &sums{usage: map[usageHour]*store.UsageDelta{}, tokens: map[tokenHour]*store.TokenDelta{}}
+}
+
+func (s *sums) add(key store.UsageKey, kind, unit string, at time.Time, n int64) {
+	if n <= 0 {
+		return
 	}
-	byKey, ok := e.reports[start]
-	if !ok {
-		rep, err := e.usage.ReportAt(e.ctx, "", start)
-		if err != nil {
-			e.err = err
-			return usage.Quota{}, false
+	hour := at.UTC().Truncate(time.Hour)
+	switch kind {
+	case store.KindUsed, store.KindBestEffort:
+		k := usageHour{key, hour, unit}
+		d := s.usage[k]
+		if d == nil {
+			d = &store.UsageDelta{UsageKey: key, Hour: hour, Unit: unit}
+			s.usage[k] = d
+			s.order = append(s.order, d)
 		}
-		byKey = make(map[store.UsageKey]usage.Quota, len(rep.Quotas))
-		for _, q := range rep.Quotas {
-			byKey[store.UsageKey{TenantID: q.TenantID, ModelID: q.ModelID}] = q
+		if kind == store.KindUsed {
+			d.Used += n
+		} else {
+			d.BestEffort += n
 		}
-		e.reports[start] = byKey
+	default:
+		k := tokenHour{key, hour}
+		d := s.tokens[k]
+		if d == nil {
+			d = &store.TokenDelta{UsageKey: key, Hour: hour}
+			s.tokens[k] = d
+			s.order = append(s.order, d)
+		}
+		switch render.TokenKind(kind) {
+		case render.TokenRequests:
+			d.Requests += n
+		case render.TokenInput:
+			d.Input += n
+		case render.TokenCached:
+			d.Cached += n
+		case render.TokenOutput:
+			d.Output += n
+		}
 	}
-	q, ok := byKey[key]
-	return q, ok
+}
+
+// deltas returns the sums in the order they were first added.
+func (s *sums) deltas() ([]store.UsageDelta, []store.TokenDelta) {
+	var usage []store.UsageDelta
+	var tokens []store.TokenDelta
+	for _, d := range s.order {
+		switch d := d.(type) {
+		case *store.UsageDelta:
+			usage = append(usage, *d)
+		case *store.TokenDelta:
+			tokens = append(tokens, *d)
+		}
+	}
+	return usage, tokens
 }

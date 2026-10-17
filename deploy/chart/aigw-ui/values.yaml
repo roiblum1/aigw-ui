@@ -141,6 +141,12 @@ redis:
   # Allow an admin to reset a tenant's usage on a model. This deletes the
   # counter in Redis, so the Redis user needs DEL. Off, Redis is only read.
   allowReset: false
+  # Have the gateways count each tenant's requests and input, cached and
+  # output tokens by model, an hour at a time, for the tenant's own page.
+  # Four rules in the hub's BackendTrafficPolicy on the client listener,
+  # which never refuse a request. Needs Envoy Gateway's global rate limiting,
+  # as budgets across models do, and tenants on tokens.
+  tokenCounts: true
 
 route:
   enabled: true

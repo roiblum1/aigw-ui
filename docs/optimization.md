@@ -169,9 +169,11 @@ it. Run two replicas of the picker where that matters.
 
 **What the hub checks.** Each sync warns in the task message when, on a
 pool that serves a best-effort model, the scheduler runs without flow
-control, the site's own class `standard` does not rank above `best-effort` or
-is below 0, or the class `best-effort` is for another pool of the same
-namespace. See [architecture](architecture.md#best-effort-route).
+control, or with it but takes the regular tenants oldest first (see
+[tenants in turn](#tenants-in-turn)), the site's own class `standard` does
+not rank above `best-effort` or is below 0, or the class `best-effort` is for
+another pool of the same namespace. See
+[architecture](architecture.md#best-effort-route).
 
 **What should make the class count.** Flow control: with it, requests wait in
 the picker when the pool is saturated, ordered by priority, and the lowest
@@ -210,9 +212,54 @@ no release yet). Each pass would enter the request into flow control again.
 Wait for a release with that fix, or keep a pool behind a single match (the
 model charts' peer route has one).
 
-We have not run flow control. Before relying on it, repeat the test above on
-one model: limit vLLM with `--max-num-seqs`, send both classes together, and
-compare how long each waits.
+**Flow control on the lab (2026-10-17, one CPU replica of `qwen-tiny`).**
+Six best-effort requests, then one from each of two regular tenants, three
+times: the picker sent two best-effort requests on and queued four. The
+regular requests got their first token after 15 to 23 s, the queued
+best-effort ones after 26 to 57 s; the picker's metrics showed 24.2 s of
+waiting on average at priority −1 against 14.5 s at 0. Repeat the test on
+each model before relying on it: limit vLLM with `--max-num-seqs`, send both
+classes together, and compare how long each waits.
+
+## Tenants in turn
+
+Within one class the picker queues each tenant on its own: the hub's token
+check writes the tenant into `x-llm-d-inference-fairness-id`, the flow's ID.
+Which flow is served next is the band's **fairness policy**, and the
+default of llm-d router v0.10.0 is `global-strict-fairness-policy`, which
+ignores the flows and serves the oldest request first
+(`pkg/epp/flowcontrol/registry/config.go`, `DefaultFairnessPolicyRef`). On the
+lab a tenant's single request waited 45 to 48 s behind another tenant's six
+(2026-10-17). `round-robin-fairness-policy` takes the flows in turn, so one
+tenant's backlog does not hold up the others.
+
+Declare the plugin and name it on the band of priority 0, the class
+`standard` of every regular tenant, in the scheduler config of the model's
+chart (beside the flow control settings above):
+
+```yaml
+          plugins:
+            - type: round-robin-fairness-policy
+            - type: fcfs-ordering-policy
+            # plus the concurrency-detector and the plugins the model uses
+          flowControl:
+            saturationDetector:
+              pluginRef: concurrency-detector
+            defaultPriorityBand:
+              fairnessPolicyRef: round-robin-fairness-policy
+              orderingPolicyRef: fcfs-ordering-policy
+            # or a band of its own for priority 0:
+            # priorityBands:
+            #   - priority: 0
+            #     fairnessPolicyRef: round-robin-fairness-policy
+            #     orderingPolicyRef: fcfs-ordering-policy
+```
+
+A band of priority 0 of its own that names no fairness policy runs the
+default again. A request with a plain API key carries no fairness ID; all
+such requests are one flow. The sync warns about a pool of a best-effort
+model whose band of priority 0 does not take tenants in turn; a pool
+without best-effort models is not checked.
 
 ## Side by side
 

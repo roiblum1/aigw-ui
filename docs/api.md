@@ -129,7 +129,7 @@ Request bodies are never stored.
 | GET | `/usage` | Tokens used in the current window, for every tenant quota (`budget: true` on a model where the tenant's budget across models holds it: the limit is the model's and only counts), and `budgets`: what each tenant used of its budget across models, in credits (`tenant_id`, `tenant_slug`, `limit`, `window`, `used`, `resets_at`, `counters`) |
 | GET | `/usage?tenant_id=<id>` | The same for one tenant |
 | GET | `/usage/history?step=day&days=30` | What every tenant used of every model per day or hour |
-| GET | `/my/usage` | A tenant's own budgets, usage and prices. Takes one of the tenant's API keys as the bearer token, not the admin token |
+| GET | `/my/usage` | A tenant's own budgets, usage, prices, requests and tokens. Takes one of the tenant's API keys as the bearer token, not the admin token |
 | POST | `/token` | | A new token for a personal key, which a user's helper asks for: `{"token": "eyJ...", "expires_at", "expires_in"}` (seconds), signed with the tenant's budget and models as they are now; `Cache-Control: no-store`. Takes the personal key as the bearer token, not the admin token. 401 for a key that is unknown, revoked or of a disabled tenant; 429 after ten wrong keys from one address in a minute |
 | POST | `/tenants/{id}/quotas/{model_id}/reset` | `{"counters": 1, "deleted": 1}`. The tenant's usage on that model is back to zero |
 | POST | `/tenants/{id}/budget/reset` | `{"counters": 1, "deleted": 1}`. The tenant's use of its budget across models is back to zero for the running period; 404 without a budget applied to a cluster |
@@ -220,9 +220,22 @@ and 404 when `config.tenantPage` is off.
   "models": null,
   "prices": [{"model_name": "GLM5.3", "price_input": 11574, "price_cached": 1157, "price_output": 46296}],
   "days_from": "2026-09-11T00:00:00Z", "days": [ ... ],
-  "hours_from": "2026-10-09T00:00:00Z", "hours": [ ... ]
+  "hours_from": "2026-10-09T00:00:00Z", "hours": [ ... ],
+  "token_counts": true,
+  "token_days": [
+    {"at": "2026-10-10T00:00:00Z", "model_id": "...", "model_name": "GLM5.3", "tenant_id": "...", "tenant_slug": "team-b",
+     "requests": 412, "input_tokens": 6180000, "cached_tokens": 4420000, "output_tokens": 231000}
+  ],
+  "token_hours": [ ... ]
 }
 ```
+
+`token_counts` is true while the gateways count the tenant's requests and
+tokens (`redis.tokenCounts`). `token_days` and `token_hours` are what they
+counted, per model and day or hour, over the same time as `days` and
+`hours`, on the models the tenant may call. `input_tokens` includes
+`cached_tokens`. Numbers only: no prompt or answer is kept anywhere on the
+hub.
 
 `enforced` is `false` for a dry-run budget. `budget` is the tenant's budget
 across models, or `null`; with one, `budgets` leaves out the models it holds

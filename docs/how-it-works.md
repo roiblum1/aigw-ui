@@ -695,7 +695,9 @@ its own. The gateway's rate limit service counts in Redis.
 window, and can reset a counter.
 
 **How.** The server computes the name of each counter the gateway writes
-and reads them all from Redis in one call. A reset deletes the counter.
+and reads them all from Redis in one call. A reset first adds what the
+counter grew by since the history's last look to the history, then deletes
+the counter.
 
 **Why.**
 
@@ -703,6 +705,8 @@ and reads them all from Redis in one call. A reset deletes the counter.
   could disagree with what the gateway enforces.
 - *Reset is off unless `redis.allowReset` is set.* Reading needs no write
   access to Redis.
+- *A reset does not take use out of the history.* Up to 0.29.0 what was used
+  in the minute before a reset was lost there.
 
 ## Activity and audit
 
