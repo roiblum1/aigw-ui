@@ -20,14 +20,16 @@ type ModelInput struct {
 }
 
 func (s *Store) ListModels(ctx context.Context) ([]Model, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet, spent_mode, best_effort_unlimited, best_effort_limit, price_dry_run, market_id
+	rows, err := s.db.Query(ctx, `SELECT id, name, slug, default_limit, default_window, cost_expression, created_at, fleet_zones, fleet_error, fleet, spent_mode, best_effort_unlimited, best_effort_limit, price_dry_run, market_id,
+	               budget_pass_slot
 	        FROM models ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	models, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Model, error) {
 		m := Model{Endpoints: []Endpoint{}, Warnings: []string{}, MarketAnnotations: []string{}}
-		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet, &m.SpentMode, &m.BestEffortUnlimited, &m.BestEffortLimit, &m.PriceDryRun, &m.MarketIDSet)
+		err := r.Scan(&m.ID, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.CreatedAt, &m.SiteWeights, &m.SiteWeightsNote, &m.Fleet, &m.SpentMode, &m.BestEffortUnlimited, &m.BestEffortLimit, &m.PriceDryRun, &m.MarketIDSet,
+			&m.BudgetPassSlot)
 		return m, err
 	})
 	if err != nil {

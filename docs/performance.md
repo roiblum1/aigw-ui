@@ -222,7 +222,7 @@ answered. The self-test's step "A long prompt is accepted" checks it.
 | Reading the usage of 205 quotas (`GET /usage`) | 0.2 s, most of it the way to Redis from outside the cluster |
 | The usage history | one such read a minute, and one write to Postgres for the tenants that used something |
 | The best-effort loop | one such read every 15 seconds, only when a model serves a spent budget as best-effort |
-| Applying a change | a read and a server-side apply per object, eight at a time in four stages, at most 50 requests a second per cluster (0.31.0). Up to 0.30.0 one object after the other at client-go's 5 a second: a sync of the lab took 10 to 13 s |
+| Applying a change | a read and a server-side apply per object, eight at a time in five stages, at most 50 requests a second per cluster (0.31.0). Up to 0.30.0 one object after the other at client-go's 5 a second: a sync of the lab took 10 to 13 s |
 | Memory | 45 to 60 MiB with 1,000 tenants (0.23.0 to 0.29.0). 0.30.0 before its fix reached 870 MiB and was killed at its 512 MiB limit: the history built the keys of former amounts once per tenant that held the amount, 850,000 a minute of 10,000 that differ. The chart's limit is 1 GiB, and the server keeps its heap to 90% of it |
 
 The hub reads counters and writes Kubernetes objects. Its load grows with
@@ -248,6 +248,35 @@ an index on the keys' tenant they take 6, 7 and 13 ms. The answers are
 gzipped (except those with a secret in them), the UI's built files are kept
 by the browser for good, and a page shown before shows at once while it
 loads anew.
+
+### The admin API
+
+The end-to-end runs time the API from the test machine, through the
+sandbox hub's route, without gzip: `/healthz` alone took 0.53 s there.
+With 1,000 tenants (2026-10-17):
+
+| | From the test machine (0.30.0 / 0.31.0) | On the hub (0.31.0 / 0.32.0, a laptop) |
+|---|---|---|
+| `GET /tenants`, 288 KB (35 KB gzipped) | 1.40 / 1.34–1.40 s | 4.6 / 5.7 ms |
+| `GET /usage`, 270 KB here, 883 KB on the sandbox (23 KB gzipped) | 2.89 / 2.2–2.9 s | 12 / 14 ms |
+| Creating the 1,000 tenants, 1,921 calls 8 at a time | 138.8 / 132.6 s | 2.0 / 2.0 s |
+| One such call (p50: tenant, budget, quota) | | 5, 7 and 14 ms |
+
+The test machine's figures are the link's: 1,921 calls at about 0.5 s,
+eight at a time, make the 130 s, and 0.9 MB at its rate makes the 2 s of
+`/usage`. A sync of the local API server ran during the seeding as on the
+sandbox. Neither 0.31.0's work nor 0.32.0's changes those figures; the UI
+gets the lists gzipped. Since 0.32.0 each answer says the hub's own time
+in `Server-Timing`, and the log names a request that took over 2 s
+([operations](operations.md#logs)).
+
+**The token policy with many denied tokens.** Every denied token was a line
+of the `SecurityPolicy` until its token expired, 180 days by default. With
+1,000 denials from 15 deletions of test tenants the policy is 33.6 KB and
+1,113 lines as `jti`s, and 2.9 KB and 80 lines as spans of their expiry
+(0.32.0, [security](security.md#tokens)). Stored as JSON a `jti` takes 20
+bytes, so about 79,000 of them would reach etcd's limit of 1.5 MiB for one
+object, before managed fields.
 
 ## Not measured
 

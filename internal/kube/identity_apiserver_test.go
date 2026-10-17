@@ -28,6 +28,10 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	for n := range 130 {
 		s.Identity.Denied = append(s.Identity.Denied, fmt.Sprintf("%016x", n))
 	}
+	// Enough spans of denied tokens for two rules of CEL near its limit.
+	for n := range int64(200) {
+		s.Identity.DeniedSpans = append(s.Identity.DeniedSpans, render.ExpirySpan{From: 1792254713 + 100*n, To: 1792254763 + 100*n, Tokens: 3})
+	}
 	if _, err := c.Sync(ctx, ns, render.Objects(s), nil); err != nil {
 		t.Fatalf("both: the API server refused a rendered object: %v", err)
 	}
@@ -36,8 +40,8 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rules, _, _ := unstructured.NestedSlice(live.Object, "spec", "authorization", "rules"); len(rules) != 5 {
-		t.Fatalf("both: %d rules, want 2 revoked, 1 disabled, token, token-not-checked", len(rules))
+	if rules, _, _ := unstructured.NestedSlice(live.Object, "spec", "authorization", "rules"); len(rules) != 7 {
+		t.Fatalf("both: %d rules, want 2 revoked, 2 revoked-span, 1 disabled, token, token-not-checked", len(rules))
 	}
 	backend, _ := gvrFor("AIServiceBackend")
 	b, err := c.dyn.Resource(backend).Namespace(ns).Get(ctx, render.FleetName("glm-5-3"), metav1.GetOptions{})
@@ -127,8 +131,8 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	if live, err = c.dyn.Resource(pol).Namespace(ns).Get(ctx, render.AuthPolicyName, metav1.GetOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if rules, _, _ := unstructured.NestedSlice(live.Object, "spec", "authorization", "rules"); len(rules) != 4 || rules[3].(map[string]any)["name"] != "models" {
-		t.Fatalf("tokens: %d rules, want 2 revoked, 1 disabled, 1 models: %v", len(rules), rules)
+	if rules, _, _ := unstructured.NestedSlice(live.Object, "spec", "authorization", "rules"); len(rules) != 6 || rules[5].(map[string]any)["name"] != "models" {
+		t.Fatalf("tokens: %d rules, want 2 revoked, 2 revoked-span, 1 disabled, 1 models: %v", len(rules), rules)
 	}
 	// Without budgets the policy goes.
 	s.Budgets = nil

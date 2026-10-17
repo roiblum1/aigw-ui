@@ -12,7 +12,8 @@ import (
 // A model as lab check A had it, the walletcheck-cheap backend in the
 // gateway's namespace, with its quotas by amount: a and b have 66 an hour,
 // c 100 a day counted only; position 1 was freed by an amount nobody has any
-// more.
+// more. The rule for budgets across models has position 3, after the
+// amounts, where it was before its position was stored.
 func amountState() State {
 	return State{
 		Namespace: "envoy-ai-gateway-system", GatewayName: "envoy-ai-gateway", AuthEnabled: true,
@@ -25,8 +26,9 @@ func amountState() State {
 				{TenantSlug: "walletcheck-b", Slot: 1, Limit: 66, Window: "1h"},
 				{TenantSlug: "walletcheck-c", Slot: 2, Limit: 100, Window: "1d", Shadow: true},
 			},
-			ByAmount: true,
-			Amounts:  []QuotaAmount{{Slot: 0, Limit: 66, Window: "1h"}, {Slot: 2, Limit: 100, Window: "1d", Shadow: true}},
+			ByAmount:       true,
+			Amounts:        []QuotaAmount{{Slot: 0, Limit: 66, Window: "1h"}, {Slot: 2, Limit: 100, Window: "1d", Shadow: true}},
+			BudgetPassSlot: 3,
 		}},
 	}
 }

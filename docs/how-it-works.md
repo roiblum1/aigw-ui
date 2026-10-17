@@ -526,7 +526,11 @@ every cluster on the next sync, a few seconds later.
 
 **How.** The key is stored encrypted and written into one Secret per
 cluster, under `data`. Each sync also compares the Secret on the cluster
-with the keys it should hold and removes any other entry.
+with the keys it should hold and removes any other entry. A token cannot be
+taken back from a client, so revoking one, or deleting its tenant, makes the
+token policy refuse it at every gateway until it expires: by its `jti`, or,
+with others revoked or deleted together, by a span of their expiry, one
+entry for the whole run (0.32.0; see [security](security.md#tokens)).
 
 **Why.**
 
@@ -671,7 +675,10 @@ its own. The gateway's rate limit service counts in Redis.
   tenant has one budget, not one per site.
 - *A rule keeps its position for life.* The position is part of the
   counter's name. If rules moved up when one is removed, other tenants'
-  counters would restart. A removed rule leaves a placeholder.
+  counters would restart. A removed rule leaves a placeholder. Since 0.32.0
+  that holds for the rule that lets budget tenants through as well: it was
+  the last rule and moved when an amount was added after it, and a budget
+  tenant's use in the minute before the move was missing from the history.
 - *A rule per amount, not per tenant, with tokens.* The `QuotaPolicy` is
   checked on every request of the model and goes into every route of it; a
   rule per tenant grew it by one rule for every tenant with an own quota (a

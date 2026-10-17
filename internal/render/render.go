@@ -128,6 +128,10 @@ type Model struct {
 	// requests through (budgetPassRule). It is set only while the gateway
 	// takes tokens only, as ByAmount is.
 	BudgetsHold bool
+	// BudgetPassSlot is the position of that rule among the amounts' rules.
+	// It is stored and never moves, as an amount's position does not: it
+	// is part of the names of the counters the rule keeps for each tenant.
+	BudgetPassSlot int
 }
 
 // Held reports whether the model's objects on the cluster are left alone.

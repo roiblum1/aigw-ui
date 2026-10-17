@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -214,7 +215,8 @@ func TestTokensCarryLimits(t *testing.T) {
 
 // The tenants with the same amount on a model share its position; a new
 // amount takes the lowest free one, and an amount nobody has frees its own.
-// While the gateways take tokens only the render state has them.
+// Position 0 of a new model is the budget-pass rule's, which no amount
+// takes. While the gateways take tokens only the render state has them.
 func TestQuotaAmounts(t *testing.T) {
 	s, ctx := open(t)
 	s.SetTokens(tokenSet)
@@ -254,10 +256,10 @@ func TestQuotaAmounts(t *testing.T) {
 			t.Fatalf("amounts %q, want %q", got, want)
 		}
 	}
-	set(a.ID, 66, "1h", nil, "0:66-1h")
-	set(b.ID, 66, "1h", nil, "0:66-1h")
-	set(c.ID, 100, "1d", &shadow, "0:66-1h 1:100-1d-shadow")
-	set(a.ID, 7, "1m", nil, "0:66-1h 1:100-1d-shadow 2:7-1m")
+	set(a.ID, 66, "1h", nil, "1:66-1h")
+	set(b.ID, 66, "1h", nil, "1:66-1h")
+	set(c.ID, 100, "1d", &shadow, "1:66-1h 2:100-1d-shadow")
+	set(a.ID, 7, "1m", nil, "1:66-1h 2:100-1d-shadow 3:7-1m")
 	// b leaves 66 an hour, which nobody else has: its position is free,
 	// and the next new amount takes it.
 	quotas, err := s.ListQuotas(ctx, b.ID)
@@ -267,12 +269,12 @@ func TestQuotaAmounts(t *testing.T) {
 	if _, err := s.DeleteQuota(ctx, quotas[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if got := amounts(); got != "1:100-1d-shadow 2:7-1m" {
+	if got := amounts(); got != "2:100-1d-shadow 3:7-1m" {
 		t.Fatalf("after b left: %q", got)
 	}
-	set(b.ID, 5, "1d", nil, "0:5-1d 1:100-1d-shadow 2:7-1m")
+	set(b.ID, 5, "1d", nil, "1:5-1d 2:100-1d-shadow 3:7-1m")
 	// The same limit and window, counted only, is an amount of its own.
-	set(a.ID, 5, "1d", &shadow, "0:5-1d 1:100-1d-shadow 2:5-1d-shadow")
+	set(a.ID, 5, "1d", &shadow, "1:5-1d 2:100-1d-shadow 3:5-1d-shadow")
 
 	// Rendered by amount once the gateways take tokens only.
 	st, err := s.RenderStateWithoutKeys(ctx, site.ID)
@@ -285,11 +287,56 @@ func TestQuotaAmounts(t *testing.T) {
 	if st, err = s.RenderStateWithoutKeys(ctx, site.ID); err != nil {
 		t.Fatal(err)
 	}
-	if m := st.Models[0]; !m.ByAmount || fmt.Sprint(m.Amounts) != "[{0 5 1d false} {1 100 1d true} {2 5 1d true}]" {
-		t.Fatalf("render state: %v %+v", m.ByAmount, m.Amounts)
+	if m := st.Models[0]; !m.ByAmount || fmt.Sprint(m.Amounts) != "[{1 5 1d false} {2 100 1d true} {3 5 1d true}]" || m.BudgetPassSlot != 0 {
+		t.Fatalf("render state: %v %+v %d", m.ByAmount, m.Amounts, m.BudgetPassSlot)
 	}
 	models, err := s.ListModels(ctx)
-	if err != nil || models[0].QuotaAmounts != 3 {
-		t.Fatalf("quota amounts %d, %v", models[0].QuotaAmounts, err)
+	if err != nil || models[0].QuotaAmounts != 4 || models[0].BudgetPassSlot != 0 {
+		t.Fatalf("quota amounts %d, budget-pass position %d, %v", models[0].QuotaAmounts, models[0].BudgetPassSlot, err)
+	}
+
+	// A model from before 0.32.0 keeps its rule where it was, after its
+	// amounts: new amounts fill the free positions before it, then go after.
+	if _, err := s.db.Exec(ctx, `UPDATE models SET budget_pass_slot = 4 WHERE id = $1`, glm); err != nil {
+		t.Fatal(err)
+	}
+	d, e := tenant(t, s, ctx, "team-d"), tenant(t, s, ctx, "team-e")
+	set(c.ID, 9, "1h", nil, "0:9-1h-shadow 1:5-1d 3:5-1d-shadow")
+	set(d.ID, 8, "1h", nil, "0:9-1h-shadow 1:5-1d 2:8-1h 3:5-1d-shadow")
+	set(e.ID, 11, "1h", nil, "0:9-1h-shadow 1:5-1d 2:8-1h 3:5-1d-shadow 5:11-1h")
+}
+
+// Different new amounts on one model set at the same time each get a
+// position of their own: two of them took the same free position and one
+// write failed with 409 when 1,000 tenants were seeded 8 at a time (locally,
+// 2026-10-17).
+func TestQuotaAmountsAtOnce(t *testing.T) {
+	s, ctx := open(t)
+	glm, err := s.CreateModel(ctx, ModelInput{Name: "glm", DefaultLimit: 1, DefaultWindow: "1d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tenants []Tenant
+	for n := range 16 {
+		tenants = append(tenants, tenant(t, s, ctx, fmt.Sprintf("team-%d", n)))
+	}
+	errs := make(chan error, len(tenants))
+	var wg sync.WaitGroup
+	for n, tn := range tenants {
+		wg.Go(func() { errs <- s.UpsertQuota(ctx, tn.ID, glm, int64(10+n%8), "1h", nil) })
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var amounts, slots int
+	if err := s.db.QueryRow(ctx, `SELECT count(*), count(DISTINCT slot) FROM quota_amounts WHERE model_id = $1`, glm).Scan(&amounts, &slots); err != nil {
+		t.Fatal(err)
+	}
+	if amounts != 8 || slots != 8 {
+		t.Fatalf("%d amounts in %d positions, want 8 and 8", amounts, slots)
 	}
 }

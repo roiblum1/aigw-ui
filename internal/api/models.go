@@ -187,7 +187,7 @@ func (s *Server) deleteModel(w http.ResponseWriter, r *http.Request) {
 // many the tenants' own quotas would take with a rule each. Once the
 // gateways take tokens only, they take a rule per amount instead, and while
 // a tenant has a budget across models (budgets), a model it is charged on
-// has one more rule.
+// has one more rule at its own position, which may be past the amounts.
 func ruleCounts(m store.Model, mode string, budgets bool) (now, perTenant int) {
 	rm := render.Model{}
 	for i := 0; i < m.QuotaRules; i++ {
@@ -198,12 +198,14 @@ func ruleCounts(m store.Model, mode string, budgets bool) (now, perTenant int) {
 	if mode == render.IdentityTokens {
 		rm.ByAmount = true
 		// The model's prices charge the budgets unless they are in a dry run.
-		rm.BudgetsHold, rm.Priced, rm.DryRun = budgets, m.Prices != nil, m.PriceDryRun
+		rm.BudgetsHold, rm.Priced, rm.DryRun, rm.BudgetPassSlot = budgets, m.Prices != nil, m.PriceDryRun, m.BudgetPassSlot
 		if rm.Priced {
 			rm.CostExpression = "credits"
 		}
 		for i := 0; i < m.QuotaAmounts; i++ {
-			rm.Amounts = append(rm.Amounts, render.QuotaAmount{Slot: i, Limit: 1, Window: "1d"})
+			if i != m.BudgetPassSlot {
+				rm.Amounts = append(rm.Amounts, render.QuotaAmount{Slot: i, Limit: 1, Window: "1d"})
+			}
 		}
 		now = render.RuleCount(rm)
 	}

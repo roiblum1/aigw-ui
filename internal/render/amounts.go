@@ -40,11 +40,13 @@ func (a QuotaAmount) name() string { return QuotaAmountName(a.Limit, a.Window, a
 
 // amountRules returns the amounts of a model in order: the amount at index
 // i holds Slot i. A position no amount holds is returned with Limit 0 and
-// is rendered as a placeholder, as a tenant rule's is.
+// is rendered as a placeholder, as a tenant rule's is. The store never gives
+// an amount the position of the budget-pass rule; one that has it anyway is
+// left out while that rule is rendered, so the policy and the counters agree.
 func amountRules(m Model) []QuotaAmount {
 	var rules []QuotaAmount
 	for _, a := range m.Amounts {
-		if a.Slot < 0 || !validQuota(a.Limit, a.Window) {
+		if a.Slot < 0 || !validQuota(a.Limit, a.Window) || (a.Slot == m.BudgetPassSlot && m.passesBudgets()) {
 			continue
 		}
 		for len(rules) <= a.Slot {

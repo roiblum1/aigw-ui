@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -266,17 +267,101 @@ func (s *Store) TenantOfToken(ctx context.Context, c token.Claims) (Tenant, erro
 // let a revoked token through again for that long.
 const DenialMargin = 5 * time.Minute
 
-// DeniedTokens returns the jti of every token the gateways must refuse
-// although it is signed: revoked, or of a deleted tenant, until DenialMargin
-// after it expires. Rows past that are removed on the way.
-func (s *Store) DeniedTokens(ctx context.Context) ([]string, error) {
-	if _, err := s.db.Exec(ctx, `DELETE FROM token_denials WHERE expires_at <= $1`, time.Now().Add(-DenialMargin)); err != nil {
-		return nil, err
+// DeniedTokens returns every token the gateways must refuse although it is
+// signed: revoked, or of a deleted tenant, until DenialMargin after it
+// expires. Rows past that are removed on the way.
+//
+// Runs of them go into spans by expiry instead of a jti each (spansOf): a
+// test that deletes its tenants leaves hundreds of denials, each of which
+// stayed listed for the 180 days its token lived, and the policy grew by one
+// line per token (the sandbox, 2026-10-17). The denials and the live tokens
+// are read in one snapshot, so every stored token that has not expired is
+// in one of the two.
+func (s *Store) DeniedTokens(ctx context.Context, now time.Time) (singles []string, spans []render.ExpirySpan, err error) {
+	if _, err := s.db.Exec(ctx, `DELETE FROM token_denials WHERE expires_at <= $1`, now.Add(-DenialMargin)); err != nil {
+		return nil, nil, err
 	}
-	return list(ctx, s, func(r scanner) (string, error) {
-		var jti string
-		return jti, r.Scan(&jti)
-	}, `SELECT jti FROM token_denials ORDER BY jti`)
+	var denied []denial
+	var live []int64
+	err = pgx.BeginTxFunc(ctx, s.db, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		// floor, as a token's exp is: expires_at has had whole seconds
+		// since tokens came (0.18.0), and a rounded bound one second off
+		// would let the token at a span's edge through.
+		rows, err := tx.Query(ctx, `SELECT jti, floor(extract(epoch FROM expires_at))::bigint FROM token_denials ORDER BY expires_at, jti`)
+		if err != nil {
+			return err
+		}
+		if denied, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (denial, error) {
+			var d denial
+			return d, r.Scan(&d.jti, &d.exp)
+		}); err != nil {
+			return err
+		}
+		rows, err = tx.Query(ctx, `SELECT DISTINCT floor(extract(epoch FROM expires_at))::bigint FROM api_keys
+		                           WHERE kind = 'token' AND revoked_at IS NULL AND expires_at > $1 ORDER BY 1`, now.Add(-DenialMargin))
+		if err != nil {
+			return err
+		}
+		live, err = pgx.CollectRows(rows, pgx.RowTo[int64])
+		return err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	singles, spans = spansOf(denied, live, now.Add(s.tokens.Lifetime-spanRecent).Unix())
+	return singles, spans, nil
+}
+
+// denial is a denied token: its jti and its expiry (exp, Unix seconds).
+type denial struct {
+	jti string
+	exp int64
+}
+
+// minSpan is the fewest denied tokens a span stands for: a span's entry is
+// about as long as two jtis.
+const minSpan = 3
+
+// spanRecent keeps the denials of the tokens signed in its last stretch out
+// of the spans. A token's expiry is when it was signed plus the lifetime, so
+// a token signed while the spans are worked out, and stored just after,
+// expires later than every span ends: it is not refused by mistake.
+const spanRecent = 10 * time.Minute
+
+// spansOf puts the denied tokens, sorted by expiry, into spans of at least
+// minSpan that no live token (expiries sorted) expires within, and returns
+// the rest as jtis, sorted. A denial that expires at cutoff or later, or in
+// the same second as a live token, stays a jti.
+func spansOf(denied []denial, live []int64, cutoff int64) (singles []string, spans []render.ExpirySpan) {
+	var run []denial
+	flush := func() {
+		if len(run) >= minSpan {
+			spans = append(spans, render.ExpirySpan{From: run[0].exp, To: run[len(run)-1].exp, Tokens: len(run)})
+		} else {
+			for _, d := range run {
+				singles = append(singles, d.jti)
+			}
+		}
+		run = nil
+	}
+	next := 0 // the first live expiry not yet passed
+	for _, d := range denied {
+		for next < len(live) && live[next] < d.exp {
+			// A live token expires between the run's last denial and this
+			// one: the run ends there.
+			flush()
+			next++
+		}
+		if d.exp >= cutoff || (next < len(live) && live[next] == d.exp) {
+			flush()
+			singles = append(singles, d.jti)
+			continue
+		}
+		run = append(run, d)
+	}
+	flush()
+	sort.Strings(singles)
+	return singles, spans
 }
 
 // Identity is how the gateways tell tenants apart, the same on every
@@ -291,7 +376,7 @@ func (s *Store) Identity(ctx context.Context) (render.Identity, error) {
 	if id.Mode, err = s.IdentityMode(ctx); err != nil {
 		return id, err
 	}
-	if id.Denied, err = s.DeniedTokens(ctx); err != nil {
+	if id.Denied, id.DeniedSpans, err = s.DeniedTokens(ctx, time.Now()); err != nil {
 		return id, err
 	}
 	if id.DeniedClients, err = s.DeniedClients(ctx); err != nil {

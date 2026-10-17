@@ -186,6 +186,8 @@ function IdentityPanel(props: { signing: SigningKeys; tenants: Tenant[]; onChang
           (signing.denied === 1
             ? " 1 revoked token is refused until it expires."
             : ` ${signing.denied} revoked tokens are refused until they expire.`)}
+        {signing.denied_spans > 0 &&
+          ` The token policy refuses runs of them by expiry, in ${signing.denied_spans} ${signing.denied_spans === 1 ? "span" : "spans"}.`}
       </p>
       <ErrorBanner message={action.error} />
       {active && (

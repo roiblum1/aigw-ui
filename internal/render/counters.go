@@ -131,7 +131,7 @@ func Counters(s State) []Counter {
 				for _, q := range m.Quotas {
 					own[q.TenantSlug] = true
 				}
-				stem := budgetPassStem(prefix, ruleCount-1)
+				stem := budgetPassStem(prefix, m.budgetPassAt())
 				for _, b := range budgets {
 					// A tenant held to other models is refused this one by
 					// the gateway, so it never uses it.

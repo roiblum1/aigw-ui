@@ -4,10 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const tenantSelect = `SELECT t.id, t.slug, t.display_name, t.enabled, t.created_at,
@@ -237,11 +235,16 @@ func (s *Store) HasBudget(ctx context.Context, tenantID string) (bool, error) {
 // A new quota takes the lowest position on the model that no other quota
 // holds, and keeps it for as long as it exists. See render.TenantQuota.Slot.
 func (s *Store) UpsertQuota(ctx context.Context, tenantID, modelID string, limit int64, window string, shadow *bool) error {
-	var err error
-	// Two new quotas on one model can pick the same position at the same
-	// time. The unique constraint refuses the second, which then picks again.
-	for range 5 {
-		_, err = s.db.Exec(ctx,
+	// The quota's position and its amount's (quota_amounts) are each the
+	// lowest free one, so two quotas on one model written at once picked the
+	// same. A retry on the unique constraint was not enough: 8 writers at a
+	// time ran out of retries and a write failed with 409 (seeding 1,000
+	// tenants locally, 2026-10-17). The model's row makes them take turns.
+	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM models WHERE id = $1 FOR NO KEY UPDATE`, modelID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx,
 			`WITH before AS (
 			     SELECT token_limit, window_size, shadow FROM quotas WHERE tenant_id = $1 AND model_id = $2
 			 ), saved AS (
@@ -267,12 +270,8 @@ func (s *Store) UpsertQuota(ctx context.Context, tenantID, modelID string, limit
 			   AND EXISTS (SELECT 1 FROM saved s, before b
 			               WHERE (s.token_limit, s.window_size, s.shadow) IS DISTINCT FROM (b.token_limit, b.window_size, b.shadow))`,
 			tenantID, modelID, limit, window, shadow)
-		// The amount's position is picked the same way (quota_amounts).
-		var pg *pgconn.PgError
-		if !errors.As(err, &pg) || (pg.ConstraintName != "quotas_model_slot" && pg.ConstraintName != "quota_amounts_pkey") {
-			break
-		}
-	}
+		return err
+	})
 	return mapErr(err)
 }
 

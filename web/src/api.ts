@@ -258,6 +258,8 @@ export interface SigningKeys {
   lifetime_days: number;
   /** Signed tokens the gateways refuse: revoked, or of a deleted tenant. */
   denied: number;
+  /** Spans of expiry that stand for runs of them in the token policy. */
+  denied_spans: number;
 }
 
 export interface Quota {

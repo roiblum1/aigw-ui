@@ -131,7 +131,7 @@ func (s *Server) Handler() http.Handler {
 	root.Handle("GET /api/v1/my/usage", s.tenantAuth(http.HandlerFunc(s.getMyUsage)))
 	// A new token for a personal key, which a user's helper asks for.
 	root.HandleFunc("POST /api/v1/token", s.renewToken)
-	root.Handle("/api/", s.auth(s.audit(api)))
+	root.Handle("/api/", s.auth(timed(s.audit(api))))
 	root.HandleFunc("GET /upstream-docs/", s.upstreamDocs)
 	root.HandleFunc("/", s.ui)
 	return securityHeaders(compress(root))

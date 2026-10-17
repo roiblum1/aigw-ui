@@ -291,6 +291,66 @@ func TestBudgetPassRule(t *testing.T) {
 	}
 }
 
+// The rule that lets a budget's tenants through keeps its stored position
+// when an amount is added after it and when the amounts before it are freed,
+// so each tenant's counter under it keeps its name. As the last rule it moved
+// with every such change, and what a tenant used under the old position since
+// the history's last look was lost (0.31.0 run, 2026-10-17).
+func TestBudgetPassRuleKeepsItsPosition(t *testing.T) {
+	s := amountState()
+	m := &s.Models[0]
+	m.CostExpression, m.Priced, m.BudgetsHold = "input_tokens * 1u", true, true
+	s.Budgets = []TenantBudget{{TenantSlug: "walletcheck-d", Limit: 500, Window: "1h"}}
+	day := time.Unix(1792022400+60, 0)
+	keys := func() (budget, pool string, rules []string) {
+		t.Helper()
+		for _, c := range Counters(s) {
+			switch {
+			case c.Pool:
+				pool = c.RedisKey("", day)
+			case c.TenantSlug == "walletcheck-d":
+				budget = c.RedisKey("", day)
+			}
+		}
+		p := quotaPolicies(s, *m)[0]
+		got, _, _ := unstructured.NestedSlice(p.Object, "spec", "perModelQuotas")
+		for _, r := range got[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any) {
+			switch v := fmt.Sprint(r); {
+			case strings.Contains(v, BudgetHeader):
+				rules = append(rules, "budget")
+			case strings.Contains(v, placeholderSelector):
+				rules = append(rules, "-")
+			default:
+				rules = append(rules, v[strings.Index(v, "value:")+6:strings.Index(v, "] map")])
+			}
+		}
+		return budget, pool, rules
+	}
+	before, _, rules := keys()
+	if !strings.Contains(before, "_rule-3-x-aigw-budget") || fmt.Sprint(rules) != "[66-1h - 100-1d-shadow budget]" {
+		t.Fatalf("before: %s %v", before, rules)
+	}
+
+	// A new amount takes the next free position, which is after the rule.
+	m.Amounts = append(m.Amounts, QuotaAmount{Slot: 4, Limit: 7, Window: "1m"})
+	after, pool, rules := keys()
+	if after != before || fmt.Sprint(rules) != "[66-1h - 100-1d-shadow budget 7-1m]" || !strings.Contains(pool, "rule-5-match--1") {
+		t.Fatalf("after an amount was added: %s %v %s", after, rules, pool)
+	}
+	// Every amount after the first is freed: the positions stay held.
+	m.Amounts = m.Amounts[:1]
+	after, _, rules = keys()
+	if after != before || fmt.Sprint(rules) != "[66-1h - - budget]" {
+		t.Fatalf("after amounts were freed: %s %v", after, rules)
+	}
+	// Without budgets the position is not rendered, and the amounts keep theirs.
+	m.BudgetsHold = false
+	m.Amounts = append(m.Amounts, QuotaAmount{Slot: 4, Limit: 7, Window: "1m"})
+	if _, _, rules = keys(); fmt.Sprint(rules) != "[66-1h - - - 7-1m]" {
+		t.Fatalf("without budgets: %v", rules)
+	}
+}
+
 // A priced model without a quota gets its QuotaPolicy while
 // tenants have budgets, so that its pool holds the tenants with neither a
 // budget nor a quota of their own; without budgets it has none, as before.

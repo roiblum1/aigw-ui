@@ -385,7 +385,9 @@ finds the hub and the key `aigw-token` signed in with.
 
 **Rotate signing key** makes a new key that signs every new token; the old
 one keeps working for the tokens it signed until they expire or are revoked.
-See [security](security.md#tokens).
+The same paragraph says how many revoked tokens the gateways refuse until
+they expire and, since 0.32.0, in how many spans of their expiry the token
+policy holds runs of them. See [security](security.md#tokens).
 
 **How much is left to give.** For a measured model, choosing it in **Add
 quota** or editing its budget shows what the model's GPUs serve a day, the

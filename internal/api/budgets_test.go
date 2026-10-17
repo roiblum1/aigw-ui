@@ -101,9 +101,10 @@ func TestReadyInstances(t *testing.T) {
 
 // While a tenant has a budget across models, a model with prices has one
 // more rule, which lets such tenants through; prices in a dry run charge no
-// budget and add none.
+// budget and add none. The model is from before 0.32.0: the upgrade kept
+// that rule after its one amount.
 func TestRuleCountsWithBudgets(t *testing.T) {
-	m := store.Model{QuotaRules: 2, QuotaAmounts: 1, Prices: &store.Price{Input: 1}}
+	m := store.Model{QuotaRules: 2, QuotaAmounts: 1, BudgetPassSlot: 1, Prices: &store.Price{Input: 1}}
 	count := func(m store.Model, budgets bool) int {
 		now, perTenant := ruleCounts(m, render.IdentityTokens, budgets)
 		if perTenant != 2 {
@@ -120,6 +121,15 @@ func TestRuleCountsWithBudgets(t *testing.T) {
 	m.PriceDryRun = true
 	if n := count(m, true); n != 1 {
 		t.Fatalf("prices in a dry run: %d rules", n)
+	}
+	// A model made since keeps position 0 for that rule, and its first
+	// amount takes 1: the position stays held without budgets too.
+	m = store.Model{QuotaRules: 2, QuotaAmounts: 2, Prices: &store.Price{Input: 1}}
+	if n := count(m, false); n != 2 {
+		t.Fatalf("a new model without budgets: %d rules", n)
+	}
+	if n := count(m, true); n != 2 {
+		t.Fatalf("a new model with budgets: %d rules", n)
 	}
 }
 

@@ -166,7 +166,20 @@ same message is shown in the cluster's row in the UI.
 
 Every change request is logged as a line with `msg=audit`, with the same
 fields as the audit log in the UI. `request with a wrong token` marks a failed
-sign-in or API call.
+sign-in or API call. Since 0.32.0 an admin API request that takes more than
+2 seconds in all is logged as `msg="slow request"` with its method, path,
+status and `took_ms`.
+
+**How long the hub took.** Every admin API answer carries
+`Server-Timing: app;dur=<milliseconds>`: the hub's own time until it started
+the answer (0.32.0). What a client measures beyond it is the network and the
+transfer. On the sandbox hub the test machine took 0.53 s for `/healthz`
+alone, and 1.4 s for `GET /tenants` and 2.2 to 2.9 s for `GET /usage` at
+1,000 tenants, without gzip (300 and 883 KB); the hub took 5 and 12 ms for
+the same lists on a laptop, and 2.0 s to create the 1,000 tenants that took
+the test machine 133 s ([performance](performance.md#the-admin-api)). A
+script that times the API should send `Accept-Encoding: gzip`, as the UI
+does, and read the header.
 
 ## Troubleshooting
 
@@ -218,6 +231,10 @@ sign-in or API call.
 | A revoked token still answers for some seconds | A revoke reaches the gateways with the next sync, which waits for one already running. Up to 0.30.0 a sync of the lab took 10 to 13 s and wrote the token policy last; from 0.31.0 it writes it first, at up to 50 requests a second | Expected: the gateways learn of a revoke from the sync, and then Envoy Gateway takes a few seconds more to reach the proxy |
 | A model deleted by hand comes back with no endpoint | Up to 0.29.0, discovery added a name the gateway still listed after the hub removed its route | Delete it again. From 0.30.0 a name only the gateway's list has adds no model |
 | The hub's pod restarts with `OOMKilled` | 0.30.0 before its fix: with many tenants whose limits changed within a token's lifetime, the usage history built every key once per tenant that held the amount (870 MiB at 1,000 tenants) | Upgrade. The hub then keeps its heap to 90% of its memory limit (`MEMORY_LIMIT`, set by the chart, 1Gi by default) and used 45 to 60 MiB at 1,000 tenants |
+| The `SecurityPolicy` `aigw-ui-api-key-auth` has hundreds of lines of `jti`s | A hub before 0.32.0 lists every denied token for as long as it lives, 180 days by default: a revoked token, and every token of a deleted tenant | Upgrade. The next sync puts runs of denied tokens into `revoked-span` rules by expiry ([security](security.md#tokens)); what stays a `jti` is a token revoked on its own or in the last 10 minutes |
+| A budget tenant's history shows less of a model for a day than its counters in Redis | A hub before 0.32.0 moved the rule that counts budget tenants on a model whenever an amount was added after it; use in the minute before the move was not added | Upgrade; the rule no longer moves. What was lost is not added afterwards |
+| Saving quotas for many tenants at once fails now and then with 409 `already exists` | A hub from 0.24.0 to 0.31.0: two quotas, or two new amounts, on one model saved at the same time picked the same free position | Upgrade, or save the failed one again. From 0.32.0 quotas on one model are saved in turn |
+| A script's API calls are slow and the UI's are not | The script's time is the network's and the uncompressed transfer's | Compare with `Server-Timing` (above); send `Accept-Encoding: gzip` |
 | Requests are rejected with 429 for a tenant that has no quota | The model has quotas for other tenants, so this one only has the shared pool | Give the tenant a quota |
 
 ## Upgrading Envoy Gateway to 1.10

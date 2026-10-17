@@ -102,6 +102,11 @@ func (s *Syncer) Run(ctx context.Context) {
 		ticker := time.NewTicker(s.resync)
 		defer ticker.Stop()
 		resync = ticker.C
+		// A hub that just started syncs at once: what changed while it was
+		// down, such as a token lifetime set lower, which the denied-token
+		// spans are worked out from, reaches the clusters now and not with
+		// the first resync (0.31.0 run: 5 minutes after a restart).
+		s.SyncAll(ctx)
 	}
 	for {
 		select {

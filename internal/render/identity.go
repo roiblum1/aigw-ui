@@ -1,6 +1,10 @@
 package render
 
-import "sort"
+import (
+	"sort"
+	"strconv"
+	"strings"
+)
 
 // How the gateway tells tenants apart.
 const (
@@ -26,6 +30,8 @@ const (
 	// maxClaimValues is the most values the gateway takes in one claim of
 	// an authorization rule; longer lists are split over several rules.
 	maxClaimValues = 128
+	// maxCEL is the longest CEL expression the gateway takes in one rule.
+	maxCEL = 4096
 )
 
 // Identity is what the gateway needs to check tokens.
@@ -39,7 +45,13 @@ type Identity struct {
 	JWKS string
 	// Denied is the jti of every token to refuse although it is signed:
 	// revoked, or of a deleted tenant, until a few minutes after it expires.
+	// Those in DeniedSpans are not listed here.
 	Denied []string
+	// DeniedSpans refuse the stored tokens (cid is the slug and the jti)
+	// that expire within each span: runs of denied tokens, such as a test's
+	// tenants deleted together, that no live stored token expires among.
+	// Each is one entry instead of a jti per token.
+	DeniedSpans []ExpirySpan
 	// DeniedClients is the client ID of every personal key whose tokens to
 	// refuse: revoked, or of a deleted tenant, until a few minutes after the
 	// last token it got expires. Those tokens are not stored, so they are
@@ -47,6 +59,14 @@ type Identity struct {
 	DeniedClients []string
 	// Disabled is the slug of every disabled tenant.
 	Disabled []string
+}
+
+// ExpirySpan is a run of denied tokens by their expiry (exp, Unix seconds):
+// every stored token that expires from From to To, both included, is
+// denied. Tokens is how many denied tokens it stands for.
+type ExpirySpan struct {
+	From, To int64
+	Tokens   int
 }
 
 // tokens reports whether the gateway checks tokens.
@@ -92,7 +112,8 @@ func jwtProvider(i Identity, quotas []map[string]any) map[string]any {
 }
 
 // authorization returns the rules that refuse a signed token: one revoked
-// or of a deleted tenant (by jti), one of a disabled tenant (by sub). While
+// or of a deleted tenant (by jti, or by its expiry within a span of denied
+// ones), one of a disabled tenant (by sub). While
 // API keys are taken too, the gateway lets a token through its JWT check even
 // when it does not check out, and the API key policy takes it as one of the
 // keys it lists, so two more rules follow: a token that checks out passes,
@@ -121,6 +142,7 @@ func authorization(i Identity, restricted []TenantModels) map[string]any {
 		}
 	}
 	deny("revoked", "jti", i.Denied)
+	rules = append(rules, spanRules(i.DeniedSpans)...)
 	deny("revoked-personal-key", "cid", i.DeniedClients)
 	deny("disabled-tenant", "sub", i.Disabled)
 	if len(restricted) > 0 {
@@ -148,6 +170,46 @@ func authorization(i Identity, restricted []TenantModels) map[string]any {
 		return nil
 	}
 	return map[string]any{"defaultAction": "Allow", "rules": rules}
+}
+
+// spanRules returns the rules that refuse the stored tokens that expire
+// within a span of DeniedSpans, as many spans to a rule as its CEL takes.
+//
+// The rule reads the claims the gateway's JWT filter keeps for a token it
+// checked. A stored token's cid is its tenant's slug and its jti; a token a
+// personal key got has the key's ID there, so it never matches: those are
+// refused by DeniedClients. A token signed after the spans were worked out
+// expires after every span (the store leaves the last minutes out). An
+// expression that fails counts as no match, so each claim is checked for
+// first. The numbers are doubles, as the claims are once read.
+func spanRules(spans []ExpirySpan) []any {
+	if len(spans) == 0 {
+		return nil
+	}
+	claims := "metadata.filter_metadata['" + jwtMetadata + "']['" + TokenProvider + "']"
+	claim := func(name string) string { return claims + "['" + name + "']" }
+	head := "'" + jwtMetadata + "' in metadata.filter_metadata" +
+		" && '" + TokenProvider + "' in metadata.filter_metadata['" + jwtMetadata + "']" +
+		" && 'exp' in " + claims + " && 'cid' in " + claims + " && 'sub' in " + claims + " && 'jti' in " + claims +
+		" && " + claim("cid") + " == " + claim("sub") + " + '.' + " + claim("jti") + " && ["
+	tail := "].exists(r, " + claim("exp") + " >= r[0] && " + claim("exp") + " <= r[1])"
+	var rules []any
+	var list []string
+	size := len(head) + len(tail)
+	flush := func() {
+		rules = append(rules, map[string]any{"name": "revoked-span", "action": "Deny", "cel": head + strings.Join(list, ", ") + tail})
+		list, size = nil, len(head)+len(tail)
+	}
+	for _, sp := range spans {
+		item := "[" + strconv.FormatInt(sp.From, 10) + ".0, " + strconv.FormatInt(sp.To, 10) + ".0]"
+		if len(list) > 0 && size+len(item)+2 > maxCEL {
+			flush()
+		}
+		list = append(list, item)
+		size += len(item) + 2
+	}
+	flush()
+	return rules
 }
 
 // credentialsRemoved is the header mutation of a backend this tool renders

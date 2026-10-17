@@ -99,15 +99,23 @@ func quotaPolicies(s State, m Model) []*unstructured.Unstructured {
 // default bucket that never runs out.
 func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *unstructured.Unstructured {
 	quotas := tenantRules(m)
-	rules := make([]any, 0, len(quotas)+1)
+	rules := make([]any, 0, m.ruleCount())
 	if m.ByAmount {
 		quotas = nil
-		for _, a := range amountRules(m) {
-			if a.Limit == 0 {
+		amounts := amountRules(m)
+		pass := -1
+		if m.passesBudgets() {
+			pass = m.budgetPassAt()
+		}
+		for i := range m.ruleCount() {
+			switch {
+			case i == pass:
+				rules = append(rules, budgetPassRule(overage))
+			case i < len(amounts) && amounts[i].Limit != 0:
+				rules = append(rules, amountRule(m, amounts[i], overage || m.DryRun))
+			default:
 				rules = append(rules, placeholderRule())
-				continue
 			}
-			rules = append(rules, amountRule(m, a, overage || m.DryRun))
 		}
 	}
 	for _, q := range quotas {
@@ -126,7 +134,7 @@ func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *uns
 		}
 		rules = append(rules, rule)
 	}
-	if m.passesBudgets() {
+	if !m.ByAmount && m.passesBudgets() {
 		// Last, so the positions before it and the counters named after
 		// them stay as they are.
 		rules = append(rules, budgetPassRule(overage))
@@ -194,8 +202,8 @@ func tenantMatch(slug string) map[string]any {
 }
 
 // ruleCount is how many bucket rules the model's QuotaPolicy has before its
-// default bucket: one per position of the tenant quotas, or of the amounts,
-// then the one for budgets across models.
+// default bucket: one per position of the tenant quotas, or of the amounts
+// and the rule for budgets across models at its own position.
 func (m Model) ruleCount() int {
 	var n int
 	if m.ByAmount {
@@ -204,9 +212,19 @@ func (m Model) ruleCount() int {
 		n = len(tenantRules(m))
 	}
 	if m.passesBudgets() {
-		n++
+		n = max(n, m.budgetPassAt()+1)
 	}
 	return n
+}
+
+// budgetPassAt is the position of budgetPassRule: its stored one among the
+// amounts' rules, else right after the tenants' rules. Tenants' rules are
+// only rendered while API keys are taken, when no budget is held there.
+func (m Model) budgetPassAt() int {
+	if m.ByAmount {
+		return m.BudgetPassSlot
+	}
+	return len(tenantRules(m))
 }
 
 // RuleCount is how many bucket rules the model's QuotaPolicy has.

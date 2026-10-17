@@ -171,6 +171,51 @@ slug until it is enabled. Until a cluster has synced, a revoked token still
 works there, as an API key does. A sync writes the token policy and the key
 Secret before anything else (0.31.0).
 
+**Denied tokens in spans (0.32.0).** A `jti` stays in the policy for as long
+as its token lives, 180 days by default, and a test that deletes its tenants
+leaves one per token: the sandbox's policy grew to hundreds of lines. Where
+three or more denied tokens follow one another by expiry (`exp`) and no
+live token expires among them, the policy refuses that span of expiries
+instead of each `jti`: one rule, `revoked-span`, holds a list of
+`[from, to]` pairs in CEL and refuses a stored token whose `exp` is in one
+of them. 1,000 denials from 15 deletions of test tenants make 33.6 KB and
+1,113 lines of policy as `jti`s, and 2.9 KB and 80 lines as spans. A span
+refuses no token that should pass:
+
+- Every stored token that has not expired is either live or denied: a
+  token's row goes only with its tenant, and the database denies it then.
+  The hub reads both in one snapshot and ends a span at every live token's
+  expiry. A denied token that expires in the same second as a live one
+  stays a `jti`.
+- A token signed after the spans were worked out expires after every span:
+  the tokens signed in the last 10 minutes are left out of spans and stay
+  `jti`s. If `tokens.lifetimeDays` is lowered, a token signed between the
+  restart and the hub's first sync could expire inside an old span and be
+  refused until that sync, which comes at once since 0.32.0.
+- A token a personal key got carries the key's ID as `cid`, not its own
+  `<sub>.<jti>`, so the rule never matches it; those are refused by `cid`.
+- The gateway counts an error in a CEL expression as no match, which for a
+  `Deny` rule would let the token through, so the rule checks for each
+  claim before it reads it.
+
+A rule holds about 120 spans, within the 4,096 characters of CEL Envoy
+Gateway takes; more spans make more rules.
+
+**What the policy's length depends on.** Not on the number of tenants or
+keys: a token that works is never listed (with tokens only the gateway
+checks its signature), so 1,000 tenants with a token each make the same
+policy as one, 1.1 to 1.6 KB. It grows only with what is refused: a line per
+disabled tenant, per revoked personal key for up to
+`tokens.renewedLifetimeHours` (a week), and per denied token for up to
+`tokens.lifetimeDays` (180 days). Spans shrink the last only where denied
+tokens were signed together, as a test's or an onboarding batch's are;
+tokens revoked one by one among live ones, such as each tenant replacing
+its own at a different time, stay a `jti` each. To keep that short, give
+people personal keys, whose tokens are refused by the key for a week at
+most, or lower `tokens.lifetimeDays`. `GET /signing-keys` gives
+`denied` (every denied token) and `denied_spans`. Envoy's evaluation of the
+rule is not yet verified on a real gateway ([architecture](architecture.md#not-verified-on-a-real-gateway)).
+
 **What reaches the model server.** A token is not removed by the JWT check.
 The backends the hub renders (the entry routes, the best-effort routes, and
 the models added by address) remove `Authorization` and `x-api-key` before
