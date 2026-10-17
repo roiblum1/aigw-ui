@@ -172,6 +172,11 @@ func TestDrainedRun(t *testing.T) {
 	if _, _, err := s.SetDrained(ctx, glm, sites[1], true); err != nil {
 		t.Fatal(err)
 	}
+	// An operator's drain of the last site is refused too, with the names
+	// its refusal shows (they were empty up to 0.29.0).
+	if m, c, err := s.SetDrained(ctx, glm, sites[0], true); !errors.Is(err, ErrLastSite) || m != "glm" || c != "site-a" || drained(sites[0]) {
+		t.Fatalf("operator drain of the last site: %q %q %v, drained %v", m, c, err, drained(sites[0]))
+	}
 	if err := s.CreateCapacityRun(ctx, run(third, sites[0])); !errors.Is(err, ErrLastSite) || drained(sites[0]) {
 		t.Fatalf("last site: %v, drained %v", err, drained(sites[0]))
 	}
@@ -345,9 +350,19 @@ func TestUsageSinceAndAllQuotas(t *testing.T) {
 	if err := s.UpsertQuota(ctx, b.ID, glm, 5000, "1d", nil); err != nil {
 		t.Fatal(err)
 	}
+	// team-b also has a budget across models, as a tenant could before
+	// 0.25.0: its quota is marked, for the planner to leave out.
+	if _, err := s.db.Exec(ctx, `UPDATE tenants SET budget_credits = 100, budget_window = '1d' WHERE id = $1`, b.ID); err != nil {
+		t.Fatal(err)
+	}
 	quotas, err := s.AllQuotas(ctx)
 	if err != nil || len(quotas) != 2 {
 		t.Fatalf("quotas = %+v, %v", quotas, err)
+	}
+	for _, q := range quotas {
+		if q.Budgeted != (q.TenantID == b.ID) {
+			t.Fatalf("quota of %s: budgeted %v", q.TenantID, q.Budgeted)
+		}
 	}
 }
 

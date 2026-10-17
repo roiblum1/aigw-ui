@@ -34,7 +34,7 @@ func backend(s State, m Model) *unstructured.Unstructured {
 func aiServiceBackend(s State, m Model) *unstructured.Unstructured {
 	u := object(aigwAPI, "AIServiceBackend", s.Namespace, m.Slug)
 	spec := serviceBackendSpec(m.Slug)
-	if h := backendHeaders(s, "", true); h != nil {
+	if h := backendHeaders(s, ""); h != nil {
 		spec["headerMutation"] = h
 	}
 	u.Object["spec"] = spec
@@ -45,45 +45,28 @@ func aiServiceBackend(s State, m Model) *unstructured.Unstructured {
 // request class it sets, when objective is not empty, and the credentials it
 // removes while the gateway takes tokens. Nil when there is neither.
 //
-// A backend that is a model server (modelServer) also loses the headers the
-// gateway wrote to tell tenants apart: the model server has no use for them.
-// A backend that forwards to another site's gateway keeps them, since a
-// route there may count the request by its tenant too.
-//
-// The amount of each own quota (x-aigw-quota-<model>) is not removed: the
-// list takes 16 names at most (AIServiceBackend, AI gateway 1.2.0) and
-// names only, so one name per model with quotas by amount failed every
-// model server's backend from the eleventh such model on, and the whole sync
-// with it. An amount tells the model server nothing about who sent the
-// request.
-func backendHeaders(s State, objective string, modelServer bool) map[string]any {
+// The headers the gateway wrote to tell tenants apart (x-aigw-tenant,
+// x-aigw-key, x-aigw-client-id, x-aigw-budget, x-aigw-quota-<model>) stay,
+// on a model server's backend too. A rate limit charges an answer's cost
+// with a second rule that reads the request's headers again when the
+// answer ends (Envoy Gateway's ApplyOnStreamDone), and a backend removes a
+// header from those same request headers. A model server's backend that
+// removed them had every answer counted as 1 under a tenant's quota and as
+// nothing under its budget, while the pool, which reads no tenant, counted
+// the cost (the lab, 2026-10-17, AI gateway 1.2.0 and Envoy Gateway 1.9.2).
+// No rule reads the credentials.
+func backendHeaders(s State, objective string) map[string]any {
 	var h map[string]any
 	if objective != "" {
 		h = objectiveHeader(objective)
 	}
-	var remove []any
 	if s.AuthEnabled && s.Identity.tokens() {
-		remove = append(remove, credentialsRemoved()["remove"].([]any)...)
-	}
-	if s.AuthEnabled && modelServer {
-		for _, name := range identityHeaders() {
-			remove = append(remove, name)
-		}
-	}
-	if len(remove) > 0 {
 		if h == nil {
 			h = map[string]any{}
 		}
-		h["remove"] = remove
+		h["remove"] = credentialsRemoved()["remove"]
 	}
 	return h
-}
-
-// identityHeaders are the headers the gateway writes from a key or a token
-// that tell tenants apart: the tenant, the key, the client ID and the budget.
-// They are a fixed list, whatever the number of models.
-func identityHeaders() []string {
-	return []string{TenantHeader, KeyHeader, ClientIDHeader, BudgetHeader}
 }
 
 // serviceBackendSpec is the spec of an AIServiceBackend in front of the

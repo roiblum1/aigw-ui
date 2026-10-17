@@ -140,7 +140,7 @@ func fleetServiceBackend(s State, m Model, name, objective string) *unstructured
 	spec := serviceBackendSpec(FleetName(m.Slug))
 	// It goes to the sites' gateways, which may count the request by its
 	// tenant too: their headers stay.
-	if h := backendHeaders(s, objective, false); h != nil {
+	if h := backendHeaders(s, objective); h != nil {
 		spec["headerMutation"] = h
 	}
 	u.Object["spec"] = spec

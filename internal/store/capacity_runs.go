@@ -268,12 +268,14 @@ func (s *Store) HourlyUse(ctx context.Context, from time.Time) ([]HourUse, error
 	    GROUP BY model_id, unit, hour ORDER BY model_id, hour`, from)
 }
 
-// AllQuotas returns every tenant's quota on every model.
+// AllQuotas returns every enabled tenant's quota on every model, each
+// marked Budgeted when its tenant has a budget across models too.
 func (s *Store) AllQuotas(ctx context.Context) ([]Quota, error) {
 	return list(ctx, s, func(r scanner) (Quota, error) {
 		var q Quota
-		err := r.Scan(&q.ID, &q.TenantID, &q.ModelID, &q.ModelName, &q.TokenLimit, &q.Window, &q.Shadow)
+		err := r.Scan(&q.ID, &q.TenantID, &q.ModelID, &q.ModelName, &q.TokenLimit, &q.Window, &q.Shadow, &q.Budgeted)
 		return q, err
-	}, `SELECT q.id, q.tenant_id, q.model_id, m.name, q.token_limit, q.window_size, q.shadow
+	}, `SELECT q.id, q.tenant_id, q.model_id, m.name, q.token_limit, q.window_size, q.shadow,
+	           t.budget_credits IS NOT NULL AND t.budget_window IS NOT NULL
 	    FROM quotas q JOIN models m ON m.id = q.model_id JOIN tenants t ON t.id = q.tenant_id WHERE t.enabled`)
 }

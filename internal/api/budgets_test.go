@@ -122,3 +122,20 @@ func TestRuleCountsWithBudgets(t *testing.T) {
 		t.Fatalf("prices in a dry run: %d rules", n)
 	}
 }
+
+// A tenant from before 0.25.0 can hold an own quota beside a budget across
+// models. The budget holds it on a priced model in place of the quota, so
+// the planner does not count the quota as given: on the sandbox three such
+// quotas of 4,294,967,295 a day made a model's given 21.5 billion credits.
+func TestPlannerLeavesOutQuotasHeldByBudget(t *testing.T) {
+	quotas := []store.Quota{
+		{TenantID: "a", ModelID: "m", TokenLimit: 100, Window: "1d"},
+		{TenantID: "b", ModelID: "m", TokenLimit: 4294967295, Window: "1d", Budgeted: true},
+		{TenantID: "c", ModelID: "m", TokenLimit: 50, Window: "1d", Shadow: true},
+		{TenantID: "d", ModelID: "tokens", TokenLimit: 7, Window: "1d"},
+	}
+	tenants := tenantsOf(quotas, map[string]bool{"m": true})
+	if len(tenants) != 1 || tenants[0].ID != "a" || tenants[0].Given() != 100 {
+		t.Fatalf("tenants = %+v", tenants)
+	}
+}

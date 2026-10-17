@@ -124,12 +124,14 @@ func add(total *int64, n int64) *int64 {
 }
 
 // tenantsOf groups the enforced budgets of enabled tenants on priced models
-// by tenant. A model in tokens has no dollars to add.
+// by tenant. A model in tokens has no dollars to add. A quota of a tenant
+// with a budget across models is not enforced there: the budget holds the
+// tenant in its place, as the Usage page shows.
 func tenantsOf(quotas []store.Quota, priced map[string]bool) []budget.Tenant {
 	byID := map[string]*budget.Tenant{}
 	var order []string
 	for _, q := range quotas {
-		if q.Shadow || !priced[q.ModelID] {
+		if q.Shadow || q.Budgeted || !priced[q.ModelID] {
 			continue
 		}
 		t := byID[q.TenantID]

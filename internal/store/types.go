@@ -242,6 +242,10 @@ type Quota struct {
 	// a model with prices. The field keeps its name for callers that
 	// already use it.
 	Unit string `json:"unit"`
+	// Budgeted is set, by AllQuotas only, when the tenant also has a budget
+	// across models, which holds it on a model with prices in place of the
+	// quota: a quota from before 0.25.0, when a tenant could have both.
+	Budgeted bool `json:"-"`
 }
 
 type Overview struct {

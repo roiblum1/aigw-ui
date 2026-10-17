@@ -227,7 +227,7 @@ func setDrained(ctx context.Context, tx pgx.Tx, modelID, clusterID string, drain
 			return "", "", err
 		}
 		if others == 0 {
-			return "", "", ErrLastSite
+			return model, cluster, ErrLastSite
 		}
 	}
 	// unlisted is cleared either way: a new drain steps down first, and

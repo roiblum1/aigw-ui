@@ -233,7 +233,9 @@ func (s *Server) plans(ctx context.Context) ([]capacityModel, []capacityGPU, err
 			cm.prices = in.Prices
 		}
 		for _, q := range quotas {
-			if q.ModelID == m.ID && !q.Shadow {
+			// On a priced model, a budget across models holds its tenant in
+			// place of an own quota, which is then not enforced.
+			if q.ModelID == m.ID && !q.Shadow && !(q.Budgeted && m.Prices != nil) {
 				in.Budgets = append(in.Budgets, capacity.Budget{Limit: q.TokenLimit, Window: q.Window})
 			}
 		}
