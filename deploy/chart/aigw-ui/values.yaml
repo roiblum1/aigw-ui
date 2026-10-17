@@ -160,9 +160,11 @@ networkPolicy:
   enabled: true
 
 # The server keeps its heap to 90% of the memory limit (MEMORY_LIMIT, set
-# from it). It used 45 to 60 MiB with 1,000 tenants.
+# from it). It used 45 to 60 MiB with 1,000 tenants. It writes to several
+# clusters and reads Postgres side by side; no CPU limit, so it is never
+# throttled.
 resources:
-  requests: { cpu: 50m, memory: 128Mi }
+  requests: { cpu: 250m, memory: 128Mi }
   limits: { memory: 1Gi }
 
 nodeSelector: {}

@@ -126,7 +126,7 @@ Back up the encryption key straight away. See
 | `route.host` | chosen by OpenShift | Hostname |
 | `route.termination` | `edge` | TLS termination |
 | `networkPolicy.enabled` | `true` | Restrict access to Postgres |
-| `resources` | 128Mi requested, 1Gi limit | The server's pod. The chart passes the memory limit as `MEMORY_LIMIT`, and the server keeps its heap to 90% of it (a `GOMEMLIMIT` you set wins). It used 45 to 60 MiB with 1,000 tenants |
+| `resources` | 250m CPU and 128Mi requested, 1Gi limit, no CPU limit | The server's pod. The chart passes the memory limit as `MEMORY_LIMIT`, and the server keeps its heap to 90% of it (a `GOMEMLIMIT` you set wins). It used 45 to 60 MiB with 1,000 tenants |
 | `nodeSelector`, `tolerations` | | Standard pod settings |
 
 **Using your own secrets**

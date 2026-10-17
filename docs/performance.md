@@ -222,7 +222,7 @@ answered. The self-test's step "A long prompt is accepted" checks it.
 | Reading the usage of 205 quotas (`GET /usage`) | 0.2 s, most of it the way to Redis from outside the cluster |
 | The usage history | one such read a minute, and one write to Postgres for the tenants that used something |
 | The best-effort loop | one such read every 15 seconds, only when a model serves a spent budget as best-effort |
-| Applying a change | one server-side apply per object and cluster; a sync of 22 objects takes a few seconds |
+| Applying a change | a read and a server-side apply per object, eight at a time in four stages, at most 50 requests a second per cluster (0.31.0). Up to 0.30.0 one object after the other at client-go's 5 a second: a sync of the lab took 10 to 13 s |
 | Memory | 45 to 60 MiB with 1,000 tenants (0.23.0 to 0.29.0). 0.30.0 before its fix reached 870 MiB and was killed at its 512 MiB limit: the history built the keys of former amounts once per tenant that held the amount, 850,000 a minute of 10,000 that differ. The chart's limit is 1 GiB, and the server keeps its heap to 90% of it |
 
 The hub reads counters and writes Kubernetes objects. Its load grows with

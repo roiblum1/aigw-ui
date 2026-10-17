@@ -64,25 +64,31 @@ func (s *Syncer) discoverCluster(ctx context.Context, id string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	client, err := s.client(ctx, id)
+	client, err := s.Client(ctx, id)
 	if err != nil {
 		return 0, err
 	}
+	// What the cluster exposes and what it serves are read side by side.
+	// If either cannot be read the poll fails and nothing changes:
+	// "unknown" must not be taken for "nothing is running".
 	var found []kube.DiscoveredModel
-	if c.GatewayURL != "" {
-		found, err = s.discoverViaGateway(ctx, c, client)
-	} else {
-		found, err = client.Discover(ctx, gatewayOf(c))
+	var capacity []kube.ModelCapacity
+	var foundErr, capacityErr error
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		if c.GatewayURL != "" {
+			found, foundErr = s.discoverViaGateway(ctx, c, client)
+		} else {
+			found, foundErr = client.Discover(ctx, gatewayOf(c))
+		}
+	})
+	wg.Go(func() { capacity, capacityErr = client.Capacity(ctx) })
+	wg.Wait()
+	if foundErr != nil {
+		return 0, foundErr
 	}
-	if err != nil {
-		return 0, err
-	}
-	// What the cluster serves is read in the same poll. If it cannot be
-	// read the poll fails and nothing changes: "unknown" must not be taken
-	// for "nothing is running".
-	capacity, err := client.Capacity(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("read what the cluster serves: %w", err)
+	if capacityErr != nil {
+		return 0, fmt.Errorf("read what the cluster serves: %w", capacityErr)
 	}
 	models := make([]store.DiscoveredModel, 0, len(found))
 	exposed := map[string]bool{}
@@ -207,11 +213,15 @@ func (s *Syncer) discoverViaGateway(ctx context.Context, c store.Cluster, client
 	if err != nil {
 		return nil, err
 	}
-	routes, err := client.DiscoverAttached(ctx, gatewayOf(c))
-	if err != nil {
-		return nil, fmt.Errorf("read routes for the backends: %w", err)
-	}
+	var routes []kube.DiscoveredModel
+	var routesErr error
+	var wg sync.WaitGroup
+	wg.Go(func() { routes, routesErr = client.DiscoverAttached(ctx, gatewayOf(c)) })
 	names, err := gateway.ListModels(ctx, c.GatewayURL, token)
+	wg.Wait()
+	if routesErr != nil {
+		return nil, fmt.Errorf("read routes for the backends: %w", routesErr)
+	}
 	if err != nil && c.FleetEnabled {
 		// A fleet cluster's client listener can have no route at all until
 		// the first entry route is on, and /v1/models then answers 404. What

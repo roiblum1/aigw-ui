@@ -138,7 +138,7 @@ func (s *Server) createModel(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.changed(r, "model.add", "Added model "+in.Name)
+	s.sitesChanged(r, "model.add", "Added model "+in.Name)
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 }
 
@@ -164,7 +164,7 @@ func (s *Server) updateModel(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.changed(r, "model.update", "Changed model "+in.Name)
+	s.sitesChanged(r, "model.update", "Changed model "+in.Name)
 	writeJSON(w, http.StatusOK, map[string]string{"id": id})
 }
 
@@ -179,7 +179,7 @@ func (s *Server) deleteModel(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.changed(r, "model.delete", "Deleted model "+m.Name+" and its quotas")
+	s.sitesChanged(r, "model.delete", "Deleted model "+m.Name+" and its quotas")
 	w.WriteHeader(http.StatusNoContent)
 }
 

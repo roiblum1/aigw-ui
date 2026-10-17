@@ -4,6 +4,7 @@ package syncer
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -21,7 +22,14 @@ type Syncer struct {
 	every   time.Duration // discovery interval, 0 disables polling
 	resync  time.Duration // full sync interval, 0 disables it
 	locks   sync.Map      // cluster ID -> *sync.Mutex, one sync per cluster at a time
+	clients sync.Map      // cluster ID -> cachedClient
 	trigger chan struct{}
+}
+
+// cachedClient is a cluster's client and the kubeconfig it was made from.
+type cachedClient struct {
+	kubeconfig [sha256.Size]byte
+	client     *kube.Client
 }
 
 func New(st *store.Store, auto bool, discoverEvery, syncEvery time.Duration) *Syncer {
@@ -35,7 +43,15 @@ func (s *Syncer) Auto() bool { return s.auto }
 // saying what changed. Clusters are marked pending and, when auto sync is on,
 // a background sync is queued.
 func (s *Syncer) Changed(ctx context.Context, action, summary string) {
-	// A change to the clusters can change which sites a model has.
+	s.queue(ctx, action, summary)
+}
+
+// SitesChanged is Changed for a change that can move which sites serve a
+// model: of a cluster, of a model's endpoints or entry route, or a drain.
+// The sites and their weights are worked out again first. They lock every
+// model to do it, which no other change needs; a change missed here is
+// still picked up by the next poll of all clusters.
+func (s *Syncer) SitesChanged(ctx context.Context, action, summary string) {
 	if _, err := s.st.RefreshFleetZones(context.WithoutCancel(ctx)); err != nil {
 		slog.Error("store zone weights", "err", err)
 	}
@@ -71,14 +87,12 @@ func (s *Syncer) Record(ctx context.Context, action, summary, clusterID string) 
 }
 
 // Run processes queued syncs and polls the clusters for models until ctx is
-// cancelled.
+// cancelled. Polls run on their own, so that a change waits for no poll:
+// each cluster's sync takes its own lock, and a poll that changes something
+// queues a sync.
 func (s *Syncer) Run(ctx context.Context) {
-	var tick <-chan time.Time // stays nil, and so never fires, when polling is off
 	if s.every > 0 {
-		ticker := time.NewTicker(s.every)
-		defer ticker.Stop()
-		tick = ticker.C
-		s.DiscoverAll(ctx)
+		go s.poll(ctx)
 	}
 	// The periodic sync retries clusters that failed and puts back objects
 	// someone changed or deleted by hand. With auto sync off the operator
@@ -93,8 +107,6 @@ func (s *Syncer) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick:
-			s.DiscoverAll(ctx)
 		case <-resync:
 			s.SyncAll(ctx)
 		case <-s.trigger:
@@ -109,12 +121,28 @@ func (s *Syncer) Run(ctx context.Context) {
 	}
 }
 
+// poll polls every cluster for models every interval until ctx is
+// cancelled.
+func (s *Syncer) poll(ctx context.Context) {
+	ticker := time.NewTicker(s.every)
+	defer ticker.Stop()
+	for {
+		s.DiscoverAll(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 func (s *Syncer) SyncAll(ctx context.Context) {
 	clusters, err := s.st.ListClusters(ctx)
 	if err != nil {
 		slog.Error("list clusters", "err", err)
 		return
 	}
+	s.forget(clusters)
 	var wg sync.WaitGroup
 	for _, c := range clusters {
 		wg.Go(func() {
@@ -182,7 +210,7 @@ func heldNote(res kube.SyncResult) string {
 }
 
 func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, error) {
-	client, err := s.client(ctx, id)
+	client, err := s.Client(ctx, id)
 	if err != nil {
 		return kube.SyncResult{}, err
 	}
@@ -210,7 +238,7 @@ func (s *Syncer) syncCluster(ctx context.Context, id string) (kube.SyncResult, e
 // RenderState returns what a sync of the cluster would render, with what the
 // hub reads from the cluster for it, as syncCluster does.
 func (s *Syncer) RenderState(ctx context.Context, id string) (render.State, error) {
-	client, err := s.client(ctx, id)
+	client, err := s.Client(ctx, id)
 	if err != nil {
 		return render.State{}, err
 	}
@@ -239,7 +267,7 @@ func (s *Syncer) Probe(ctx context.Context, id string) (kube.Probe, error) {
 	if err != nil {
 		return kube.Probe{}, err
 	}
-	client, err := s.client(ctx, id)
+	client, err := s.Client(ctx, id)
 	if err != nil {
 		return kube.Probe{}, err
 	}
@@ -255,10 +283,38 @@ func (s *Syncer) ProbeWith(ctx context.Context, kubeconfig []byte, namespace, ga
 	return client.Probe(ctx, namespace, gatewayName)
 }
 
-func (s *Syncer) client(ctx context.Context, id string) (*kube.Client, error) {
+// Client returns the client of a cluster. It is kept while the cluster's
+// kubeconfig stays the same, so the sync, the polls and the measurements of
+// a cluster share its connections and its request rate.
+func (s *Syncer) Client(ctx context.Context, id string) (*kube.Client, error) {
 	kubeconfig, err := s.st.Kubeconfig(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return kube.New(kubeconfig)
+	sum := sha256.Sum256(kubeconfig)
+	if c, ok := s.clients.Load(id); ok && c.(cachedClient).kubeconfig == sum {
+		return c.(cachedClient).client, nil
+	}
+	client, err := kube.New(kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	s.clients.Store(id, cachedClient{kubeconfig: sum, client: client})
+	return client, nil
+}
+
+// forget drops the lock and the client of every cluster not in clusters.
+func (s *Syncer) forget(clusters []store.Cluster) {
+	known := make(map[string]bool, len(clusters))
+	for _, c := range clusters {
+		known[c.ID] = true
+	}
+	for _, m := range []*sync.Map{&s.locks, &s.clients} {
+		m.Range(func(id, _ any) bool {
+			if !known[id.(string)] {
+				m.Delete(id)
+			}
+			return true
+		})
+	}
 }

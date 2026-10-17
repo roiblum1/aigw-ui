@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -15,11 +16,22 @@ import (
 	"aigw-ui/internal/render"
 )
 
+// serial answers one request at a time: a sync sends several at once, and
+// the stand-ins keep what they saw in plain variables.
+func serial(h http.HandlerFunc) http.HandlerFunc {
+	var mu sync.Mutex
+	return func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		h(w, r)
+	}
+}
+
 // A server that ignores label selectors returns objects this tool does not
 // own. Sync must delete only the ones carrying its label.
 func TestSyncPrunesOnlyManagedObjects(t *testing.T) {
 	var deleted []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(serial(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodDelete:
@@ -70,7 +82,7 @@ func TestSyncPrunesOnlyManagedObjects(t *testing.T) {
 // and objects are applied to their own namespace.
 func TestSyncQuotaPoliciesAcrossNamespaces(t *testing.T) {
 	var deleted, applied []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(serial(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodPatch:
@@ -120,7 +132,7 @@ func TestSyncQuotaPoliciesAcrossNamespaces(t *testing.T) {
 // same is not listed. The gateway's verdict is read back afterwards.
 func TestSyncReportsChangesAndGatewayStatus(t *testing.T) {
 	generation := map[string]int{"old": 3, "same": 5}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(serial(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		name := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 		object := func(gen int, condition string) string {
@@ -186,7 +198,7 @@ func TestSyncReportsChangesAndGatewayStatus(t *testing.T) {
 // routes to other backends and routes that have the revision are left alone.
 func TestSyncMarksTheClustersOwnRoutes(t *testing.T) {
 	var calls []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(serial(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodPatch:
@@ -246,7 +258,8 @@ func TestSyncMarksTheClustersOwnRoutes(t *testing.T) {
 // prices of the model synced last.
 func TestSyncPricesEachModelOfASharedRoute(t *testing.T) {
 	var bodies []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	lists := 0
+	srv := httptest.NewServer(serial(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/aigatewayroutes/shared"):
@@ -256,6 +269,7 @@ func TestSyncPricesEachModelOfASharedRoute(t *testing.T) {
 		case r.Method == http.MethodPatch:
 			w.Write([]byte(`{"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"QuotaPolicy","metadata":{"name":"x","namespace":"models"}}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/namespaces/models/aigatewayroutes"):
+			lists++
 			w.Write([]byte(`{"apiVersion":"v1","kind":"List","metadata":{},"items":[
 				{"apiVersion":"aigateway.envoyproxy.io/v1beta1","kind":"AIGatewayRoute","metadata":{"name":"shared","namespace":"models"},"spec":{"rules":[
 					{"matches":[{"headers":[{"name":"x-ai-eg-model","value":"opus"}]}],"backendRefs":[{"name":"mock"}]},
@@ -284,13 +298,16 @@ func TestSyncPricesEachModelOfASharedRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `model == 'opus' ? (input_tokens * 15u) : model == 'sonnet' ? (input_tokens * 3u) : 0u`
-	if len(bodies) != 2 {
-		t.Fatalf("route patches %v", bodies)
+	if len(bodies) != 2 || lists != 1 {
+		t.Fatalf("route patches %v after %d lists; want 2 after 1", bodies, lists)
 	}
-	for _, b := range bodies {
-		if !strings.Contains(b, `"cel":"`+want+`"`) {
-			t.Errorf("patch %s, want the cost %s", b, want)
-		}
+	if !strings.Contains(bodies[0], `"cel":"`+want+`"`) {
+		t.Errorf("first patch %s, want the cost %s", bodies[0], want)
+	}
+	// The route is listed once a sync. The second policy finds the cost the
+	// first one wrote and only moves the revision.
+	if strings.Contains(bodies[1], "llmRequestCosts") || !strings.Contains(bodies[1], `"r-sonnet"`) {
+		t.Errorf("second patch %s, want only the revision r-sonnet", bodies[1])
 	}
 }
 
@@ -318,5 +335,144 @@ func TestWithCostsTokenKeys(t *testing.T) {
 	}
 	if off, changed := withCosts(route(got...), "1u", false); !changed || !reflect.DeepEqual(off, []any{theirs, credits}) {
 		t.Fatalf("not counted: %v %v", changed, off)
+	}
+}
+
+// A sync writes the tenants' keys, then the key and token policy, then what
+// routes and policies name, the routes, and the policies, each stage's
+// objects side by side. It reports them in the order they were rendered, and stops after
+// a stage that failed.
+func TestSyncAppliesInStages(t *testing.T) {
+	var order []string
+	fail := ""
+	srv := httptest.NewServer(serial(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		name := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		switch {
+		case r.Method == http.MethodPatch && name == fail:
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Invalid","code":422}`))
+		case r.Method == http.MethodPatch:
+			order = append(order, name)
+			w.Write([]byte(`{"apiVersion":"v1","kind":"Secret","metadata":{"name":"` + name + `","generation":1}}`))
+		case r.Method == http.MethodGet && strings.Count(r.URL.Path, "/") > 6:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}`))
+		default:
+			w.Write([]byte(`{"apiVersion":"v1","kind":"List","metadata":{},"items":[]}`))
+		}
+	}))
+	defer srv.Close()
+	client, err := newFromConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.settle = 0
+	object := func(apiVersion, kind, name string) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{}
+		u.SetAPIVersion(apiVersion)
+		u.SetKind(kind)
+		u.SetName(name)
+		return u
+	}
+	// In the order render.Objects gives: each model's objects, then the
+	// token policy.
+	desired := []*unstructured.Unstructured{
+		object("gateway.envoyproxy.io/v1alpha1", "Backend", "be-a"),
+		object("aigateway.envoyproxy.io/v1beta1", "AIServiceBackend", "sb-a"),
+		object("aigateway.envoyproxy.io/v1beta1", "AIGatewayRoute", "rt-a"),
+		object("gateway.envoyproxy.io/v1alpha1", "EnvoyPatchPolicy", "pp-a"),
+		object("aigateway.envoyproxy.io/v1alpha1", "QuotaPolicy", "qp-a"),
+		object("gateway.envoyproxy.io/v1alpha1", "Backend", "be-b"),
+		object("aigateway.envoyproxy.io/v1beta1", "AIGatewayRoute", "rt-b"),
+		object("gateway.envoyproxy.io/v1alpha1", "SecurityPolicy", "sp"),
+	}
+	res, err := client.Sync(context.Background(), "ns", desired, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := map[string]int{"sp": 1, "be-a": 2, "sb-a": 2, "be-b": 2, "rt-a": 3, "rt-b": 3, "pp-a": 4, "qp-a": 4}
+	for i := 1; i < len(order); i++ {
+		if stage[order[i]] < stage[order[i-1]] {
+			t.Fatalf("written in the order %v", order)
+		}
+	}
+	var reported []string
+	for _, c := range res.Changes {
+		reported = append(reported, c.Name)
+	}
+	if want := []string{"be-a", "sb-a", "rt-a", "pp-a", "qp-a", "be-b", "rt-b", "sp"}; !reflect.DeepEqual(reported, want) {
+		t.Errorf("changes %v, want %v", reported, want)
+	}
+
+	// A route that is refused stops the sync before the policies.
+	order, fail = nil, "rt-b"
+	res, err = client.Sync(context.Background(), "ns", desired, nil)
+	if err == nil || !strings.Contains(err.Error(), "rt-b") {
+		t.Fatalf("err = %v, want the refused route", err)
+	}
+	for _, name := range order {
+		if stage[name] == 4 {
+			t.Errorf("policy %s written after a route was refused: %v", name, order)
+		}
+	}
+	if res.Applied != 5 {
+		t.Errorf("%d applied, want the 5 of the first three stages that were taken", res.Applied)
+	}
+}
+
+// A client remembers each object as its last sync left it. The next sync
+// writes without reading an object first, reads the status of the objects
+// it did not change from the answers to its writes, and still tells an
+// object someone deleted in between, which it creates again.
+func TestSyncRemembersObjects(t *testing.T) {
+	gets := 0
+	uid := map[string]string{"qp": "uid-1"}
+	srv := httptest.NewServer(serial(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		name := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		object := `{"apiVersion":"aigateway.envoyproxy.io/v1alpha1","kind":"QuotaPolicy","metadata":{"name":"` + name +
+			`","namespace":"ns","uid":"` + uid[name] + `","generation":1},"status":{"conditions":[{"type":"Accepted"}]}}`
+		switch {
+		case r.Method == http.MethodPatch:
+			w.Write([]byte(object))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/quotapolicies/"+name) && name != "quotapolicies":
+			gets++
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}`))
+		default:
+			w.Write([]byte(`{"apiVersion":"v1","kind":"List","metadata":{},"items":[]}`))
+		}
+	}))
+	defer srv.Close()
+	client, err := newFromConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.settle = 0
+	policy := &unstructured.Unstructured{}
+	policy.SetAPIVersion("aigateway.envoyproxy.io/v1alpha1")
+	policy.SetKind("QuotaPolicy")
+	policy.SetName("qp")
+	desired := []*unstructured.Unstructured{policy}
+
+	res, err := client.Sync(context.Background(), "ns", desired, nil)
+	if err != nil || len(res.Changes) != 1 || res.Changes[0].Action != "created" {
+		t.Fatalf("first sync: %+v %v", res.Changes, err)
+	}
+	first := gets
+	res, err = client.Sync(context.Background(), "ns", desired, nil)
+	if err != nil || len(res.Changes) != 0 || len(res.Rejected) != 0 {
+		t.Fatalf("second sync: %+v %+v %v", res.Changes, res.Rejected, err)
+	}
+	if gets != first {
+		t.Errorf("the second sync read the policy %d times", gets-first)
+	}
+
+	// Someone deleted it: the write makes a new object.
+	uid["qp"] = "uid-2"
+	res, err = client.Sync(context.Background(), "ns", desired, nil)
+	if err != nil || len(res.Changes) != 1 || res.Changes[0].Action != "created" {
+		t.Errorf("after a delete by hand: %+v %v", res.Changes, err)
 	}
 }

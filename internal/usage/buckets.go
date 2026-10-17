@@ -59,23 +59,14 @@ type fleet struct {
 func (s *Service) load(ctx context.Context) (fleet, error) {
 	var f fleet
 	var err error
-	if f.clusters, err = s.st.ListClusters(ctx); err != nil {
+	if f.clusters, f.states, err = s.st.RenderStatesWithoutKeys(ctx); err != nil {
 		return f, err
 	}
 	if f.models, err = s.st.ListModels(ctx); err != nil {
 		return f, err
 	}
-	if f.tenants, err = s.st.ListTenants(ctx); err != nil {
-		return f, err
-	}
-	for _, c := range f.clusters {
-		state, err := s.st.RenderStateWithoutKeys(ctx, c.ID)
-		if err != nil {
-			return f, err
-		}
-		f.states = append(f.states, state)
-	}
-	return f, nil
+	f.tenants, err = s.st.ListTenants(ctx)
+	return f, err
 }
 
 // buckets works out, from the desired state of every cluster, which quotas,
@@ -175,16 +166,12 @@ func (s *Service) bucketsOf(f fleet, now time.Time, tenantID string) ([]*bucket,
 // backend: 0 for a slug no request named. ok is false when no such rule
 // counts own by the tenant header on any cluster.
 func (s *Service) UsedAs(ctx context.Context, modelSlug, own, slug string, now time.Time) (used int64, ok bool, err error) {
-	clusters, err := s.st.ListClusters(ctx)
+	_, states, err := s.st.RenderStatesWithoutKeys(ctx)
 	if err != nil {
 		return 0, false, err
 	}
 	var keys []string
-	for _, c := range clusters {
-		state, err := s.st.RenderStateWithoutKeys(ctx, c.ID)
-		if err != nil {
-			return 0, false, err
-		}
+	for _, state := range states {
 		for _, ct := range render.Counters(state) {
 			if ct.ModelSlug != modelSlug || ct.TenantSlug != own || ct.Overage {
 				continue

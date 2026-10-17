@@ -15,7 +15,6 @@ import (
 	"aigw-ui/internal/benchmark"
 	"aigw-ui/internal/config"
 	"aigw-ui/internal/history"
-	"aigw-ui/internal/kube"
 	"aigw-ui/internal/overage"
 	"aigw-ui/internal/secretbox"
 	"aigw-ui/internal/selftest"
@@ -96,12 +95,13 @@ func run() error {
 		}
 	}
 
+	// Measurements share each cluster's client with the sync.
 	bench := benchmark.New(st, func(ctx context.Context, clusterID string) (benchmark.Cluster, error) {
-		kubeconfig, err := st.Kubeconfig(ctx, clusterID)
+		client, err := sy.Client(ctx, clusterID)
 		if err != nil {
 			return nil, err
 		}
-		return kube.New(kubeconfig)
+		return client, nil
 	}, benchmark.Options{Image: cfg.CapacityImage, Every: cfg.CapacityEvery, Window: cfg.CapacityWindow, PeerMeasurements: cfg.CapacityPeer,
 		Peer: benchmark.Peer{SNI: cfg.Fleet.PeerSNI, ClientSecret: cfg.Fleet.ClientSecret, CAConfigMap: cfg.Fleet.CAConfigMap}})
 	go bench.Run(ctx)

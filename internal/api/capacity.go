@@ -361,15 +361,6 @@ func (s *Server) budgetSummary(ctx context.Context, modelID string) string {
 	return ""
 }
 
-func appendNew(list []string, v string) []string {
-	for _, x := range list {
-		if x == v {
-			return list
-		}
-	}
-	return append(list, v)
-}
-
 // maxModelLen reads the longest request a site's deployments take. Several
 // deployments with different lengths give the shortest.
 func maxModelLen(declared string) int {

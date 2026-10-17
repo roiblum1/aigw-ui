@@ -197,9 +197,11 @@ func tenantMatch(slug string) map[string]any {
 // default bucket: one per position of the tenant quotas, or of the amounts,
 // then the one for budgets across models.
 func (m Model) ruleCount() int {
-	n := len(tenantRules(m))
+	var n int
 	if m.ByAmount {
 		n = len(amountRules(m))
+	} else {
+		n = len(tenantRules(m))
 	}
 	if m.passesBudgets() {
 		n++

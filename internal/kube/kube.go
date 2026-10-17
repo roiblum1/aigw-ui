@@ -6,6 +6,7 @@ import (
 	"aigw-ui/internal/render"
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -59,13 +60,30 @@ func gvrFor(kind string) (schema.GroupVersionResource, bool) {
 	return schema.GroupVersionResource{}, false
 }
 
+// Client talks to one cluster's API server. It is safe for concurrent use,
+// and one Client per cluster shares its request rate between the sync,
+// discovery and the measurements.
 type Client struct {
 	dyn  dynamic.Interface
 	disc discovery.DiscoveryInterface
 	// settle is how long Sync waits after a change before it reads what the
 	// gateway's controller made of the objects.
 	settle time.Duration
+
+	// seen holds each object as this client's last sync left it, by
+	// objectKey, so the next sync tells what its apply did without reading
+	// the object first.
+	mu   sync.Mutex
+	seen map[string]seenObject
 }
+
+// The requests a second a Client sends at most, after a burst. client-go's
+// default of 5 after 10 made a sync of the lab's few models take 10 to 13 s
+// (0.29.0), and a revoke wait behind it.
+const (
+	maxQPS   = 50
+	maxBurst = 100
+)
 
 func New(kubeconfig []byte) (*Client, error) {
 	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
@@ -77,6 +95,7 @@ func New(kubeconfig []byte) (*Client, error) {
 
 func newFromConfig(cfg *rest.Config) (*Client, error) {
 	cfg.Timeout = 20 * time.Second
+	cfg.QPS, cfg.Burst = maxQPS, maxBurst
 	dyn, err := dynamic.NewForConfig(cfg)
 	if err != nil {
 		return nil, err

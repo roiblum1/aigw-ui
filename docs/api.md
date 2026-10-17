@@ -181,7 +181,7 @@ refused until `best_effort_until`.
 
 `GET /usage/history` takes `step` (`day`, the default, or `hour`), `days`
 (1 to 400 for days, 1 to 31 for hours; the default is 30 days or 2 days of
-hours) and `tenant_id`.
+hours) and `tenant_id`. A `tenant_id` that is not a UUID is answered 404.
 
 ```json
 {

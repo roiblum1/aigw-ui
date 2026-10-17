@@ -168,7 +168,8 @@ the clocks of the hub and the gateway to differ, and Envoy Gateway has no
 setting for it. Deleting a tenant does the same for each of its tokens, and
 the rules outlive the tenant. A disabled tenant's tokens are refused by its
 slug until it is enabled. Until a cluster has synced, a revoked token still
-works there, as an API key does.
+works there, as an API key does. A sync writes the token policy and the key
+Secret before anything else (0.31.0).
 
 **What reaches the model server.** A token is not removed by the JWT check.
 The backends the hub renders (the entry routes, the best-effort routes, and

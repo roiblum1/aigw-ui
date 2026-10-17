@@ -13,6 +13,13 @@ func (s *Server) changed(r *http.Request, action, summary string) {
 	s.sy.Changed(r.Context(), action, summary)
 }
 
+// sitesChanged is changed for a change that can move which sites serve a
+// model (syncer.SitesChanged).
+func (s *Server) sitesChanged(r *http.Request, action, summary string) {
+	note(r, action, summary)
+	s.sy.SitesChanged(r.Context(), action, summary)
+}
+
 // record adds a task for a sync the handler runs itself. clusterID limits it
 // to one cluster when not empty.
 func (s *Server) record(r *http.Request, action, summary, clusterID string) {

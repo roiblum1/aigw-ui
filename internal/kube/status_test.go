@@ -126,7 +126,7 @@ func TestSecurityPolicyOverridden(t *testing.T) {
 		var res SyncResult
 		desired := tc.live.DeepCopy()
 		delete(desired.Object, "status")
-		(&Client{dyn: dyn}).readGatewayStatus(context.Background(), "gw", []*unstructured.Unstructured{desired}, &res)
+		(&Client{dyn: dyn}).readGatewayStatus(context.Background(), "gw", []*unstructured.Unstructured{desired}, nil, &res)
 		if len(res.Warnings) != tc.warnings || len(res.Rejected) != tc.rejected {
 			t.Errorf("%s: warnings %v, rejected %v", name, res.Warnings, res.Rejected)
 			continue
@@ -234,7 +234,7 @@ func TestClassOrder(t *testing.T) {
 		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(gvr, "InferenceObjectiveList"), objs...)
 		var res SyncResult
 		desired := class("best-effort", tc.bestEffort, "glm53-b200-inference-pool")
-		(&Client{dyn: dyn}).readGatewayStatus(context.Background(), "gw", []*unstructured.Unstructured{desired}, &res)
+		(&Client{dyn: dyn}).readGatewayStatus(context.Background(), "gw", []*unstructured.Unstructured{desired}, nil, &res)
 		switch {
 		case tc.want == "" && len(res.Warnings) != 0:
 			t.Errorf("%s: warnings %v", name, res.Warnings)
@@ -328,7 +328,7 @@ func TestFlowControlWarning(t *testing.T) {
 	} {
 		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(gvr, "InferenceObjectiveList"), tc.svc)
 		var res SyncResult
-		(&Client{dyn: dyn}).readGatewayStatus(context.Background(), "gw", []*unstructured.Unstructured{class}, &res)
+		(&Client{dyn: dyn}).readGatewayStatus(context.Background(), "gw", []*unstructured.Unstructured{class}, nil, &res)
 		ok := len(res.Warnings) == 0
 		if tc.warn != "" {
 			ok = len(res.Warnings) == 1 && strings.Contains(res.Warnings[0], tc.warn)

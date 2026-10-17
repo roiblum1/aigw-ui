@@ -96,4 +96,10 @@ func TestKeyStorageAndJWKS(t *testing.T) {
 	if _, err := bad.Public(); err == nil {
 		t.Fatal("a point off the curve was accepted")
 	}
+	// RFC 7518 has the coordinates at their full size.
+	short := set.Keys[0]
+	short.X = b64.EncodeToString(make([]byte, 31))
+	if _, err := short.Public(); err == nil {
+		t.Fatal("a coordinate of 31 bytes was accepted")
+	}
 }

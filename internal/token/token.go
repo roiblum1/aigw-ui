@@ -76,17 +76,20 @@ type JWK struct {
 	Y   string `json:"y"`
 }
 
-// PublicJWK returns the key's public half.
+// PublicJWK returns the key's public half. Its coordinates are empty for a
+// key that is not a valid P-256 key, which NewKey and ParseKey never give.
 func (k Key) PublicJWK() JWK {
-	return JWK{Kty: "EC", Crv: "P-256", Alg: "ES256", Use: "sig", Kid: k.ID,
-		X: coordinate(k.Private.PublicKey.X), Y: coordinate(k.Private.PublicKey.Y)}
+	jwk := JWK{Kty: "EC", Crv: "P-256", Alg: "ES256", Use: "sig", Kid: k.ID}
+	// 0x04, then X and Y in 32 bytes each.
+	if raw, err := k.Private.PublicKey.Bytes(); err == nil && len(raw) == 1+2*coordinateSize {
+		jwk.X, jwk.Y = b64.EncodeToString(raw[1:1+coordinateSize]), b64.EncodeToString(raw[1+coordinateSize:])
+	}
+	return jwk
 }
 
-func coordinate(n *big.Int) string {
-	out := make([]byte, 32)
-	n.FillBytes(out)
-	return b64.EncodeToString(out)
-}
+// coordinateSize is the length of a P-256 coordinate in a JWK, which RFC
+// 7518 has at its full size.
+const coordinateSize = 32
 
 // Public returns the public key a JWK holds.
 func (j JWK) Public() (*ecdsa.PublicKey, error) {
@@ -101,8 +104,11 @@ func (j JWK) Public() (*ecdsa.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	pub := &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}
-	if !pub.Curve.IsOnCurve(pub.X, pub.Y) {
+	if len(x) != coordinateSize || len(y) != coordinateSize {
+		return nil, fmt.Errorf("key %s is not an EC P-256 key", j.Kid)
+	}
+	pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), append(append([]byte{4}, x...), y...))
+	if err != nil {
 		return nil, fmt.Errorf("key %s is not on the curve", j.Kid)
 	}
 	return pub, nil

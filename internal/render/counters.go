@@ -57,9 +57,12 @@ func (c Counter) Rule() string { return c.byTenant }
 // s.Models and their targets. A model with its best-effort route has the
 // counters of that route too, marked Overage.
 func Counters(s State) []Counter {
-	var out []Counter
+	// What each model's counters are made from is worked out once per model,
+	// not once per target or quota: at 1,000 tenants this was most of the
+	// time and memory the usage loops spent here.
+	budgets := s.budgets()
 	budgeted := map[string]bool{}
-	for _, b := range s.budgets() {
+	for _, b := range budgets {
 		budgeted[b.TenantSlug] = true
 	}
 	// The models each tenant held to some may call, by name.
@@ -70,11 +73,27 @@ func Counters(s State) []Counter {
 			allowed[r.TenantSlug][name] = true
 		}
 	}
+	size := 0
+	for _, m := range s.Models {
+		size += (len(m.Existing) + 2) * (1 + len(budgets) + len(m.Quotas))
+	}
+	out := make([]Counter, 0, size)
 	for _, m := range s.Models {
 		// held reports whether the tenant's budget across models holds it on
 		// the model instead of the model's rules.
-		held := func(slug string) bool { return m.passesBudgets() && budgeted[slug] }
-		rules := tenantRules(m)
+		passes := m.passesBudgets()
+		held := func(slug string) bool { return passes && budgeted[slug] }
+		var rules []TenantQuota
+		amounts := map[QuotaAmount]int{}
+		if m.ByAmount {
+			for slot, a := range amountRules(m) {
+				a.Slot = 0
+				amounts[a] = slot
+			}
+		} else {
+			rules = tenantRules(m)
+		}
+		ruleCount := m.ruleCount()
 		seen := map[string]bool{}
 		targets := m.targets()
 		overageAt := -1
@@ -94,16 +113,16 @@ func Counters(s State) []Counter {
 			}
 			seen[backend+"\x00"+t.Model] = true
 			prefix := quotaDomain + "_backend_name_" + backend + "_model_name_override_" + t.Model + "_"
-			if m.ruleCount() > 0 || overage {
+			if ruleCount > 0 || overage {
 				// The default bucket is named after the number of rules before it.
 				limit, window := m.defaultBucket(overage)
-				pool := "rule-" + strconv.Itoa(m.ruleCount()) + "-match--1"
+				pool := "rule-" + strconv.Itoa(ruleCount) + "-match--1"
 				out = append(out, Counter{
 					ModelSlug: m.Slug, Backend: backend, Limit: limit, Window: window, Pool: true, Overage: overage,
 					stem: prefix + pool + "_" + pool + "_",
 				})
 			}
-			if m.passesBudgets() {
+			if passes {
 				// Each tenant with a budget across models is counted on its own
 				// under the last rule, which never refuses: what it used of
 				// the model inside its budget. A tenant with a quota of its own
@@ -112,8 +131,8 @@ func Counters(s State) []Counter {
 				for _, q := range m.Quotas {
 					own[q.TenantSlug] = true
 				}
-				stem := budgetPassStem(prefix, m.ruleCount()-1)
-				for _, b := range s.budgets() {
+				stem := budgetPassStem(prefix, ruleCount-1)
+				for _, b := range budgets {
 					// A tenant held to other models is refused this one by
 					// the gateway, so it never uses it.
 					if names, held := allowed[b.TenantSlug]; own[b.TenantSlug] || (held && !names[m.Name]) {
@@ -128,12 +147,17 @@ func Counters(s State) []Counter {
 			}
 			if m.ByAmount {
 				// Each tenant is counted on its own under its amount's rule.
+				stems := map[int]string{}
 				for _, q := range m.Quotas {
-					a, slot, ok := amountOf(m, q)
+					slot, ok := amounts[QuotaAmount{Limit: q.Limit, Window: q.Window, Shadow: q.Shadow}]
 					if q.TenantSlug == "" || !ok {
 						continue
 					}
-					stem := amountStem(prefix, slot, m, a)
+					stem, ok := stems[slot]
+					if !ok {
+						stem = amountStem(prefix, slot, m, QuotaAmount{Slot: slot, Limit: q.Limit, Window: q.Window, Shadow: q.Shadow})
+						stems[slot] = stem
+					}
 					out = append(out, Counter{
 						ModelSlug: m.Slug, TenantSlug: q.TenantSlug, Backend: backend,
 						Limit: q.Limit, Window: q.Window, Shadow: q.Shadow || overage || m.DryRun || held(q.TenantSlug), Overage: overage,

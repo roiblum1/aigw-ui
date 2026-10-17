@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -67,6 +68,9 @@ func version(obj *unstructured.Unstructured) string {
 //
 // held names objects of this tool that are not in desired and must stay as
 // they are all the same.
+//
+// The objects are written in the stages of applyStage, each stage's side by
+// side; what Sync reports is in the order of desired.
 func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstructured.Unstructured, held map[string]bool) (SyncResult, error) {
 	var res SyncResult
 	// kept holds "<kind>/<namespace>/<name>" of every desired object, so the
@@ -78,13 +82,17 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 	// Before any policy is written: the gateway's controller looks at a
 	// route when its policy changes, and the mark has to be there by then.
 	priced, tokens := pricedPolicies(desired), countsTokens(desired)
+	routes := routeLists{}
 	for _, obj := range desired {
-		if err := c.markRoutes(ctx, namespace, obj, priced, tokens, &res); err != nil {
+		if err := c.markRoutes(ctx, namespace, obj, priced, tokens, routes, &res); err != nil {
 			return res, err
 		}
 	}
 
-	for _, obj := range desired {
+	// The routes marked above, which come before every object in Changes.
+	marks := res.Changes
+	objs := make([]*unstructured.Unstructured, len(desired))
+	for i, obj := range desired {
 		if obj.GetNamespace() == "" {
 			obj = obj.DeepCopy()
 			obj.SetNamespace(namespace)
@@ -92,26 +100,119 @@ func (c *Client) Sync(ctx context.Context, namespace string, desired []*unstruct
 		if anyNamespace[obj.GetKind()] {
 			elsewhere[obj.GetNamespace()] = true
 		}
-		action, err := c.apply(ctx, obj)
-		if err != nil && optional[obj.GetKind()] && missingKind(err) {
-			res.Skipped = append(res.Skipped, obj.GetKind()+" "+obj.GetNamespace()+"/"+obj.GetName())
-			continue
+		objs[i] = obj
+	}
+	outcomes := make([]applied, len(objs))
+	for _, stage := range stages(objs) {
+		var wg sync.WaitGroup
+		slots := make(chan struct{}, applyWorkers)
+		for _, i := range stage {
+			slots <- struct{}{}
+			wg.Go(func() {
+				defer func() { <-slots }()
+				outcomes[i].action, outcomes[i].live, outcomes[i].err = c.apply(ctx, objs[i])
+				outcomes[i].done = true
+			})
 		}
-		if err != nil {
+		wg.Wait()
+		if err := record(objs, outcomes, marks, kept, &res); err != nil {
 			return res, err
-		}
-		kept[objectKey(obj.GetKind(), obj.GetNamespace(), obj.GetName())] = true
-		res.Applied++
-		if action != "" {
-			res.Changes = append(res.Changes, Change{Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName(), Action: action})
 		}
 	}
 
 	if err := c.prune(ctx, namespace, elsewhere, kept, held, &res); err != nil {
 		return res, err
 	}
-	c.readGatewayStatus(ctx, namespace, desired, &res)
+	// An object the sync did not change has the status it had, which the
+	// apply's answer carries: only the changed ones are read again.
+	unchanged := map[string]*unstructured.Unstructured{}
+	for i, o := range outcomes {
+		if o.err == nil && o.action == "" && o.live != nil {
+			unchanged[objectKey(objs[i].GetKind(), objs[i].GetNamespace(), objs[i].GetName())] = o.live
+		}
+	}
+	c.readGatewayStatus(ctx, namespace, desired, unchanged, &res)
 	return res, nil
+}
+
+// applyWorkers is how many objects of a stage are written at once.
+const applyWorkers = 8
+
+// applyStage orders the kinds a sync writes: the tenants' keys and then the
+// key and token policy that names them first, so that a revoke is in effect
+// at the start of a sync rather than at its end; then what routes and
+// policies name, the routes, and the policies that attach to routes and
+// backends. A kind not listed comes last.
+var applyStage = map[string]int{
+	"Secret":         0,
+	"SecurityPolicy": 1,
+	"Backend":        2, "AIServiceBackend": 2, render.ObjectiveKind: 2,
+	"AIGatewayRoute":       3,
+	"QuotaPolicy":          4,
+	"BackendTrafficPolicy": 4,
+	"EnvoyPatchPolicy":     4,
+}
+
+// stages returns the positions of objs by stage, in stage order and, within
+// a stage, in the order of objs.
+func stages(objs []*unstructured.Unstructured) [][]int {
+	byStage := map[int][]int{}
+	last := 0
+	for i, obj := range objs {
+		stage, ok := applyStage[obj.GetKind()]
+		if !ok {
+			stage = len(applyStage)
+		}
+		byStage[stage] = append(byStage[stage], i)
+		last = max(last, stage)
+	}
+	var out [][]int
+	for stage := 0; stage <= last; stage++ {
+		if len(byStage[stage]) > 0 {
+			out = append(out, byStage[stage])
+		}
+	}
+	return out
+}
+
+// applied is what writing one object did, and the object as it is then.
+type applied struct {
+	done   bool
+	action string
+	live   *unstructured.Unstructured
+	err    error
+}
+
+// record puts the objects written so far into res after marks, in the order
+// of objs, and returns the first error in that order: the sync stops after
+// the stage that failed, as it stopped at the object that failed when it
+// wrote one object at a time.
+func record(objs []*unstructured.Unstructured, outcomes []applied, marks []Change, kept map[string]bool, res *SyncResult) error {
+	res.Applied, res.Skipped = 0, nil
+	changes := append([]Change(nil), marks...)
+	var first error
+	for i, o := range outcomes {
+		obj := objs[i]
+		switch {
+		case !o.done:
+			continue
+		case o.err != nil && optional[obj.GetKind()] && missingKind(o.err):
+			res.Skipped = append(res.Skipped, obj.GetKind()+" "+obj.GetNamespace()+"/"+obj.GetName())
+			continue
+		case o.err != nil:
+			if first == nil {
+				first = o.err
+			}
+			continue
+		}
+		kept[objectKey(obj.GetKind(), obj.GetNamespace(), obj.GetName())] = true
+		res.Applied++
+		if o.action != "" {
+			changes = append(changes, Change{Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName(), Action: o.action})
+		}
+	}
+	res.Changes = changes
+	return first
 }
 
 func objectKey(kind, namespace, name string) string { return kind + "/" + namespace + "/" + name }
@@ -131,7 +232,7 @@ func objectKey(kind, namespace, name string) string { return kind + "/" + namesp
 // sends to, not from this policy alone: a route that serves two priced
 // models charges each its own prices, and one model's sync does not
 // overwrite the other's.
-func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstructured.Unstructured, priced []pricedPolicy, tokens bool, res *SyncResult) error {
+func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstructured.Unstructured, priced []pricedPolicy, tokens bool, lists routeLists, res *SyncResult) error {
 	revision := policy.GetAnnotations()[render.QuotaRevisionAnnotation]
 	if policy.GetKind() != "QuotaPolicy" || revision == "" {
 		return nil
@@ -148,14 +249,12 @@ func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstr
 		}
 	}
 	gvr, _ := gvrFor("AIGatewayRoute")
-	routes, err := c.dyn.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	routes, err := lists.of(ctx, c, gvr, namespace)
 	if err != nil {
-		if missingKind(err) {
-			return nil
-		}
-		return fmt.Errorf("list AIGatewayRoute in %s: %w", namespace, describe(err))
+		return err
 	}
-	for _, route := range routes.Items {
+	for i := range routes {
+		route := routes[i]
 		if route.GetLabels()[render.ManagedLabel] == render.ManagedValue || !sendsTo(route, backends) {
 			continue
 		}
@@ -179,9 +278,43 @@ func (c *Client) markRoutes(ctx context.Context, namespace string, policy *unstr
 		if err != nil {
 			return fmt.Errorf("mark AIGatewayRoute %s/%s for its new quota rules: %w", namespace, route.GetName(), describe(err))
 		}
+		// The next policy of the sync sees the route as this mark left it.
+		marked := route.DeepCopy()
+		annotations := marked.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		annotations[render.QuotaRevisionAnnotation] = revision
+		marked.SetAnnotations(annotations)
+		if spec, ok := marked.Object["spec"].(map[string]any); ok && costsChanged {
+			spec["llmRequestCosts"] = costs
+		}
+		routes[i] = *marked
 		res.Changes = append(res.Changes, Change{Kind: "AIGatewayRoute", Namespace: namespace, Name: route.GetName(), Action: "updated"})
 	}
 	return nil
+}
+
+// routeLists holds the AIGatewayRoutes of each namespace for one sync:
+// listed once, however many policies the namespace has, and kept as each
+// mark leaves them.
+type routeLists map[string][]unstructured.Unstructured
+
+// of returns the routes of namespace, none when the cluster has no such kind.
+func (l routeLists) of(ctx context.Context, c *Client, gvr schema.GroupVersionResource, namespace string) ([]unstructured.Unstructured, error) {
+	if routes, ok := l[namespace]; ok {
+		return routes, nil
+	}
+	list, err := c.dyn.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if missingKind(err) {
+		l[namespace] = nil
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list AIGatewayRoute in %s: %w", namespace, describe(err))
+	}
+	l[namespace] = list.Items
+	return list.Items, nil
 }
 
 // pricedPolicy is a QuotaPolicy of the sync that carries a model's credits
@@ -326,41 +459,89 @@ func sendsTo(route unstructured.Unstructured, backends map[string]bool) bool {
 }
 
 // apply writes one object with server-side apply and reports what that did:
-// "created", "updated", or "" when the object was already as desired.
-func (c *Client) apply(ctx context.Context, obj *unstructured.Unstructured) (string, error) {
+// "created", "updated", or "" when the object was already as desired, and
+// the object as the cluster has it now.
+//
+// What it did is told from the object before: as this client's last sync
+// left it, or, the first time, read from the cluster. An object someone
+// else changed since is reported as updated, once.
+func (c *Client) apply(ctx context.Context, obj *unstructured.Unstructured) (string, *unstructured.Unstructured, error) {
 	kind, ns, name := obj.GetKind(), obj.GetNamespace(), obj.GetName()
 	gvr, ok := gvrFor(kind)
 	if !ok {
-		return "", fmt.Errorf("unsupported kind %s", kind)
+		return "", nil, fmt.Errorf("unsupported kind %s", kind)
 	}
 	body, err := json.Marshal(obj.Object)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	// Looking first is what tells a create from an update, and an update
-	// from an apply that changed nothing.
-	before, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return "", fmt.Errorf("read %s %s/%s: %w", kind, ns, name, describe(err))
+	key := objectKey(kind, ns, name)
+	before, existed := c.lastSeen(key)
+	if !existed {
+		live, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return "", nil, fmt.Errorf("read %s %s/%s: %w", kind, ns, name, describe(err))
+		}
+		if existed = err == nil && live.GetName() == name; existed {
+			before = seenAs(live)
+		}
 	}
-	existed := err == nil && before.GetName() == name
 	force := true
 	after, err := c.dyn.Resource(gvr).Namespace(ns).Patch(ctx, name, types.ApplyPatchType, body,
 		metav1.PatchOptions{FieldManager: fieldManager, Force: &force})
 	if err != nil {
-		return "", fmt.Errorf("apply %s %s/%s: %w", kind, ns, name, describe(err))
+		c.forget(key)
+		return "", nil, fmt.Errorf("apply %s %s/%s: %w", kind, ns, name, describe(err))
 	}
 	dropped, err := c.dropUnownedSecretEntries(ctx, gvr, obj, after)
 	if err != nil {
-		return "", fmt.Errorf("remove old entries from %s %s/%s: %w", kind, ns, name, describe(err))
+		c.forget(key)
+		return "", nil, fmt.Errorf("remove old entries from %s %s/%s: %w", kind, ns, name, describe(err))
 	}
+	if dropped != nil {
+		after = dropped
+	}
+	c.remember(key, after)
 	switch {
-	case !existed:
-		return "created", nil
-	case dropped || version(before) != version(after):
-		return "updated", nil
+	case !existed || before.uid != after.GetUID():
+		return "created", after, nil
+	case dropped != nil || before.version != version(after):
+		return "updated", after, nil
 	}
-	return "", nil
+	return "", after, nil
+}
+
+// seenObject is an object as a sync last left it: which object, and the
+// version of its content.
+type seenObject struct {
+	uid     types.UID
+	version string
+}
+
+func seenAs(obj *unstructured.Unstructured) seenObject {
+	return seenObject{uid: obj.GetUID(), version: version(obj)}
+}
+
+func (c *Client) lastSeen(key string) (seenObject, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	o, ok := c.seen[key]
+	return o, ok
+}
+
+func (c *Client) remember(key string, obj *unstructured.Unstructured) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.seen == nil {
+		c.seen = map[string]seenObject{}
+	}
+	c.seen[key] = seenAs(obj)
+}
+
+func (c *Client) forget(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.seen, key)
 }
 
 // dropUnownedSecretEntries removes the entries of a Secret that the desired
@@ -368,9 +549,9 @@ func (c *Client) apply(ctx context.Context, obj *unstructured.Unstructured) (str
 // only removes what it knows this tool owns, and it does not know that for
 // entries written through stringData, which is how versions before 0.6.1
 // wrote API keys. Without this, a key revoked back then would stay valid.
-func (c *Client) dropUnownedSecretEntries(ctx context.Context, gvr schema.GroupVersionResource, desired, live *unstructured.Unstructured) (bool, error) {
+func (c *Client) dropUnownedSecretEntries(ctx context.Context, gvr schema.GroupVersionResource, desired, live *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if desired.GetKind() != "Secret" || live == nil {
-		return false, nil
+		return nil, nil
 	}
 	want, _, _ := unstructured.NestedMap(desired.Object, "data")
 	have, _, _ := unstructured.NestedMap(live.Object, "data")
@@ -381,33 +562,39 @@ func (c *Client) dropUnownedSecretEntries(ctx context.Context, gvr schema.GroupV
 		}
 	}
 	if len(remove) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	patch, err := json.Marshal(map[string]any{"data": remove})
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	_, err = c.dyn.Resource(gvr).Namespace(desired.GetNamespace()).Patch(ctx, desired.GetName(), types.MergePatchType, patch,
+	return c.dyn.Resource(gvr).Namespace(desired.GetNamespace()).Patch(ctx, desired.GetName(), types.MergePatchType, patch,
 		metav1.PatchOptions{FieldManager: fieldManager})
-	return err == nil, err
 }
 
 // prune deletes the objects this tool created earlier that are not in kept
-// and whose name is not in held.
+// and whose name is not in held. Every kind is listed at once; the deletes
+// go in the order of managed.
 func (c *Client) prune(ctx context.Context, namespace string, elsewhere, kept, held map[string]bool, res *SyncResult) error {
 	selector := render.ManagedLabel + "=" + render.ManagedValue
-	for _, m := range managed {
-		var items []unstructured.Unstructured
-		var err error
-		if anyNamespace[m.Kind] {
-			items, err = c.managedAnywhere(ctx, m.GVR, selector, elsewhere)
-		} else {
-			items, err = c.managedObjects(ctx, namespace, m.Kind, m.GVR, selector)
-		}
-		if err != nil {
+	lists := make([][]unstructured.Unstructured, len(managed))
+	errs := make([]error, len(managed))
+	var wg sync.WaitGroup
+	for n, m := range managed {
+		wg.Go(func() {
+			if anyNamespace[m.Kind] {
+				lists[n], errs[n] = c.managedAnywhere(ctx, m.GVR, selector, elsewhere)
+			} else {
+				lists[n], errs[n] = c.managedObjects(ctx, namespace, m.Kind, m.GVR, selector)
+			}
+		})
+	}
+	wg.Wait()
+	for n, m := range managed {
+		if err := errs[n]; err != nil {
 			return fmt.Errorf("list %s: %w", m.Kind, describe(err))
 		}
-		for _, item := range items {
+		for _, item := range lists[n] {
 			// Never rely on the server-side selector alone: deleting an object
 			// this tool does not own would take down someone else's route.
 			if item.GetLabels()[render.ManagedLabel] != render.ManagedValue {
@@ -416,6 +603,7 @@ func (c *Client) prune(ctx context.Context, namespace string, elsewhere, kept, h
 			if kept[objectKey(m.Kind, item.GetNamespace(), item.GetName())] || held[item.GetName()] {
 				continue
 			}
+			c.forget(objectKey(m.Kind, item.GetNamespace(), item.GetName()))
 			err := c.dyn.Resource(m.GVR).Namespace(item.GetNamespace()).Delete(ctx, item.GetName(), metav1.DeleteOptions{})
 			if err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("delete %s %s/%s: %w", m.Kind, item.GetNamespace(), item.GetName(), describe(err))
