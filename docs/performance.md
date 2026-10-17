@@ -223,6 +223,7 @@ answered. The self-test's step "A long prompt is accepted" checks it.
 | The usage history | one such read a minute, and one write to Postgres for the tenants that used something |
 | The best-effort loop | one such read every 15 seconds, only when a model serves a spent budget as best-effort |
 | Applying a change | one server-side apply per object and cluster; a sync of 22 objects takes a few seconds |
+| Memory | 45 to 60 MiB with 1,000 tenants (0.23.0 to 0.29.0). 0.30.0 before its fix reached 870 MiB and was killed at its 512 MiB limit: the history built the keys of former amounts once per tenant that held the amount, 850,000 a minute of 10,000 that differ. The chart's limit is 1 GiB, and the server keeps its heap to 90% of it |
 
 The hub reads counters and writes Kubernetes objects. Its load grows with
 the number of tenants, models and clusters, not with the number of

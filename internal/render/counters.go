@@ -47,6 +47,12 @@ func (c Counter) For(slug string) (Counter, bool) {
 	return c, true
 }
 
+// Rule names the rule that keeps the counter, for a rule that counts each
+// tenant by the tenant header: every tenant's counter under the rule has
+// the same name here, and For gives the same counter from any of them.
+// Empty for a rule of one tenant.
+func (c Counter) Rule() string { return c.byTenant }
+
 // Counters lists every counter the given state creates, in the order of
 // s.Models and their targets. A model with its best-effort route has the
 // counters of that route too, marked Overage.

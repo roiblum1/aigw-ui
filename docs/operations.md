@@ -217,6 +217,7 @@ sign-in or API call.
 | A model's pool let more than its limit through in one period | Its number of rules changed (a new amount, or the first budget across models) and its counter started over | Expected; see [architecture](architecture.md#live-usage) |
 | A revoked token still answers for 10 to 20 s | A revoke reaches the gateways with the next sync, which waits for one already running (13 s on the lab with 1,000 tenants) | Expected: the gateways learn of a revoke from the sync |
 | A model deleted by hand comes back with no endpoint | Up to 0.29.0, discovery added a name the gateway still listed after the hub removed its route | Delete it again. From 0.30.0 a name only the gateway's list has adds no model |
+| The hub's pod restarts with `OOMKilled` | 0.30.0 before its fix: with many tenants whose limits changed within a token's lifetime, the usage history built every key once per tenant that held the amount (870 MiB at 1,000 tenants) | Upgrade. The hub then keeps its heap to 90% of its memory limit (`MEMORY_LIMIT`, set by the chart, 1Gi by default) and used 45 to 60 MiB at 1,000 tenants |
 | Requests are rejected with 429 for a tenant that has no quota | The model has quotas for other tenants, so this one only has the shared pool | Give the tenant a quota |
 
 ## Upgrading Envoy Gateway to 1.10

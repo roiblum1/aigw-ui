@@ -118,20 +118,26 @@ func (s *Service) formerAmounts(f fleet, now time.Time) []HistoryCounter {
 		modelBySlug[m.Slug] = m
 	}
 	var out []HistoryCounter
+	// Each rule is taken once: every tenant's counter under it gives the
+	// same counter for another tenant, and so does every cluster that
+	// renders it. Taking each counter in turn made up to 850,000 counters
+	// a minute, of which 8,500 differed, at 1,000 tenants, and the hub ran
+	// out of memory.
+	rules := map[string]bool{}
 	for _, state := range f.states {
 		for _, ct := range render.Counters(state) {
 			m, ok := modelBySlug[ct.ModelSlug]
-			if !ok || ct.Pool || ct.Budget || ct.TenantSlug == "" {
+			if !ok || ct.Pool || ct.Budget || ct.TenantSlug == "" || ct.Rule() == "" || rules[ct.Rule()] {
 				continue
 			}
+			rules[ct.Rule()] = true
 			for _, t := range recent {
 				if t.Models != nil && !slices.Contains(t.Models, m.ID) {
 					continue
 				}
-				if other, ok := ct.For(t.Slug); ok {
-					out = append(out, HistoryCounter{Key: other.RedisKey(s.rd.Prefix, now), UsageKey: store.UsageKey{TenantID: t.ID, ModelID: m.ID},
-						Kind: kindOf(ct.Overage), Unit: m.Unit, Window: ct.Window})
-				}
+				other, _ := ct.For(t.Slug)
+				out = append(out, HistoryCounter{Key: other.RedisKey(s.rd.Prefix, now), UsageKey: store.UsageKey{TenantID: t.ID, ModelID: m.ID},
+					Kind: kindOf(ct.Overage), Unit: m.Unit, Window: ct.Window})
 			}
 		}
 	}

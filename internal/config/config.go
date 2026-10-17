@@ -77,6 +77,10 @@ type Config struct {
 	// TokenRenewedLifetime is how long a token a personal key gets lives.
 	TokenRenewedLifetime time.Duration
 
+	// MemoryLimit is the container's memory limit in bytes, 0 when not
+	// known. The server keeps its heap to 90% of it.
+	MemoryLimit int64
+
 	// Fleet is what every site's entry route has in common. PeerSNI is
 	// empty when neither FLEET_PEER_SNI nor FLEET_DOMAIN is set, and no
 	// entry route can be turned on then.
@@ -167,6 +171,11 @@ func Load() (*Config, error) {
 		return nil, errors.New("TOKEN_RENEWED_LIFETIME_HOURS must be a whole number of hours from 1 to 2160 such as 168")
 	}
 	c.TokenRenewedLifetime = time.Duration(hours) * time.Hour
+	if v := os.Getenv("MEMORY_LIMIT"); v != "" {
+		if c.MemoryLimit, err = strconv.ParseInt(v, 10, 64); err != nil || c.MemoryLimit < 0 {
+			return nil, errors.New("MEMORY_LIMIT must be a number of bytes such as 1073741824")
+		}
+	}
 	c.Fleet.BestEffortPriority, err = strconv.ParseInt(envOr("BEST_EFFORT_PRIORITY", strconv.Itoa(render.DefaultBestEffortPriority)), 10, 32)
 	if err != nil || c.Fleet.BestEffortPriority >= 0 {
 		return nil, errors.New("BEST_EFFORT_PRIORITY must be a whole number below 0 such as -1")

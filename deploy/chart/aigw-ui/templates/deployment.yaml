@@ -50,6 +50,10 @@ spec:
               valueFrom:
                 secretKeyRef: { name: {{ .Values.externalDatabase.existingSecret }}, key: url }
             {{- end }}
+            # The server keeps its heap below the container's memory limit.
+            - name: MEMORY_LIMIT
+              valueFrom:
+                resourceFieldRef: { resource: limits.memory }
             - name: DISCOVERY_INTERVAL
               value: {{ .Values.config.discoveryInterval | quote }}
             - name: OVERAGE_INTERVAL

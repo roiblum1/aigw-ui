@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -34,6 +35,12 @@ func run() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	// The collector works harder as the heap nears the container's limit,
+	// rather than the platform killing the pod there. A GOMEMLIMIT of the
+	// operator's own wins.
+	if cfg.MemoryLimit > 0 && os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(cfg.MemoryLimit / 10 * 9)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

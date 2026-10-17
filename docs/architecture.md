@@ -795,7 +795,11 @@ The counters a tenant has are those of its quota or budget, and while a
 token signed before its last change of limits may still be in use (the
 longer of `tokens.lifetimeDays` and `tokens.renewedLifetimeHours`), those of
 every other amount of the model: such a token is counted under the amount it
-names. A reset of a tenant's quota records the use since the last look
+names. Each amount's rule is read once per such tenant, on each route the
+model counts on, however many tenants hold the amount and however many
+clusters render it. With the default token lifetime of 180 days that is
+nearly every tenant: at 1,000 tenants and five amounts on a best-effort
+model, 10,000 keys a minute. A reset of a tenant's quota records the use since the last look
 first, so the reset does not take it out of the history. A quota's counter
 keeps a cursor at 0 too; a token counter while another of the pair's holds
 something.

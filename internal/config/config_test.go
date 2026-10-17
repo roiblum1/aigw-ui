@@ -17,6 +17,7 @@ func valid(t *testing.T) {
 		"OVERAGE_INTERVAL", "OVERAGE_THRESHOLD", "BEST_EFFORT_PRIORITY",
 		"FLEET_PEER_SNI", "FLEET_DOMAIN", "FLEET_PEER_CA_CONFIGMAP", "FLEET_PEER_CLIENT_SECRET", "FLEET_SESSION_HEADER",
 		"CAPACITY_PEER_MEASUREMENTS", "TOKEN_ISSUER", "TOKEN_AUDIENCE", "TOKEN_LIFETIME_DAYS", "TOKEN_RENEWED_LIFETIME_HOURS",
+		"MEMORY_LIMIT",
 	} {
 		t.Setenv(name, "")
 	}
@@ -51,6 +52,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if c.Fleet.PeerSNI != "" {
 		t.Errorf("peer SNI = %q without FLEET_DOMAIN or FLEET_PEER_SNI", c.Fleet.PeerSNI)
+	}
+	if c.MemoryLimit != 0 {
+		t.Errorf("memory limit = %d without MEMORY_LIMIT", c.MemoryLimit)
 	}
 	if got := strings.Join(c.Fleet.SessionHeaders, ","); got != "x-claude-code-session-id,x-openwebui-chat-id" {
 		t.Errorf("session headers = %q", got)
@@ -100,6 +104,9 @@ func TestLoadRefuses(t *testing.T) {
 		{"TOKEN_LIFETIME_DAYS", "4000", "TOKEN_LIFETIME_DAYS"},
 		{"TOKEN_RENEWED_LIFETIME_HOURS", "0", "TOKEN_RENEWED_LIFETIME_HOURS"},
 		{"TOKEN_RENEWED_LIFETIME_HOURS", "7d", "TOKEN_RENEWED_LIFETIME_HOURS"},
+		// The chart passes the limit in bytes, as the pod's spec gives it.
+		{"MEMORY_LIMIT", "1Gi", "MEMORY_LIMIT"},
+		{"MEMORY_LIMIT", "-1", "MEMORY_LIMIT"},
 	} {
 		t.Run(tc.name+"="+tc.value, func(t *testing.T) {
 			valid(t)
@@ -119,5 +126,19 @@ func TestLoadZeroTurnsIntervalsOff(t *testing.T) {
 	c, err := Load()
 	if err != nil || c.DiscoverEvery != 0 || c.SyncEvery != 0 {
 		t.Errorf("intervals = %v, %v, %v", c.DiscoverEvery, c.SyncEvery, err)
+	}
+}
+
+// The chart sets MEMORY_LIMIT from the container's memory limit, which the
+// pod's spec gives in bytes.
+func TestLoadMemoryLimit(t *testing.T) {
+	valid(t)
+	t.Setenv("MEMORY_LIMIT", "1073741824")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MemoryLimit != 1<<30 {
+		t.Errorf("memory limit = %d, want %d", c.MemoryLimit, 1<<30)
 	}
 }
