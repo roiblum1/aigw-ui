@@ -110,9 +110,9 @@ func (s *Store) RecordUsage(ctx context.Context, look func(Before) (Look, error)
 				    cached_tokens = token_hours.cached_tokens + EXCLUDED.cached_tokens, output_tokens = token_hours.output_tokens + EXCLUDED.output_tokens`,
 				d.TenantID, d.ModelID, d.Hour.UTC().Truncate(time.Hour), d.Requests, d.Input, d.Cached, d.Output)
 		}
-		keys := make([]string, 0, len(found.Cursors))
+		kept := make(map[string]bool, len(found.Cursors))
 		for _, c := range found.Cursors {
-			keys = append(keys, c.Key)
+			kept[c.Key] = true
 			if old, ok := before.Cursors[c.Key]; ok && old == c {
 				continue
 			}
@@ -121,10 +121,17 @@ func (s *Store) RecordUsage(ctx context.Context, look func(Before) (Look, error)
 				ON CONFLICT (redis_key) DO UPDATE SET value = EXCLUDED.value`,
 				c.Key, c.TenantID, c.ModelID, c.Kind, c.Unit, c.Window, c.WindowStart, c.Value)
 		}
-		if len(before.Cursors) > 0 {
-			// The counters that held nothing this time, or whose window is
-			// over and was read to its end, lose their cursor.
-			batch.Queue(`DELETE FROM usage_counter_cursors WHERE NOT (redis_key = ANY($1))`, keys)
+		// The counters that held nothing this time, or whose window is over
+		// and was read to its end, lose their cursor. Only those are named:
+		// the lock and the cursors read under it say which they are.
+		var gone []string
+		for key := range before.Cursors {
+			if !kept[key] {
+				gone = append(gone, key)
+			}
+		}
+		if len(gone) > 0 {
+			batch.Queue(`DELETE FROM usage_counter_cursors WHERE redis_key = ANY($1)`, gone)
 		}
 		if len(before.Legacy) > 0 {
 			batch.Queue(`DELETE FROM usage_cursors`)
@@ -205,9 +212,28 @@ func (s *Store) UsageHistory(ctx context.Context, from time.Time, step, tenantID
 		return p, err
 	}, `SELECT date_trunc($2, u.hour, 'UTC') AS at, u.tenant_id, t.slug, u.model_id, m.name, u.unit, sum(u.used)::bigint, sum(u.best_effort)::bigint
 		FROM usage_hours u JOIN tenants t ON t.id = u.tenant_id JOIN models m ON m.id = u.model_id
-		WHERE u.hour >= $1 AND ($3 = '' OR u.tenant_id::text = $3)
+		WHERE u.hour >= $1`+ofTenant("u", tenantID)+`
 		GROUP BY at, u.tenant_id, t.slug, u.model_id, m.name, u.unit
-		ORDER BY at, t.slug, m.name`, from, step, tenantID)
+		ORDER BY at, t.slug, m.name`, historyArgs(from, step, tenantID)...)
+}
+
+// ofTenant limits a history query to one tenant when tenantID is set. The
+// uuid is compared as it is, so the tenant's rows are found by the primary
+// key rather than among every tenant's: compared as text, the tenant's page
+// read every tenant's history of the last 30 days. A malformed ID is
+// ErrNotFound.
+func ofTenant(table, tenantID string) string {
+	if tenantID == "" {
+		return ""
+	}
+	return " AND " + table + ".tenant_id = $3"
+}
+
+func historyArgs(from time.Time, step, tenantID string) []any {
+	if tenantID == "" {
+		return []any{from, step}
+	}
+	return []any{from, step, tenantID}
 }
 
 // TokenPoint is what one tenant sent to one model in one step of the token
@@ -239,9 +265,9 @@ func (s *Store) TokenHistory(ctx context.Context, from time.Time, step, tenantID
 	}, `SELECT date_trunc($2, h.hour, 'UTC') AS at, h.tenant_id, t.slug, h.model_id, m.name,
 		       sum(h.requests)::bigint, sum(h.input_tokens)::bigint, sum(h.cached_tokens)::bigint, sum(h.output_tokens)::bigint
 		FROM token_hours h JOIN tenants t ON t.id = h.tenant_id JOIN models m ON m.id = h.model_id
-		WHERE h.hour >= $1 AND ($3 = '' OR h.tenant_id::text = $3)
+		WHERE h.hour >= $1`+ofTenant("h", tenantID)+`
 		GROUP BY at, h.tenant_id, t.slug, h.model_id, m.name
-		ORDER BY at, t.slug, m.name`, from, step, tenantID)
+		ORDER BY at, t.slug, m.name`, historyArgs(from, step, tenantID)...)
 }
 
 // PruneUsage deletes the history from before a point in time.

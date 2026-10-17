@@ -14,6 +14,7 @@ import (
 	"aigw-ui/internal/render"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/token"
+	"aigw-ui/internal/usage"
 )
 
 // The tenants' own page: a tenant signs in with one of its API keys or
@@ -193,12 +194,33 @@ func (s *Server) getMyUsage(w http.ResponseWriter, r *http.Request) {
 	if t.Budget != nil {
 		out.Budget = &myTenantBudget{Limit: t.Budget.Credits, Window: t.Budget.Window, ResetsAt: render.WindowEnd(t.Budget.Window, now)}
 	}
+	// Everything the page shows is read side by side.
+	ctx := r.Context()
+	var rep usage.Report
+	var repErr error
+	var models []store.Model
+	errs := make([]error, 5)
+	var wg sync.WaitGroup
 	if s.usage != nil {
-		rep, err := s.usage.Report(r.Context(), t.ID)
+		wg.Go(func() { rep, repErr = s.usage.Report(ctx, t.ID) })
+	}
+	wg.Go(func() { out.Days, errs[0] = s.st.UsageHistory(ctx, out.DaysFrom, store.StepDay, t.ID) })
+	wg.Go(func() { out.Hours, errs[1] = s.st.UsageHistory(ctx, out.HoursFrom, store.StepHour, t.ID) })
+	wg.Go(func() { out.TokenDays, errs[2] = s.st.TokenHistory(ctx, out.DaysFrom, store.StepDay, t.ID) })
+	wg.Go(func() { out.TokenHours, errs[3] = s.st.TokenHistory(ctx, out.HoursFrom, store.StepHour, t.ID) })
+	wg.Go(func() { models, errs[4] = s.st.ListModels(ctx) })
+	wg.Wait()
+	if repErr != nil {
+		failUsage(w, repErr)
+		return
+	}
+	for _, err := range errs {
 		if err != nil {
-			failUsage(w, err)
+			fail(w, err)
 			return
 		}
+	}
+	if s.usage != nil {
 		out.UsageEnabled = true
 		for _, b := range rep.Budgets {
 			if out.Budget != nil {
@@ -220,35 +242,13 @@ func (s *Server) getMyUsage(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	var err error
-	if out.Days, err = s.st.UsageHistory(r.Context(), out.DaysFrom, store.StepDay, t.ID); err != nil {
-		fail(w, err)
-		return
-	}
-	if out.Hours, err = s.st.UsageHistory(r.Context(), out.HoursFrom, store.StepHour, t.ID); err != nil {
-		fail(w, err)
-		return
-	}
 	for _, p := range out.Days {
 		mine[p.ModelID] = true
 	}
 	out.TokenCounts = s.usage != nil && s.st.TokenCounts()
-	if out.TokenDays, err = s.st.TokenHistory(r.Context(), out.DaysFrom, store.StepDay, t.ID); err != nil {
-		fail(w, err)
-		return
-	}
-	if out.TokenHours, err = s.st.TokenHistory(r.Context(), out.HoursFrom, store.StepHour, t.ID); err != nil {
-		fail(w, err)
-		return
-	}
 	out.TokenDays, out.TokenHours = callable(out.TokenDays, calls), callable(out.TokenHours, calls)
 	for _, p := range out.TokenDays {
 		mine[p.ModelID] = true
-	}
-	models, err := s.st.ListModels(r.Context())
-	if err != nil {
-		fail(w, err)
-		return
 	}
 	if t.Models != nil {
 		out.Models = []string{}

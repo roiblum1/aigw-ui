@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.31.0](v0.31.0.md) | not released yet | The hub talks to the clusters and to Postgres side by side: a sync that changes nothing took 4.6 s of 2 min 11 s for 20 models, writes the token policy first, and the usage reads read what the clusters share once |
 | [0.30.0](v0.30.0.md) | not released yet | A tenant's own page shows its workload: requests and input, cached and output tokens per model as the gateways count them, the cache's share and savings. The history follows each counter by name and no longer falls short; a deleted model stays deleted; a warning for sites that serve tenants oldest first |
 | [0.29.0](v0.29.0.md) | not released yet | Fixes from a review checked against the upstream source: model server backends past ten models with quotas by amount, retry patches for Envoy Gateway 1.10's route names, measurements of data-parallel pods, retry on a site's 500, ready counts from the workload itself, warnings for routes outside the hub's policy; a tenant's models go with its budget or quotas |
 | [0.28.0](v0.28.0.md) | not released yet | The image carries the docs of Envoy AI Gateway, Envoy Gateway, KServe, vLLM and llm-d, shown and searched on the Docs page offline and moved to their newest releases weekly; CI tests a merge once |

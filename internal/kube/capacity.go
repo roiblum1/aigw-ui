@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -138,13 +139,40 @@ func pool(svc *unstructured.Unstructured) (Pool, bool) {
 // LLMInferenceServices in every namespace that are not marked to be ignored. A cluster without KServe has none
 // and that is not an error: it serves no model this tool can count.
 func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
-	items, err := c.llmServices(ctx)
+	// The services, the pods and nodes, and the configs are read side by
+	// side, and then each service's workload.
+	var items []unstructured.Unstructured
+	var err error
+	var gpus gpuShapes
+	var configs baseConfigs
+	var wg sync.WaitGroup
+	wg.Go(func() { items, err = c.llmServices(ctx) })
+	wg.Go(func() { gpus = c.gpuShapes(ctx) })
+	wg.Go(func() { configs = c.baseConfigs(ctx) })
+	wg.Wait()
 	if err != nil {
 		return nil, err
 	}
+	type read struct {
+		w    weights.Workload
+		note string
+	}
+	reads := make([]read, len(items))
+	slots := make(chan struct{}, applyWorkers)
+	for i := range items {
+		svc := &items[i]
+		if svc.GetAnnotations()[IgnoreAnnotation] == "true" {
+			continue
+		}
+		slots <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-slots }()
+			reads[i].w, reads[i].note = workload(svc)
+			c.liveWorkload(ctx, svc, &reads[i].w)
+		})
+	}
+	wg.Wait()
 
-	gpus := c.gpuShapes(ctx)
-	configs := c.baseConfigs(ctx)
 	byModel := map[string]*ModelCapacity{}
 	for i := range items {
 		svc := &items[i]
@@ -155,8 +183,7 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 		if model == "" {
 			model = svc.GetName()
 		}
-		w, note := workload(svc)
-		c.liveWorkload(ctx, svc, &w)
+		w, note := reads[i].w, reads[i].note
 		instances, known := w.Instances()
 
 		mc := byModel[model]

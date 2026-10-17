@@ -307,7 +307,7 @@ func TestDrainedLastSite(t *testing.T) {
 // A site that does not drain in time, and a cancelled drain, are restored.
 func TestDrainedGivesUp(t *testing.T) {
 	ctx := context.Background()
-	st, cl, s := setup("img")
+	st, _, s := setup("img")
 	st.weight["m1|c1"] = 2
 	run, _ := s.Start(ctx, drained())
 	s.Tick(ctx, time.Now().Add(31*time.Minute))
@@ -315,7 +315,7 @@ func TestDrainedGivesUp(t *testing.T) {
 		t.Fatalf("timeout: %+v %v", r, st.drains)
 	}
 
-	st, cl, s = setup("img")
+	st, cl, s := setup("img")
 	st.weight["m1|c1"] = 2
 	run, _ = s.Start(ctx, drained())
 	got, err := s.Cancel(ctx, run.ID)

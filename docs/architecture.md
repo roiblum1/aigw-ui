@@ -63,6 +63,30 @@ server renders the desired objects for each cluster from Postgres and applies
 them with server-side apply (field manager `aigw-ui`). It then deletes objects
 it created earlier that are no longer wanted.
 
+The objects go in five stages, each stage's eight at a time:
+
+1. the tenants' key `Secret`;
+2. the `SecurityPolicy`, which names it: with these two first, a revoke or a
+   disabled tenant is in effect at the start of a sync, not at its end;
+3. what routes and policies name: `Backend`, `AIServiceBackend` and the
+   request classes;
+4. the `AIGatewayRoute`s;
+5. the policies that attach to routes and backends: `QuotaPolicy`,
+   `BackendTrafficPolicy`, `EnvoyPatchPolicy`.
+
+A stage that fails stops the sync before the next one. The routes of the
+cluster's own are marked before any of it (see below), each namespace's
+routes listed once. The leftovers of every kind are listed at once and
+deleted in the order of `kube.managed`. The task log lists the objects in the
+order they were rendered, whatever order they were written in.
+
+Each cluster has one client, kept while its kubeconfig stays the same. The
+sync, the polls and the measurements of a cluster share its connections and
+its rate: at most 50 requests a second after a burst of 100. Up to 0.30.0 a
+new client was made for every sync and poll, at client-go's default of 5
+after 10, and a sync of the lab's few models took 10 to 13 s. Polls run on a
+loop of their own, so a change never waits for a poll.
+
 Every `SYNC_INTERVAL` (default 5 minutes) every cluster is synced again even
 if nothing changed. This retries a cluster whose last sync failed and puts
 back an object that someone edited or deleted by hand.
@@ -260,11 +284,21 @@ Each change is stored as a task with one pending result per cluster. When a
 cluster is synced, the sync first notes which tasks are open for it, applies
 the desired state, and then writes the outcome on those tasks.
 
-For every object the sync reads it, applies it, and compares: an object that
-was not there is "created", one whose generation moved is "updated", one that
-is the same is not listed. After a change it waits two seconds and reads the
-status of the AI gateway objects, to record whether the gateway's controller
-accepted them. That reading is informational: it never fails a sync.
+For every object the sync applies it and compares it with the object before:
+an object that was not there is "created", one whose generation moved is
+"updated", one that is the same is not listed. The object before is the one
+the cluster's client remembers from its last sync (its UID and generation);
+only the first sync after the server starts reads each object first. An
+object someone else changed since is listed as updated once, and one
+someone deleted as created. After a change the sync waits two seconds and
+reads the status of the changed AI gateway objects, eight at a time, to
+record whether the gateway's controller accepted them; an object it did not
+change has its status in the answer to the apply. That reading is
+informational: it never fails a sync.
+
+On a local API server with 20 models in best-effort mode (222 objects), a
+sync that changes nothing took 4.6 s and one that creates everything 11.1 s;
+0.30.0 took 2 min 11 s and 2 min 9 s.
 
 ## Site weights
 
@@ -711,6 +745,12 @@ limit services count in. It computes the name of each counter and fetches
 them with one `MGET`. With `redis.allowReset` on it can also delete a
 counter, which is how a reset works; otherwise it only reads.
 
+The names come from every cluster's desired state, which the usage page, the
+best-effort loop, the history and the tenants' page build from one read of
+what the clusters have in common (`store.RenderStatesWithoutKeys`): one query
+per cluster for its endpoints, and about thirteen for the rest, where each
+cluster took about fifteen of its own up to 0.30.0.
+
 A counter's name is built by the gateway from the `QuotaPolicy`:
 
 ```
@@ -795,7 +835,11 @@ The counters a tenant has are those of its quota or budget, and while a
 token signed before its last change of limits may still be in use (the
 longer of `tokens.lifetimeDays` and `tokens.renewedLifetimeHours`), those of
 every other amount of the model: such a token is counted under the amount it
-names. A reset of a tenant's quota records the use since the last look
+names. Each amount's rule is read once per such tenant, on each route the
+model counts on, however many tenants hold the amount and however many
+clusters render it. With the default token lifetime of 180 days that is
+nearly every tenant: at 1,000 tenants and five amounts on a best-effort
+model, 10,000 keys a minute. A reset of a tenant's quota records the use since the last look
 first, so the reset does not take it out of the history. A quota's counter
 keeps a cursor at 0 too; a token counter while another of the pair's holds
 something.

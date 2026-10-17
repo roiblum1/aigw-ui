@@ -114,6 +114,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # Unused code, deprecated calls and values never used, which vet does
+      # not look for. Pinned, so a new release cannot fail an old commit.
+      - name: Staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+
       - name: No repeated code
         run: hack/check-duplication.sh
 

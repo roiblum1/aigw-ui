@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -153,5 +154,46 @@ func TestHistoryCounters(t *testing.T) {
 	// Both changed their limits just now: each is read under both amounts.
 	if len(amounts["team-a"]) != 2 || len(amounts["team-c"]) != 2 || len(amounts["team-b"]) != 0 {
 		t.Errorf("amounts read: %v", amounts)
+	}
+}
+
+// A tenant whose limits changed lately is read under each amount rule of a
+// model once, however many tenants hold the amount, on each route the model
+// counts on. Taking every tenant's counter in turn gave each key once per
+// holder: at 1,000 tenants up to 850,000 counters a minute, of which 8,500
+// differed, and the hub ran out of memory.
+func TestFormerAmountsTakeEachRuleOnce(t *testing.T) {
+	st := new(store.Store)
+	st.SetTokens(store.TokenSettings{Lifetime: 24 * time.Hour})
+	svc := NewService(st, &Reader{})
+	now := time.Now()
+	changed := now.Add(-time.Hour)
+	model := render.Model{Name: "glm", Slug: "glm", DefaultLimit: 1, DefaultWindow: "1d", ByAmount: true, BestEffort: true,
+		Fleet:   []render.FleetSite{{Name: "site-a", Host: "llm.site-a.example.com", Port: 443, Weight: 100}},
+		Amounts: []render.QuotaAmount{{Slot: 0, Limit: 1000, Window: "1h"}, {Slot: 1, Limit: 500, Window: "1h"}}}
+	f := fleet{models: []store.Model{{ID: "m-glm", Name: "glm", Slug: "glm", Unit: "tokens"}}}
+	for i := range 40 {
+		slug := fmt.Sprintf("team-%02d", i)
+		f.tenants = append(f.tenants, store.Tenant{ID: "t-" + slug, Slug: slug, Enabled: true, LimitsChangedAt: &changed})
+		model.Quotas = append(model.Quotas, render.TenantQuota{TenantSlug: slug, Slot: i, Limit: int64(500 * (1 + i%2)), Window: "1h"})
+	}
+	state := render.State{Namespace: "gw", AuthEnabled: true, Identity: render.Identity{Mode: render.IdentityTokens}, Models: []render.Model{model}}
+	// Two clusters in one gateway namespace count in the same keys.
+	f.states = []render.State{state, state}
+
+	got := svc.formerAmounts(f, now)
+	keys := map[string]bool{}
+	kinds := map[string]int{}
+	for _, c := range got {
+		if keys[c.Key] {
+			t.Fatalf("key %s more than once", c.Key)
+		}
+		keys[c.Key] = true
+		kinds[c.Kind]++
+	}
+	// 40 tenants under 2 amounts on 2 routes: the entry route and the
+	// best-effort one.
+	if len(got) != 160 || kinds[store.KindUsed] != 80 || kinds[store.KindBestEffort] != 80 {
+		t.Errorf("%d counters, by kind %v; want 160, 80 used and 80 best-effort", len(got), kinds)
 	}
 }

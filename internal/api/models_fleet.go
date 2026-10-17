@@ -53,9 +53,9 @@ func (s *Server) setModelFleet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if b.Enabled {
-		s.changed(r, "model.fleet-on", "Turned the entry route on for "+name+". Requests through it are counted on the entry route, so the model's quota counters restart once.")
+		s.sitesChanged(r, "model.fleet-on", "Turned the entry route on for "+name+". Requests through it are counted on the entry route, so the model's quota counters restart once.")
 	} else {
-		s.changed(r, "model.fleet-off", "Turned the entry route off for "+name+". Its quota counters restart once.")
+		s.sitesChanged(r, "model.fleet-off", "Turned the entry route off for "+name+". Its quota counters restart once.")
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -152,6 +152,6 @@ func (s *Server) drainSite(w http.ResponseWriter, r *http.Request) {
 	}
 	// Ending a drain lists the site again at once, at the lowest weight.
 	// The weight then moves on the next polls; each step is its own task.
-	s.changed(r, action, summary)
+	s.sitesChanged(r, action, summary)
 	w.WriteHeader(http.StatusNoContent)
 }

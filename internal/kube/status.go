@@ -2,9 +2,11 @@ package kube
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,7 +19,14 @@ import (
 // the AI gateway objects. Applying an object only proves the API server stored
 // it; the controller can still refuse it. This is informational: a failure to
 // read a status never fails the sync.
-func (c *Client) readGatewayStatus(ctx context.Context, namespace string, desired []*unstructured.Unstructured, res *SyncResult) {
+//
+// The objects are read side by side. Each reader sets the verdict on its own
+// object's entry of res.Changes and puts what it rejects or warns of in a
+// result of its own, which are added to res in the order of desired.
+//
+// unchanged holds, by objectKey, the objects this sync wrote without a
+// change, as the cluster answered the write: their status is read from that.
+func (c *Client) readGatewayStatus(ctx context.Context, namespace string, desired []*unstructured.Unstructured, unchanged map[string]*unstructured.Unstructured, res *SyncResult) {
 	if len(res.Changes) > 0 && c.settle > 0 {
 		select {
 		case <-ctx.Done():
@@ -30,49 +39,81 @@ func (c *Client) readGatewayStatus(ctx context.Context, namespace string, desire
 		changed[ch.Kind+"/"+ch.Namespace+"/"+ch.Name] = i
 	}
 	var classes []*unstructured.Unstructured
-	for _, obj := range desired {
-		if obj.GetKind() == "EnvoyPatchPolicy" || obj.GetKind() == "BackendTrafficPolicy" {
-			c.readPatchStatus(ctx, namespace, obj, changed, res)
-			continue
-		}
-		if obj.GetKind() == "SecurityPolicy" {
-			c.readSecurityStatus(ctx, namespace, obj, changed, res)
-			continue
-		}
-		if obj.GetKind() == render.ObjectiveKind {
+	parts := make([]SyncResult, len(desired))
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, applyWorkers)
+	for i, obj := range desired {
+		var read func(context.Context, string, *unstructured.Unstructured, *unstructured.Unstructured, map[string]int, *SyncResult)
+		switch {
+		case obj.GetKind() == "EnvoyPatchPolicy" || obj.GetKind() == "BackendTrafficPolicy":
+			read = c.readPatchStatus
+		case obj.GetKind() == "SecurityPolicy":
+			read = c.readSecurityStatus
+		case obj.GetKind() == render.ObjectiveKind:
 			classes = append(classes, obj)
 			continue
-		}
-		if obj.GroupVersionKind().Group != "aigateway.envoyproxy.io" {
-			continue
-		}
-		gvr, ok := gvrFor(obj.GetKind())
-		if !ok {
+		case obj.GroupVersionKind().Group == "aigateway.envoyproxy.io":
+			read = c.readAcceptedStatus
+		default:
 			continue
 		}
 		ns := obj.GetNamespace()
 		if ns == "" {
 			ns = namespace
 		}
-		live, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, obj.GetName(), metav1.GetOptions{})
-		if err != nil {
-			continue
-		}
-		conditions, _, _ := unstructured.NestedSlice(live.Object, "status", "conditions")
-		if len(conditions) == 0 {
-			continue
-		}
-		cond, _ := conditions[0].(map[string]any)
-		kind, _ := cond["type"].(string)
-		message, _ := cond["message"].(string)
-		if i, ok := changed[obj.GetKind()+"/"+ns+"/"+obj.GetName()]; ok {
-			res.Changes[i].Gateway, res.Changes[i].GatewayMessage = kind, message
-		}
-		if kind == "NotAccepted" {
-			res.Rejected = append(res.Rejected, Change{Kind: obj.GetKind(), Namespace: ns, Name: obj.GetName(), Gateway: kind, GatewayMessage: message})
-		}
+		live := unchanged[objectKey(obj.GetKind(), ns, obj.GetName())]
+		parts[i].Changes = res.Changes
+		slots <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-slots }()
+			read(ctx, namespace, obj, live, changed, &parts[i])
+		})
+	}
+	wg.Wait()
+	for _, part := range parts {
+		res.Rejected = append(res.Rejected, part.Rejected...)
+		res.Warnings = append(res.Warnings, part.Warnings...)
 	}
 	c.readClasses(ctx, classes, res)
+}
+
+// current returns the object in namespace ns as the cluster has it: live,
+// when the sync has it already, or else read.
+func (c *Client) current(ctx context.Context, ns string, obj, live *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	if live != nil {
+		return live, nil
+	}
+	gvr, ok := gvrFor(obj.GetKind())
+	if !ok {
+		return nil, fmt.Errorf("unsupported kind %s", obj.GetKind())
+	}
+	return c.dyn.Resource(gvr).Namespace(ns).Get(ctx, obj.GetName(), metav1.GetOptions{})
+}
+
+// readAcceptedStatus reports an AI gateway object its controller did not
+// accept, by the first condition of its status.
+func (c *Client) readAcceptedStatus(ctx context.Context, namespace string, obj, live *unstructured.Unstructured, changed map[string]int, res *SyncResult) {
+	ns := obj.GetNamespace()
+	if ns == "" {
+		ns = namespace
+	}
+	live, err := c.current(ctx, ns, obj, live)
+	if err != nil {
+		return
+	}
+	conditions, _, _ := unstructured.NestedSlice(live.Object, "status", "conditions")
+	if len(conditions) == 0 {
+		return
+	}
+	cond, _ := conditions[0].(map[string]any)
+	kind, _ := cond["type"].(string)
+	message, _ := cond["message"].(string)
+	if i, ok := changed[obj.GetKind()+"/"+ns+"/"+obj.GetName()]; ok {
+		res.Changes[i].Gateway, res.Changes[i].GatewayMessage = kind, message
+	}
+	if kind == "NotAccepted" {
+		res.Rejected = append(res.Rejected, Change{Kind: obj.GetKind(), Namespace: ns, Name: obj.GetName(), Gateway: kind, GatewayMessage: message})
+	}
 }
 
 // readPatchStatus reports an EnvoyPatchPolicy or BackendTrafficPolicy the
@@ -83,13 +124,12 @@ func (c *Client) readGatewayStatus(ctx context.Context, namespace string, desire
 // for that route (Overridden: the route's requests are not charged). Envoy Gateway carries on without the
 // policy, so nothing else is affected, but what the policy was for is
 // missing.
-func (c *Client) readPatchStatus(ctx context.Context, namespace string, obj *unstructured.Unstructured, changed map[string]int, res *SyncResult) {
-	gvr, _ := gvrFor(obj.GetKind())
+func (c *Client) readPatchStatus(ctx context.Context, namespace string, obj, live *unstructured.Unstructured, changed map[string]int, res *SyncResult) {
 	ns := obj.GetNamespace()
 	if ns == "" {
 		ns = namespace
 	}
-	live, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, obj.GetName(), metav1.GetOptions{})
+	live, err := c.current(ctx, ns, obj, live)
 	if err != nil {
 		return
 	}
@@ -127,13 +167,12 @@ func (c *Client) readPatchStatus(ctx context.Context, namespace string, obj *uns
 // The gateway chart's health check is such a route on the client listener,
 // where a site turns it on for its global load balancer (health.enabled),
 // and would otherwise be warned about on every sync.
-func (c *Client) readSecurityStatus(ctx context.Context, namespace string, obj *unstructured.Unstructured, changed map[string]int, res *SyncResult) {
-	gvr, _ := gvrFor(obj.GetKind())
+func (c *Client) readSecurityStatus(ctx context.Context, namespace string, obj, live *unstructured.Unstructured, changed map[string]int, res *SyncResult) {
 	ns := obj.GetNamespace()
 	if ns == "" {
 		ns = namespace
 	}
-	live, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, obj.GetName(), metav1.GetOptions{})
+	live, err := c.current(ctx, ns, obj, live)
 	if err != nil {
 		return
 	}

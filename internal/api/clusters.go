@@ -57,7 +57,7 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 			c = fresh
 		}
 	}
-	s.changed(r, "cluster.add", "Added cluster "+c.Name)
+	s.sitesChanged(r, "cluster.add", "Added cluster "+c.Name)
 	writeJSON(w, http.StatusCreated, c)
 }
 
@@ -88,7 +88,7 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.changed(r, "cluster.update", "Changed cluster "+c.Name)
+	s.sitesChanged(r, "cluster.update", "Changed cluster "+c.Name)
 	writeJSON(w, http.StatusOK, c)
 }
 

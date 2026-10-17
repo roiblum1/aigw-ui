@@ -93,16 +93,6 @@ func tenantStem(prefix string, rule int, match string) string {
 	return prefix + first + "_" + first + "_" + r + TenantHeader + "-match-1_"
 }
 
-// amountOf returns the amount a tenant quota has on the model.
-func amountOf(m Model, q TenantQuota) (QuotaAmount, int, bool) {
-	for i, a := range amountRules(m) {
-		if a.Limit == q.Limit && a.Window == q.Window && a.Shadow == q.Shadow {
-			return a, i, true
-		}
-	}
-	return QuotaAmount{}, 0, false
-}
-
 // QuotaClaimHeaders returns the header of every model whose rules are by
 // amount and that has an amount, sorted by header, each with the claim the
 // gateway fills it from.
