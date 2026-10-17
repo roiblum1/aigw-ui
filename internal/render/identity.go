@@ -182,6 +182,14 @@ func authorization(i Identity, restricted []TenantModels) map[string]any {
 // expires after every span (the store leaves the last minutes out). An
 // expression that fails counts as no match, so each claim is checked for
 // first. The numbers are doubles, as the claims are once read.
+//
+// Envoy builds CEL without comprehensions and without joining strings
+// (filters/common/expr/evaluator.cc, "security-oriented defaults"), and
+// refuses the whole route configuration when an expression uses them: 0.32.0
+// wrote the spans as a list with exists() and compared cid with
+// sub + '.' + jti, and the lab's proxy then took no change at all, revokes
+// and new quotas included (2026-10-17). So the spans are a chain of
+// comparisons and the cid is tested with endsWith (envoyCEL in the tests).
 func spanRules(spans []ExpirySpan) []any {
 	if len(spans) == 0 {
 		return nil
@@ -190,23 +198,24 @@ func spanRules(spans []ExpirySpan) []any {
 	claim := func(name string) string { return claims + "['" + name + "']" }
 	head := "'" + jwtMetadata + "' in metadata.filter_metadata" +
 		" && '" + TokenProvider + "' in metadata.filter_metadata['" + jwtMetadata + "']" +
-		" && 'exp' in " + claims + " && 'cid' in " + claims + " && 'sub' in " + claims + " && 'jti' in " + claims +
-		" && " + claim("cid") + " == " + claim("sub") + " + '.' + " + claim("jti") + " && ["
-	tail := "].exists(r, " + claim("exp") + " >= r[0] && " + claim("exp") + " <= r[1])"
+		" && 'exp' in " + claims + " && 'cid' in " + claims + " && 'jti' in " + claims +
+		" && " + claim("cid") + ".endsWith(" + claim("jti") + ") && ("
+	const tail = ")"
 	var rules []any
 	var list []string
 	size := len(head) + len(tail)
 	flush := func() {
-		rules = append(rules, map[string]any{"name": "revoked-span", "action": "Deny", "cel": head + strings.Join(list, ", ") + tail})
+		rules = append(rules, map[string]any{"name": "revoked-span", "action": "Deny", "cel": head + strings.Join(list, " || ") + tail})
 		list, size = nil, len(head)+len(tail)
 	}
 	for _, sp := range spans {
-		item := "[" + strconv.FormatInt(sp.From, 10) + ".0, " + strconv.FormatInt(sp.To, 10) + ".0]"
-		if len(list) > 0 && size+len(item)+2 > maxCEL {
+		item := "(" + claim("exp") + " >= " + strconv.FormatInt(sp.From, 10) + ".0 && " +
+			claim("exp") + " <= " + strconv.FormatInt(sp.To, 10) + ".0)"
+		if len(list) > 0 && size+len(item)+4 > maxCEL {
 			flush()
 		}
 		list = append(list, item)
-		size += len(item) + 2
+		size += len(item) + 4
 	}
 	flush()
 	return rules

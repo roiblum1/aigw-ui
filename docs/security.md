@@ -171,16 +171,17 @@ slug until it is enabled. Until a cluster has synced, a revoked token still
 works there, as an API key does. A sync writes the token policy and the key
 Secret before anything else (0.31.0).
 
-**Denied tokens in spans (0.32.0).** A `jti` stays in the policy for as long
-as its token lives, 180 days by default, and a test that deletes its tenants
-leaves one per token: the sandbox's policy grew to hundreds of lines. Where
-three or more denied tokens follow one another by expiry (`exp`) and no
-live token expires among them, the policy refuses that span of expiries
-instead of each `jti`: one rule, `revoked-span`, holds a list of
-`[from, to]` pairs in CEL and refuses a stored token whose `exp` is in one
-of them. 1,000 denials from 15 deletions of test tenants make 33.6 KB and
-1,113 lines of policy as `jti`s, and 2.9 KB and 80 lines as spans. A span
-refuses no token that should pass:
+**Denied tokens in spans (0.32.0, fixed in 0.32.1).** A `jti` stays in the
+policy for as long as its token lives, 180 days by default, and a test that
+deletes its tenants leaves one per token: the sandbox's policy grew to
+hundreds of lines. Where ten or more denied tokens follow one another by
+expiry (`exp`) and no live token expires among them, the policy refuses that
+span of expiries instead of each `jti`: rules named `revoked-span` compare a
+stored token's `exp` with each span's first and last second, in CEL. 1,000
+denials from 15 deletions of test tenants make 33.6 KB and 1,113 lines of
+policy as `jti`s, and 5.3 KB and 99 lines as spans. A span's entry is about
+as long as eight `jti`s, so shorter runs stay `jti`s. A span refuses no
+token that should pass:
 
 - Every stored token that has not expired is either live or denied: a
   token's row goes only with its tenant, and the database denies it then.
@@ -192,14 +193,31 @@ refuses no token that should pass:
   `jti`s. If `tokens.lifetimeDays` is lowered, a token signed between the
   restart and the hub's first sync could expire inside an old span and be
   refused until that sync, which comes at once since 0.32.0.
-- A token a personal key got carries the key's ID as `cid`, not its own
-  `<sub>.<jti>`, so the rule never matches it; those are refused by `cid`.
+- A stored token's `cid` is `<sub>.<jti>`; a token a personal key got
+  carries the key's ID as `cid`, which does not end with its own `jti`, so
+  the rule never matches it; those are refused by `cid`.
 - The gateway counts an error in a CEL expression as no match, which for a
   `Deny` rule would let the token through, so the rule checks for each
   claim before it reads it.
 
-A rule holds about 120 spans, within the 4,096 characters of CEL Envoy
-Gateway takes; more spans make more rules.
+**Envoy builds CEL with less than CEL has.** Envoy turns comprehensions
+(`exists`, `all`, `map`, `filter`) off, and joining strings with `+` unless
+told otherwise (Envoy 1.39, `filters/common/expr/evaluator.cc`; Envoy
+Gateway does not tell it), and refuses the whole route configuration when an
+expression needs them. Envoy Gateway still reports the policy `Accepted`,
+and the proxy keeps the configuration it had: no revoke, no new quota and no
+other change reaches it. 0.32.0's span rule used both; on the lab every
+change after the upgrade's first sync was lost until 0.32.1, and the
+self-test failed its revoke and counter steps (2026-10-17). Since 0.32.1 the
+rule is a chain of comparisons with `endsWith`, which Envoy 1.39.1 took and
+enforced in a local test: tokens inside a span and at both its ends
+refused, a second outside it, between spans and a personal key's token in
+it answered, across three rules of up to 3,998 characters. The tests check
+every CEL rule the hub renders for what Envoy builds.
+
+A rule holds about 19 spans within the 4,096 characters of CEL Envoy Gateway
+takes; more spans make more rules. `GET /signing-keys` gives `denied` (every
+denied token) and `denied_spans`.
 
 **What the policy's length depends on.** Not on the number of tenants or
 keys: a token that works is never listed (with tokens only the gateway
@@ -212,9 +230,7 @@ tokens were signed together, as a test's or an onboarding batch's are;
 tokens revoked one by one among live ones, such as each tenant replacing
 its own at a different time, stay a `jti` each. To keep that short, give
 people personal keys, whose tokens are refused by the key for a week at
-most, or lower `tokens.lifetimeDays`. `GET /signing-keys` gives
-`denied` (every denied token) and `denied_spans`. Envoy's evaluation of the
-rule is not yet verified on a real gateway ([architecture](architecture.md#not-verified-on-a-real-gateway)).
+most, or lower `tokens.lifetimeDays`.
 
 **What reaches the model server.** A token is not removed by the JWT check.
 The backends the hub renders (the entry routes, the best-effort routes, and

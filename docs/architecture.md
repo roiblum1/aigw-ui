@@ -950,13 +950,13 @@ gateway (worked out from Envoy Gateway 1.9.2 and the rate limit service's
 source; the self-test checks them), and the extra latency of four more
 descriptors on every request.
 
-Not verified for the denied-token spans (0.32.0): that Envoy evaluates the
-`revoked-span` rule as cel-go does. The rule is taken by Envoy Gateway
-1.9.2's CRD (real API server test) and was evaluated with cel-go, both type
-checked and parsed only, as Envoy Gateway passes it on; Envoy reads the
-claims as doubles, as the test does. A span that does not match on a real
-gateway lets its tokens through: check that a token of a deleted test
-tenant is refused after the hub's sync.
+Not verified for the denied-token spans on a real gateway: 0.32.0's rule
+used CEL Envoy does not build, and the lab's proxy then refused every change
+([security](security.md#tokens)). 0.32.1's rule ran in Envoy 1.39.1 locally,
+behind the same JWT provider and in the form Envoy Gateway 1.9.2 gives it,
+and refused and answered as it should; not yet on the lab's gateway. After
+an upgrade, check that a token of a deleted test tenant is refused and that
+the proxy took the configuration (operations, "nothing changes").
 
 Also not verified: that the gateway accepts the placeholder rule that keeps a
 removed quota's position, a rule with an `Exact` match on a client ID no key

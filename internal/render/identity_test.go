@@ -2,11 +2,13 @@ package render
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	celgo "github.com/google/cel-go/cel"
+	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -184,9 +186,9 @@ func TestIdentityDeniedSpans(t *testing.T) {
 	}
 	c := "metadata.filter_metadata['envoy.filters.http.jwt_authn']['aigw-hub']"
 	want := "'envoy.filters.http.jwt_authn' in metadata.filter_metadata && 'aigw-hub' in metadata.filter_metadata['envoy.filters.http.jwt_authn']" +
-		" && 'exp' in " + c + " && 'cid' in " + c + " && 'sub' in " + c + " && 'jti' in " + c +
-		" && " + c + "['cid'] == " + c + "['sub'] + '.' + " + c + "['jti']" +
-		" && [[1792254713.0, 1792254800.0]].exists(r, " + c + "['exp'] >= r[0] && " + c + "['exp'] <= r[1])"
+		" && 'exp' in " + c + " && 'cid' in " + c + " && 'jti' in " + c +
+		" && " + c + "['cid'].endsWith(" + c + "['jti'])" +
+		" && ((" + c + "['exp'] >= 1792254713.0 && " + c + "['exp'] <= 1792254800.0))"
 	if got := rules[1].(map[string]any)["cel"]; got != want {
 		t.Fatalf("cel\n%s\nwant\n%s", got, want)
 	}
@@ -204,7 +206,7 @@ func TestIdentityDeniedSpans(t *testing.T) {
 		if len(cel) > maxCEL {
 			t.Fatalf("%d characters of CEL", len(cel))
 		}
-		spans += strings.Count(cel, ".0, ")
+		spans += strings.Count(cel, "<= ")
 	}
 	if spans != 300 {
 		t.Fatalf("%d of 300 spans rendered", spans)
@@ -274,6 +276,96 @@ func TestIdentityDeniedSpanMatches(t *testing.T) {
 	} {
 		if got := refused(c.claims); got != c.want {
 			t.Errorf("%v: refused %v, want %v", c.claims, got, c.want)
+		}
+	}
+}
+
+// envoyCEL fails when Envoy could not build the expression. Envoy builds CEL
+// without comprehensions (exists, all, map, filter) and without joining
+// strings, and refuses the whole route configuration when an expression
+// needs them: the proxy then takes no change at all (0.32.0 on the lab,
+// 2026-10-17; filters/common/expr/evaluator.cc in Envoy 1.39). cel-go takes
+// both, so the tests check the parsed expression for what Envoy has: the
+// operators below and the built-in string tests.
+func envoyCEL(t *testing.T, expr string) {
+	t.Helper()
+	if err := envoyCELError(expr); err != nil {
+		t.Errorf("%v in %q", err, expr)
+	}
+}
+
+func envoyCELError(expr string) error {
+	env, err := celgo.NewEnv()
+	if err != nil {
+		return err
+	}
+	ast, iss := env.Parse(expr)
+	if iss.Err() != nil {
+		return iss.Err()
+	}
+	parsed, err := celgo.AstToParsedExpr(ast)
+	if err != nil {
+		return err
+	}
+	allowed := map[string]bool{"_&&_": true, "_||_": true, "!_": true, "_==_": true, "_!=_": true, "_<_": true, "_<=_": true,
+		"_>_": true, "_>=_": true, "@in": true, "_[_]": true, "startsWith": true, "endsWith": true, "contains": true}
+	var walk func(e *exprpb.Expr) error
+	walk = func(e *exprpb.Expr) error {
+		switch k := e.GetExprKind().(type) {
+		case *exprpb.Expr_ComprehensionExpr:
+			return errors.New("a comprehension, which Envoy does not build")
+		case *exprpb.Expr_CallExpr:
+			if !allowed[k.CallExpr.GetFunction()] {
+				return fmt.Errorf("function %s, which Envoy may not have", k.CallExpr.GetFunction())
+			}
+			if t := k.CallExpr.GetTarget(); t != nil {
+				if err := walk(t); err != nil {
+					return err
+				}
+			}
+			for _, a := range k.CallExpr.GetArgs() {
+				if err := walk(a); err != nil {
+					return err
+				}
+			}
+		case *exprpb.Expr_SelectExpr:
+			return walk(k.SelectExpr.GetOperand())
+		case *exprpb.Expr_ListExpr:
+			for _, el := range k.ListExpr.GetElements() {
+				if err := walk(el); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return walk(parsed.GetExpr())
+}
+
+// Every authorization rule the hub renders in CEL is one Envoy builds: the
+// spans of denied tokens, the models rule and the rule against unchecked
+// tokens. What 0.32.0 wrote for the spans is refused.
+func TestAuthorizationCELForEnvoy(t *testing.T) {
+	i := identity(IdentityBoth)
+	for n := range int64(50) {
+		i.DeniedSpans = append(i.DeniedSpans, ExpirySpan{From: 1792254713 + 100*n, To: 1792254763 + 100*n, Tokens: 3})
+	}
+	var n int
+	for _, r := range authorization(i, []TenantModels{{TenantSlug: "a", Models: []string{"m"}}})["rules"].([]any) {
+		if cel, ok := r.(map[string]any)["cel"].(string); ok {
+			envoyCEL(t, cel)
+			n++
+		}
+	}
+	if n < 5 { // 3 span rules, models, token-not-checked
+		t.Fatalf("%d CEL rules", n)
+	}
+	for _, old := range []string{
+		"[metadata].exists(c, c['exp'] >= 1.0)",
+		"metadata['cid'] == metadata['sub'] + '.' + metadata['jti']",
+	} {
+		if envoyCELError(old) == nil {
+			t.Errorf("taken: %q", old)
 		}
 	}
 }

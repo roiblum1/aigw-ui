@@ -273,8 +273,8 @@ in `Server-Timing`, and the log names a request that took over 2 s
 **The token policy with many denied tokens.** Every denied token was a line
 of the `SecurityPolicy` until its token expired, 180 days by default. With
 1,000 denials from 15 deletions of test tenants the policy is 33.6 KB and
-1,113 lines as `jti`s, and 2.9 KB and 80 lines as spans of their expiry
-(0.32.0, [security](security.md#tokens)). Stored as JSON a `jti` takes 20
+1,113 lines as `jti`s, and 5.3 KB and 99 lines as spans of their expiry
+(0.32.1, [security](security.md#tokens)). Stored as JSON a `jti` takes 20
 bytes, so about 79,000 of them would reach etcd's limit of 1.5 MiB for one
 object, before managed fields.
 
