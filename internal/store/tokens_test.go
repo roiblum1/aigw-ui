@@ -139,20 +139,24 @@ func TestIdentityModes(t *testing.T) {
 	}
 }
 
-// Denied tokens go into spans by expiry where at least three follow one
+// Denied tokens go into spans by expiry where at least minSpan follow one
 // another with no live token expiring among them; the others, and the ones
 // signed in the last minutes, stay jtis.
 func TestSpansOf(t *testing.T) {
-	d := func(jti string, exp int64) denial { return denial{jti: jti, exp: exp} }
-	denied := []denial{
-		d("a1", 100), d("a2", 101), d("a3", 101), d("a4", 105), // a run of four
-		d("b1", 110), d("b2", 111), // two, after a live token at 107
-		d("c1", 120),                                           // as old as a live token
-		d("e1", 130), d("e2", 131), d("e3", 132), d("e4", 140), // the last one is too recent
+	var denied []denial
+	run := func(prefix string, from, n int64) {
+		for i := range n {
+			denied = append(denied, denial{jti: fmt.Sprintf("%s%02d", prefix, i), exp: from + i})
+		}
 	}
-	singles, spans := spansOf(denied, []int64{90, 107, 120, 200}, 140)
-	if fmt.Sprint(spans) != "[{100 105 4} {130 132 3}]" || fmt.Sprint(singles) != "[b1 b2 c1 e4]" {
-		t.Fatalf("spans %v, jtis %v", spans, singles)
+	run("a", 100, minSpan)                              // a full run
+	run("b", 200, minSpan-1)                            // one short, after a live token at 150
+	denied = append(denied, denial{jti: "c", exp: 300}) // as old as a live token
+	run("e", 400, minSpan+1)                            // the last one is too recent
+	singles, spans := spansOf(denied, []int64{90, 150, 300, 900}, 400+minSpan)
+	want := fmt.Sprintf("[{100 %d %d} {400 %d %d}]", 100+minSpan-1, minSpan, 400+minSpan-1, minSpan)
+	if fmt.Sprint(spans) != want || len(singles) != minSpan-1+1+1 || singles[len(singles)-1] != fmt.Sprintf("e%02d", minSpan) {
+		t.Fatalf("spans %v, want %s; jtis %v", spans, want, singles)
 	}
 	if singles, spans = spansOf(nil, []int64{1}, 10); singles != nil || spans != nil {
 		t.Fatalf("nothing denied: %v %v", singles, spans)
@@ -167,7 +171,7 @@ func TestDeniedTokensInSpans(t *testing.T) {
 	s.SetTokens(tokenSet)
 	start := time.Now().Add(-time.Hour)
 	var ids []string
-	for n := range 8 {
+	for n := range 2*minSpan + 2 {
 		tn := tenant(t, s, ctx, fmt.Sprintf("e2e-%d", n))
 		ids = append(ids, tn.ID)
 		if _, _, err := s.CreateToken(ctx, tn.ID, "e2e", tokenSet, start.Add(time.Duration(n)*time.Minute)); err != nil {
@@ -175,7 +179,7 @@ func TestDeniedTokensInSpans(t *testing.T) {
 		}
 	}
 	keep := tenant(t, s, ctx, "team-keep")
-	if _, _, err := s.CreateToken(ctx, keep.ID, "kept", tokenSet, start.Add(4*time.Minute+30*time.Second)); err != nil {
+	if _, _, err := s.CreateToken(ctx, keep.ID, "kept", tokenSet, start.Add(minSpan*time.Minute+30*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range ids {
@@ -190,7 +194,7 @@ func TestDeniedTokensInSpans(t *testing.T) {
 	exp := func(n int) int64 {
 		return start.Add(time.Duration(n)*time.Minute + tokenSet.Lifetime).Truncate(time.Second).Unix()
 	}
-	want := []render.ExpirySpan{{From: exp(0), To: exp(4), Tokens: 5}, {From: exp(5), To: exp(7), Tokens: 3}}
+	want := []render.ExpirySpan{{From: exp(0), To: exp(minSpan), Tokens: minSpan + 1}, {From: exp(minSpan + 1), To: exp(2*minSpan + 1), Tokens: minSpan + 1}}
 	if !reflect.DeepEqual(id.DeniedSpans, want) || len(id.Denied) != 0 {
 		t.Fatalf("spans %v, jtis %v, want %v", id.DeniedSpans, id.Denied, want)
 	}

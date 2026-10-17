@@ -29,7 +29,7 @@ func TestRealAPIServerIdentity(t *testing.T) {
 		s.Identity.Denied = append(s.Identity.Denied, fmt.Sprintf("%016x", n))
 	}
 	// Enough spans of denied tokens for two rules of CEL near its limit.
-	for n := range int64(200) {
+	for n := range int64(30) {
 		s.Identity.DeniedSpans = append(s.Identity.DeniedSpans, render.ExpirySpan{From: 1792254713 + 100*n, To: 1792254763 + 100*n, Tokens: 3})
 	}
 	if _, err := c.Sync(ctx, ns, render.Objects(s), nil); err != nil {

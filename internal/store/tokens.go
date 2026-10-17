@@ -318,9 +318,9 @@ type denial struct {
 	exp int64
 }
 
-// minSpan is the fewest denied tokens a span stands for: a span's entry is
-// about as long as two jtis.
-const minSpan = 3
+// minSpan is the fewest denied tokens a span stands for: a span's entry in
+// the rule, two comparisons Envoy can build, is about as long as eight jtis.
+const minSpan = 10
 
 // spanRecent keeps the denials of the tokens signed in its last stretch out
 // of the spans. A token's expiry is when it was signed plus the lifetime, so
