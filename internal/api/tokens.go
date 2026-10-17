@@ -16,9 +16,13 @@ func (s *Server) signingKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	set := s.st.Tokens()
+	denied := len(id.Denied)
+	for _, sp := range id.DeniedSpans {
+		denied += sp.Tokens
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"keys": keys, "identity": id.Mode, "issuer": set.Issuer, "audience": set.Audience,
-		"lifetime_days": int(set.Lifetime.Hours() / 24), "denied": len(id.Denied),
+		"lifetime_days": int(set.Lifetime.Hours() / 24), "denied": denied, "denied_spans": len(id.DeniedSpans),
 	})
 }
 

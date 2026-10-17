@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +43,31 @@ func TestSecurityHeaders(t *testing.T) {
 			if got := w.Header().Get(name); got != want {
 				t.Errorf("%s: %s = %q, want %q", path, name, got, want)
 			}
+		}
+	}
+}
+
+// An admin request's answer says how long the hub took, gzipped or not,
+// so a client tells the hub's time from its link's; a request that is not
+// let in learns nothing.
+func TestServerTiming(t *testing.T) {
+	h := (&Server{uiDir: t.TempDir(), adminToken: "admin-token-for-the-test"}).Handler()
+	for _, tc := range []struct {
+		token, encoding string
+		want            bool
+	}{
+		{"admin-token-for-the-test", "", true},
+		{"admin-token-for-the-test", "gzip", true},
+		{"wrong", "", false},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/no-such-route", nil)
+		r.Header.Set("Authorization", "Bearer "+tc.token)
+		r.Header.Set("Accept-Encoding", tc.encoding)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		got := w.Header().Get("Server-Timing")
+		if ok := strings.HasPrefix(got, "app;dur="); ok != tc.want {
+			t.Errorf("%+v: Server-Timing %q (status %d)", tc, got, w.Code)
 		}
 	}
 }

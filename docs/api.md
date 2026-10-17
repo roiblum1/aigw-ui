@@ -9,6 +9,12 @@ export TOKEN=$(oc get secret aigw-ui-auth -n aigw-ui -o jsonpath='{.data.admin-t
 curl -s -H "Authorization: Bearer $TOKEN" $URL/api/v1/overview
 ```
 
+Answers of a kind that shrinks are gzipped for a client that sends
+`Accept-Encoding: gzip` (`curl --compressed`): the tenants list of 1,000
+tenants is 288 KB as it is and 35 KB gzipped. Every answer carries
+`Server-Timing: app;dur=<milliseconds>`, the hub's own time until it started
+the answer (0.32.0), so a client can tell it from its network's.
+
 ## Errors
 
 | Status | Meaning |
@@ -476,7 +482,7 @@ be given; and what is left to give under its overcommit limit
 | DELETE | `/tenants/{id}` | | 204 |
 | POST | `/tenants/{id}/keys` | `{"name", "kind"}` | `{"key": {...}, "secret": "eyJ..."}`. `kind` is `token`, the default; `personal` for a personal key (`aigw-pk-...`), which `POST /token` takes; or `key` for an API key of the kind before 0.18, refused (409) while a model has a standard. A key has `kind`; a token `expires_at`; a personal key `renewed_at`, when it last got a token, and `expires_at`, when that token expires |
 | DELETE | `/keys/{id}` | | 204, key revoked; a token is refused by every gateway after its next sync, until it expires |
-| GET | `/signing-keys` | | `{"keys": [{"id", "created_at", "retired_at", "tokens"}], "identity", "issuer", "audience", "lifetime_days", "denied"}`. `identity` is `keys` (API keys only, no token issued), `both` or `tokens`; `tokens` of a key counts the unrevoked tokens it signed that have not expired |
+| GET | `/signing-keys` | | `{"keys": [{"id", "created_at", "retired_at", "tokens"}], "identity", "issuer", "audience", "lifetime_days", "denied", "denied_spans"}`. `identity` is `keys` (API keys only, no token issued), `both` or `tokens`; `tokens` of a key counts the unrevoked tokens it signed that have not expired; `denied` counts the tokens the gateways refuse until they expire (revoked, or of a deleted tenant), and `denied_spans` the spans of expiry that stand for runs of them in the token policy (0.32.0; [security](security.md#tokens)) |
 | POST | `/signing-keys/rotate` | | `{"id"}` of the new signing key |
 | PUT | `/tenants/{id}/quotas` | `{"model_id", "token_limit", "window", "shadow"}` | The tenant's quotas. With tokens only, the amount travels in the tenant's tokens (claim `quotas`, by model slug): the tokens signed from now on carry it, and the tenant's `limits_changed_at` moves. 409 on any model while the tenant has a budget across models: a tenant has one or the other. 409 too on a model the tenant may not call: add it to the tenant's models first |
 | DELETE | `/quotas/{id}` | | 204 |

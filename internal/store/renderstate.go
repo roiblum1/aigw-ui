@@ -97,7 +97,7 @@ func (s *Store) renderState(ctx context.Context, c Cluster, f *fleetReads, withK
 
 	rows, err := s.db.Query(ctx,
 		`SELECT m.id, m.name, m.slug, e.host, e.port, e.upstream_model, m.default_limit, m.default_window, m.cost_expression, e.source, e.backends,
-		        e.pools, m.fleet AND m.spent_mode = 'best-effort'
+		        e.pools, m.fleet AND m.spent_mode = 'best-effort', m.budget_pass_slot
 		 FROM model_endpoints e JOIN models m ON m.id = e.model_id WHERE e.cluster_id = $1`, c.ID)
 	if err != nil {
 		return st, err
@@ -111,7 +111,7 @@ func (s *Store) renderState(ctx context.Context, c Cluster, f *fleetReads, withK
 		var pools []Pool
 		var bestEffort bool
 		if err := rows.Scan(&id, &m.Name, &m.Slug, &m.Host, &m.Port, &m.UpstreamModel, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &source, &backends,
-			&pools, &bestEffort); err != nil {
+			&pools, &bestEffort, &m.BudgetPassSlot); err != nil {
 			rows.Close()
 			return st, err
 		}
@@ -333,8 +333,8 @@ func (s *Store) addFleetModels(ctx context.Context, f *fleetReads, st *render.St
 	models, err := f.fleetModels.get(func() ([]fleetModel, error) {
 		return list(ctx, s, func(r scanner) (fleetModel, error) {
 			var m fleetModel
-			return m, r.Scan(&m.id, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.zones, &m.mode)
-		}, `SELECT id, name, slug, default_limit, default_window, cost_expression, fleet_zones, spent_mode FROM models WHERE fleet ORDER BY name`)
+			return m, r.Scan(&m.id, &m.Name, &m.Slug, &m.DefaultLimit, &m.DefaultWindow, &m.CostExpression, &m.zones, &m.mode, &m.BudgetPassSlot)
+		}, `SELECT id, name, slug, default_limit, default_window, cost_expression, fleet_zones, spent_mode, budget_pass_slot FROM models WHERE fleet ORDER BY name`)
 	})
 	if err != nil {
 		return err

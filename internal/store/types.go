@@ -149,6 +149,9 @@ type Model struct {
 	// QuotaAmounts is how many rules the same quotas take once the gateways
 	// take tokens only: one per amount, placeholders included.
 	QuotaAmounts int `json:"quota_amounts"`
+	// BudgetPassSlot is the position of the rule that lets a tenant with a
+	// budget across models through (render.Model.BudgetPassSlot).
+	BudgetPassSlot int `json:"-"`
 }
 
 // Cost returns the cost expression that is rendered for the model: the one

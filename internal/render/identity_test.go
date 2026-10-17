@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	celgo "github.com/google/cel-go/cel"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -169,5 +170,110 @@ func TestIdentityFleetBackend(t *testing.T) {
 	h := fmt.Sprint(b.Object["spec"].(map[string]any)["headerMutation"])
 	if !strings.Contains(h, "remove:[authorization x-api-key]") || !strings.Contains(h, "best-effort") {
 		t.Fatalf("headers: %s", h)
+	}
+}
+
+// Runs of denied tokens are refused by their expiry, a span to an entry,
+// in rules of at most 4,096 characters of CEL, after the jtis.
+func TestIdentityDeniedSpans(t *testing.T) {
+	i := identity(IdentityTokens)
+	i.DeniedSpans = []ExpirySpan{{From: 1792254713, To: 1792254800, Tokens: 40}}
+	rules := authorization(i, nil)["rules"].([]any)
+	if len(rules) != 3 || rules[0].(map[string]any)["name"] != "revoked" || rules[1].(map[string]any)["name"] != "revoked-span" {
+		t.Fatalf("rules: %v", rules)
+	}
+	c := "metadata.filter_metadata['envoy.filters.http.jwt_authn']['aigw-hub']"
+	want := "'envoy.filters.http.jwt_authn' in metadata.filter_metadata && 'aigw-hub' in metadata.filter_metadata['envoy.filters.http.jwt_authn']" +
+		" && 'exp' in " + c + " && 'cid' in " + c + " && 'sub' in " + c + " && 'jti' in " + c +
+		" && " + c + "['cid'] == " + c + "['sub'] + '.' + " + c + "['jti']" +
+		" && [[1792254713.0, 1792254800.0]].exists(r, " + c + "['exp'] >= r[0] && " + c + "['exp'] <= r[1])"
+	if got := rules[1].(map[string]any)["cel"]; got != want {
+		t.Fatalf("cel\n%s\nwant\n%s", got, want)
+	}
+
+	i.DeniedSpans = nil
+	for n := range int64(300) {
+		i.DeniedSpans = append(i.DeniedSpans, ExpirySpan{From: 1792254713 + 100*n, To: 1792254713 + 100*n + 50, Tokens: 3})
+	}
+	var spans int
+	for _, r := range authorization(i, nil)["rules"].([]any) {
+		cel, _ := r.(map[string]any)["cel"].(string)
+		if cel == "" {
+			continue
+		}
+		if len(cel) > maxCEL {
+			t.Fatalf("%d characters of CEL", len(cel))
+		}
+		spans += strings.Count(cel, ".0, ")
+	}
+	if spans != 300 {
+		t.Fatalf("%d of 300 spans rendered", spans)
+	}
+}
+
+// The span rule refuses a stored token that expires within a span and lets
+// every other token through: one that expires outside it, and one a
+// personal key got, whose cid names the key. Evaluated with cel-go on the
+// claims as the gateway's JWT filter keeps them (numbers as doubles); a
+// request without a checked token matches nothing.
+func TestIdentityDeniedSpanMatches(t *testing.T) {
+	cel := spanRules([]ExpirySpan{{From: 1000, To: 2000, Tokens: 3}, {From: 5000, To: 5000, Tokens: 3}})[0].(map[string]any)["cel"].(string)
+	env, err := celgo.NewEnv(celgo.Variable("metadata", celgo.DynType))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Envoy Gateway only parses the expression and Envoy evaluates it
+	// without a type check; a checker must take it as well.
+	checked, iss := env.Compile(cel)
+	if iss.Err() != nil {
+		t.Fatal(iss.Err())
+	}
+	parsed, iss := env.Parse(cel)
+	if iss.Err() != nil {
+		t.Fatal(iss.Err())
+	}
+	var programs []celgo.Program
+	for _, ast := range []*celgo.Ast{checked, parsed} {
+		prg, err := env.Program(ast)
+		if err != nil {
+			t.Fatal(err)
+		}
+		programs = append(programs, prg)
+	}
+	refused := func(claims map[string]any) bool {
+		t.Helper()
+		md := map[string]any{"filter_metadata": map[string]any{}}
+		if claims != nil {
+			md["filter_metadata"] = map[string]any{"envoy.filters.http.jwt_authn": map[string]any{"aigw-hub": claims}}
+		}
+		var got []bool
+		for _, prg := range programs {
+			out, _, err := prg.Eval(map[string]any{"metadata": md})
+			if err != nil {
+				t.Fatalf("%v: %v", claims, err)
+			}
+			got = append(got, out.Value() == true)
+		}
+		if got[0] != got[1] {
+			t.Fatalf("%v: checked %v, parsed %v", claims, got[0], got[1])
+		}
+		return got[0]
+	}
+	stored := func(exp float64) map[string]any {
+		return map[string]any{"sub": "e2e-q-001", "jti": "00aa11bb22cc33dd", "cid": "e2e-q-001.00aa11bb22cc33dd", "exp": exp, "iat": exp - 100}
+	}
+	for _, c := range []struct {
+		claims map[string]any
+		want   bool
+	}{
+		{stored(1000), true}, {stored(1500), true}, {stored(2000), true}, {stored(5000), true},
+		{stored(999), false}, {stored(2001), false}, {stored(4999), false},
+		// A personal key's token: its cid is the key's.
+		{map[string]any{"sub": "e2e-q-001", "jti": "99ee", "cid": "e2e-q-001.00aa11bb22cc33dd", "exp": 1500.0}, false},
+		{nil, false},
+	} {
+		if got := refused(c.claims); got != c.want {
+			t.Errorf("%v: refused %v, want %v", c.claims, got, c.want)
+		}
 	}
 }

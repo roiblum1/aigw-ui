@@ -89,7 +89,10 @@ loop of their own, so a change never waits for a poll.
 
 Every `SYNC_INTERVAL` (default 5 minutes) every cluster is synced again even
 if nothing changed. This retries a cluster whose last sync failed and puts
-back an object that someone edited or deleted by hand.
+back an object that someone edited or deleted by hand. Since 0.32.0 the hub
+also syncs every cluster as soon as it starts, so what changed while it was
+down reaches the clusters at once; up to 0.31.0 the first sync after a
+restart came with the first resync, 5 minutes later (0.31.0 run).
 
 ## What is applied to a cluster
 
@@ -234,9 +237,18 @@ what it last applied.
    not held by the model's pool or a quota it had from before. Its bucket
    per tenant is what the tenant used of the model, which the Usage page and
    the history read (a day since 0.26.0; a minute in 0.25.0).
-   The rule is last, so the rules before it keep their positions and their
-   counters; the pool's counter is named after the number of rules, so its
-   count starts again when the rule comes or goes. It is rendered while an
+   The rule has a position of its own (`models.budget_pass_slot`, 0.32.0)
+   that never moves, as an amount's does not: each tenant's counter under it
+   is named after it. Up to 0.31.0 it was the last rule and moved whenever an
+   amount was added after it or the last one was freed. What a tenant used
+   under the old position since the history's last look, up to a minute's,
+   never reached the history, and the Usage page showed the model's use start
+   again from 0 (0.31.0 run: 5 of a tenant's 10 requests that day). The
+   upgrade keeps each model's rule where it was, after its amounts; a new
+   model's is position 0, and its first amount takes 1. A new amount takes
+   the lowest free position other than this one, so it may go after the
+   rule. The pool's counter is named after the number of rules, so its
+   count starts again when that number changes. It is rendered while an
    enabled tenant has a budget, on a model whose prices charge the budgets
    (not in a dry run), and such a model then gets its `QuotaPolicy` even
    without a quota, so that its pool holds the tenants with neither. The tenant's counters there only count (`Counter.Budget`): the
@@ -655,7 +667,11 @@ alike: nothing was refused and both waited in one queue. See
 ## API-key policy and the peer listener
 
 The policy is the API key check, the JWT check, or both during the switch to
-tokens (`internal/render/identity.go`). A fleet cluster must have a *Client listener* set. The `SecurityPolicy`
+tokens (`internal/render/identity.go`). Its authorization rules refuse, in
+order: revoked tokens and those of deleted tenants, by `jti` and, since
+0.32.0, by spans of their expiry (`revoked-span`, see
+[security](security.md#tokens)); revoked personal keys' tokens, by `cid`;
+disabled tenants, by `sub`; and a model not in the token's list. A fleet cluster must have a *Client listener* set. The `SecurityPolicy`
 attaches to the whole Gateway unless the cluster has one; then it attaches to that listener alone
 (`sectionName`). A gateway that also has a listener for requests forwarded by
 other sites needs this: the entry gateway removes the key before forwarding,
@@ -828,7 +844,7 @@ Each counter is followed by its own Redis key in `usage_counter_cursors`
 | Same key as at the last look | The counter minus the cursor |
 | The counter is lower than the cursor | The counter: it was reset |
 | A new window began | The new counter, and what the old window's counter grew by after the last look. That part goes to the last hour of the old window |
-| A key the hub no longer computes, in a window still running | What it grew by since the last look. It is read to the end of its window. That covers a rule that moved, such as a budget tenant's rule after a new amount |
+| A key the hub no longer computes, in a window still running | What it grew by since the last look. It is read to the end of its window. That covers a tenant's old amount after a change of quota |
 | Redis cannot be read | Nothing. The cursors stay, and the next look adds it |
 
 The counters a tenant has are those of its quota or budget, and while a
@@ -843,6 +859,16 @@ model, 10,000 keys a minute. A reset of a tenant's quota records the use since t
 first, so the reset does not take it out of the history. A quota's counter
 keeps a cursor at 0 too; a token counter while another of the pair's holds
 something.
+
+A key the history never looked at is not followed: a counter that gets its
+first use and stops being computed between two looks is lost. No rule
+moves since 0.32.0, so a counter stops being computed only when its tenant
+changes: a new amount (covered by the amounts above), or a quota, budget,
+model list or the tenant itself removed within a minute of its first use.
+Up to 0.31.0 a budget
+tenant's rule moved with every amount added after it, and a tenant that
+used a model in the minute before such a move lost that use from the
+history (0.31.0 run).
 
 The counter of a window that ended is still in Redis: the rate limit
 service lets a key expire one window length and some jitter after its last
@@ -923,6 +949,14 @@ Not verified for token counts (0.30.0): the counter names on a live
 gateway (worked out from Envoy Gateway 1.9.2 and the rate limit service's
 source; the self-test checks them), and the extra latency of four more
 descriptors on every request.
+
+Not verified for the denied-token spans (0.32.0): that Envoy evaluates the
+`revoked-span` rule as cel-go does. The rule is taken by Envoy Gateway
+1.9.2's CRD (real API server test) and was evaluated with cel-go, both type
+checked and parsed only, as Envoy Gateway passes it on; Envoy reads the
+claims as doubles, as the test does. A span that does not match on a real
+gateway lets its tokens through: check that a token of a deleted test
+tenant is refused after the hub's sync.
 
 Also not verified: that the gateway accepts the placeholder rule that keeps a
 removed quota's position, a rule with an `Exact` match on a client ID no key
