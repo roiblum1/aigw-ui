@@ -98,6 +98,7 @@ Back up the encryption key straight away. See
 | `redis.tlsInsecure` | `false` | Skip verification of the Redis certificate. For tests only |
 | `redis.allowReset` | `false` | Allow resetting a tenant's usage. The server then deletes counters in Redis, so its Redis user needs `DEL` |
 | `redis.keyPrefix` | empty | The rate limit service's `CACHE_KEY_PREFIX`, if set |
+| `redis.tokenCounts` | `true` | Have the gateways count each tenant's requests and input, cached and output tokens by model and hour, for the tenant's own page. Four rules that never refuse, in the hub's `BackendTrafficPolicy` on the client listener. Needs global rate limiting in Envoy Gateway (as budgets across models do) and tenants on tokens; turn it off for a site without it. See [token counts on every route](#token-counts-on-every-route) |
 | `config.syncInterval` | `5m` | How often every cluster is synced again without a change. `0` turns it off. Needs `autoSync` |
 | `config.overageInterval` | `15s` | For models that serve a spent budget as best-effort: how often the usage counters are read. At least `5s`. Needs `redis.url` |
 | `config.overageThreshold` | `0.9` | The share of its budget a tenant has to have used to be moved to best-effort, from `0.5` to `1` |
@@ -207,6 +208,38 @@ an older Envoy Gateway its CRD drops the field and the budget does not hold
 7. Run **Self-test** on the cluster with a priced model. The step "A budget
    across models is counted and refuses" fails while anything is missing,
    and names a route whose policy overrides the budget's.
+
+## Token counts on every route
+
+The routes the hub renders, and the routes of a cluster's own it marks (a
+model with quotas or budgets), write each answer's token counts for the
+tenants' own page. A route it does not touch counts the tenant's requests
+but not their tokens; the tenant's page then says the model reports none.
+To have every route write them, declare the keys once on the gateway, in a
+`GatewayConfig` the Gateway names (Envoy AI Gateway 1.2.0;
+`globalLLMRequestCosts` applies to every route, and a route's own key of
+the same name wins):
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GatewayConfig
+metadata:
+  name: envoy-ai-gateway
+  namespace: <gateway namespace>
+spec:
+  globalLLMRequestCosts:
+    - metadataKey: aigw_ui_input
+      type: InputToken
+    - metadataKey: aigw_ui_cached
+      type: CachedInputToken
+    - metadataKey: aigw_ui_output
+      type: OutputToken
+```
+
+and on the Gateway the annotation `aigateway.envoyproxy.io/gateway-config:
+envoy-ai-gateway`. This belongs to the gateway's chart; the hub does not
+write it. The self-test step "The tenant's requests and tokens are counted
+by model" tells a route without the keys from a counter that is missing.
 
 ## Before a model serves a spent budget as best-effort
 

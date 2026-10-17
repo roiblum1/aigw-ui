@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"slices"
 	"testing"
@@ -87,17 +88,19 @@ func TestMyUsageShowsTheTenantsModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The tenant used both, so both have a price on its page.
-	err = st.RecordUsage(ctx, func(map[store.UsageKey]store.UsageCursor) ([]store.UsageDelta, []store.UsageCursor, error) {
-		var out []store.UsageDelta
+	err = st.RecordUsage(ctx, func(store.Before) (store.Look, error) {
+		var out store.Look
 		for _, id := range ids {
-			out = append(out, store.UsageDelta{UsageKey: store.UsageKey{TenantID: tenant.ID, ModelID: id}, Hour: time.Now(), Unit: "credits", Used: 100})
+			key := store.UsageKey{TenantID: tenant.ID, ModelID: id}
+			out.Usage = append(out.Usage, store.UsageDelta{UsageKey: key, Hour: time.Now(), Unit: "credits", Used: 100})
+			out.Tokens = append(out.Tokens, store.TokenDelta{UsageKey: key, Hour: time.Now(), Requests: 2, Input: 900, Cached: 600, Output: 40})
 		}
-		return out, nil, nil
+		return out, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := func(tenant store.Tenant) (models, prices []string) {
+	page := func(tenant store.Tenant) (models, prices, tokens []string) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("GET", "/api/v1/my/usage", nil)
 		s.getMyUsage(w, r.WithContext(context.WithValue(r.Context(), tenantKey{}, tenant)))
@@ -108,24 +111,30 @@ func TestMyUsageShowsTheTenantsModels(t *testing.T) {
 		for _, p := range out.Prices {
 			prices = append(prices, p.ModelName)
 		}
-		return out.Models, prices
+		for _, p := range out.TokenDays {
+			tokens = append(tokens, fmt.Sprintf("%s %d/%d/%d/%d", p.ModelName, p.Requests, p.Input, p.Cached, p.Output))
+		}
+		return out.Models, prices, tokens
 	}
 
-	if models, prices := page(tenant); models != nil || !slices.Equal(prices, []string{"opus", "sonnet"}) {
-		t.Errorf("every model: models %v, prices %v", models, prices)
+	if models, prices, tokens := page(tenant); models != nil || !slices.Equal(prices, []string{"opus", "sonnet"}) ||
+		!slices.Equal(tokens, []string{"opus 2/900/600/40", "sonnet 2/900/600/40"}) {
+		t.Errorf("every model: models %v, prices %v, tokens %v", models, prices, tokens)
 	}
 	held, err := st.SetTenantModels(ctx, tenant.ID, []string{ids["opus"]})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if models, prices := page(held); !slices.Equal(models, []string{"opus"}) || !slices.Equal(prices, []string{"opus"}) {
-		t.Errorf("held to opus: models %v, prices %v", models, prices)
+	// What it sent to a model it may no longer call is not shown.
+	if models, prices, tokens := page(held); !slices.Equal(models, []string{"opus"}) || !slices.Equal(prices, []string{"opus"}) ||
+		!slices.Equal(tokens, []string{"opus 2/900/600/40"}) {
+		t.Errorf("held to opus: models %v, prices %v, tokens %v", models, prices, tokens)
 	}
 	none, err := st.SetTenantModels(ctx, tenant.ID, []string{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if models, prices := page(none); models == nil || len(models) != 0 || len(prices) != 0 {
+	if models, prices, _ := page(none); models == nil || len(models) != 0 || len(prices) != 0 {
 		t.Errorf("held to no model: models %v, prices %v", models, prices)
 	}
 }

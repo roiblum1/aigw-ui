@@ -3,12 +3,14 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"aigw-ui/internal/benchmark"
 	"aigw-ui/internal/selftest"
@@ -32,6 +34,19 @@ type Server struct {
 	// tenantPage lets tenants sign in with an API key to see their own usage.
 	tenantPage  bool
 	keyFailures keyFailures
+	// history records the use since its last look; nil without it.
+	history recorder
+}
+
+// recorder records what was used since the last look (history.Service).
+type recorder interface {
+	Tick(ctx context.Context, now time.Time) error
+}
+
+// WithHistory has a reset record the use it takes away first.
+func (s *Server) WithHistory(h recorder) *Server {
+	s.history = h
+	return s
 }
 
 // New builds the API. usage may be nil, which turns usage monitoring off.

@@ -87,8 +87,9 @@ type DiscoveredModel struct {
 	Name     string
 	Backends []BackendRef
 	// OnlyIfKnown is set for a model the cluster has a deployment of but
-	// does not expose itself. It is recorded for a model that is already
-	// in the catalog and never adds one.
+	// does not expose itself, and for one only the gateway's model list
+	// names. It is recorded for a model that is already in the catalog and
+	// never adds one.
 	OnlyIfKnown bool
 }
 

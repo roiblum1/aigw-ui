@@ -21,6 +21,24 @@
   .meter.full > span {
     background: var(--danger);
   }
+  .workload-charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px 24px;
+    margin: 16px 0;
+  }
+  .workload-chart {
+    margin: 0;
+    min-width: 0;
+  }
+  .workload-chart h3 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .table-scroll {
+    overflow-x: auto;
+  }
   .page-header .actions input[type="search"] {
     width: 220px;
   }

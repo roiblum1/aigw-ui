@@ -789,6 +789,24 @@ export interface MyUsage {
   days: UsagePoint[];
   hours_from: string;
   hours: UsagePoint[];
+  /** Whether the gateways count the tenant's requests and tokens. */
+  token_counts: boolean;
+  token_days: TokenPoint[];
+  token_hours: TokenPoint[];
+}
+
+/** What a tenant sent to a model in one hour or day: numbers only, nothing of a prompt. */
+export interface TokenPoint {
+  at: string;
+  tenant_id: string;
+  tenant_slug: string;
+  model_id: string;
+  model_name: string;
+  requests: number;
+  /** Every input token, the cached ones too. */
+  input_tokens: number;
+  cached_tokens: number;
+  output_tokens: number;
 }
 
 export interface ProbeResult {

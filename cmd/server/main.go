@@ -48,6 +48,8 @@ func run() error {
 	}
 	defer st.Close()
 	st.SetFleet(cfg.Fleet)
+	// The token counters are only worth counting where the hub reads them.
+	st.SetTokenCounts(cfg.RedisURL != "" && cfg.RedisTokenCounts)
 	st.SetTokens(store.TokenSettings{Issuer: cfg.TokenIssuer, Audience: cfg.TokenAudience, Lifetime: cfg.TokenLifetime,
 		RenewedLifetime: cfg.TokenRenewedLifetime})
 	if names, err := st.FleetModels(ctx); err == nil && len(names) > 0 && !st.FleetConfigured() {
@@ -77,11 +79,13 @@ func run() error {
 	// Moving tenants to best-effort needs the counters, so it runs only
 	// with Redis. Without it a spent budget is refused, as before.
 	var overageService *overage.Service
+	var hist *history.Service
 	if usageService != nil {
 		overageService = overage.New(st, usageService, sy, cfg.OverageEvery, cfg.OverageThreshold)
 		go overageService.Run(ctx)
 		if cfg.HistoryEvery > 0 {
-			go history.New(st, usageService, cfg.HistoryEvery).Run(ctx)
+			hist = history.New(st, usageService, cfg.HistoryEvery)
+			go hist.Run(ctx)
 		}
 	}
 
@@ -97,7 +101,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService, overageService), bench, cfg.AdminToken, cfg.UIDir, cfg.TenantPage).WithUpstreamDocs(cfg.UpstreamDocsDir).Handler(),
+		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService, overageService), bench, cfg.AdminToken, cfg.UIDir, cfg.TenantPage).WithUpstreamDocs(cfg.UpstreamDocsDir).WithHistory(historyOf(hist)).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -112,4 +116,15 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// historyOf hands the API the history, or none: a nil *history.Service in
+// the interface would not compare equal to nil.
+func historyOf(h *history.Service) interface {
+	Tick(ctx context.Context, now time.Time) error
+} {
+	if h == nil {
+		return nil
+	}
+	return h
 }

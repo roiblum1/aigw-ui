@@ -193,6 +193,9 @@ type State struct {
 	// only given while the gateway takes tokens only.
 	Budgets    []TenantBudget
 	Restricted []TenantModels
+	// TokenCounts is set when the hub reads the gateways' counters: the
+	// gateway then counts each tenant's tokens by model (CountsTokens).
+	TokenCounts bool
 }
 
 // Objects returns the desired objects in the order they should be applied.
@@ -238,7 +241,7 @@ func Objects(s State) []*unstructured.Unstructured {
 	if s.AuthEnabled {
 		out = append(out, authPolicy(s))
 	}
-	if s.hasBudgets() {
+	if s.hasBudgets() || s.CountsTokens() {
 		out = append(out, budgetPolicy(s))
 	}
 	return append(out, objectives(s)...)

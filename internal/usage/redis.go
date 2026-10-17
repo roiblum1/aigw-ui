@@ -72,6 +72,11 @@ func (r *Reader) Close() error { return r.rdb.Close() }
 
 func (r *Reader) Ping(ctx context.Context) error { return r.rdb.Ping(ctx).Err() }
 
+// mgetChunk is how many keys one MGET asks for. The token counters of a
+// thousand tenants on a few models are tens of thousands of keys, which go
+// in one round trip of several commands rather than one command.
+const mgetChunk = 1000
+
 // Values returns the counter stored under each key. A key that does not exist
 // is left out: nothing was used in that window yet.
 func (r *Reader) Values(ctx context.Context, keys []string) (map[string]int64, error) {
@@ -79,17 +84,23 @@ func (r *Reader) Values(ctx context.Context, keys []string) (map[string]int64, e
 	if len(keys) == 0 {
 		return out, nil
 	}
-	vals, err := r.rdb.MGet(ctx, keys...).Result()
-	if err != nil {
+	pipe := r.rdb.Pipeline()
+	var cmds []*redis.SliceCmd
+	for start := 0; start < len(keys); start += mgetChunk {
+		cmds = append(cmds, pipe.MGet(ctx, keys[start:min(start+mgetChunk, len(keys))]...))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
 		return nil, err
 	}
-	for i, v := range vals {
-		s, ok := v.(string)
-		if !ok {
-			continue
-		}
-		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-			out[keys[i]] = n
+	for n, cmd := range cmds {
+		for i, v := range cmd.Val() {
+			s, ok := v.(string)
+			if !ok {
+				continue
+			}
+			if value, err := strconv.ParseInt(s, 10, 64); err == nil {
+				out[keys[n*mgetChunk+i]] = value
+			}
 		}
 	}
 	return out, nil

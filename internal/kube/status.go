@@ -198,12 +198,75 @@ func readFlowControl(obj *unstructured.Unstructured, svcs []unstructured.Unstruc
 		if !ok {
 			continue
 		}
-		if on, known := flowControl(svc, configs); known && !on {
+		on, known := flowControl(svc, configs)
+		switch {
+		case known && !on:
 			res.Warnings = append(res.Warnings, "Best-effort requests are not held back on InferencePool "+obj.GetNamespace()+"/"+name+
 				" until its scheduler counts the pool full, which it may not: LLMInferenceService "+svc.GetNamespace()+"/"+svc.GetName()+
 				" runs it without flow control. Turn on featureGates: [flowControl] with the concurrency-detector (see the optimization guide).")
+		case on && !tenantFairness(schedulerConfig(svc, configs)):
+			res.Warnings = append(res.Warnings, "Regular tenants are served oldest first on InferencePool "+obj.GetNamespace()+"/"+name+
+				", not in turn: the scheduler of LLMInferenceService "+svc.GetNamespace()+"/"+svc.GetName()+
+				" queues priority 0 under global-strict-fairness-policy, so one tenant's backlog delays every other tenant. "+
+				"Give that band fairnessPolicyRef: round-robin-fairness-policy (see the optimization guide).")
 		}
 	}
+}
+
+// schedulerConfig is the inline scheduler config that applies to an
+// LLMInferenceService, as flowControl finds it; nil when there is none or
+// it cannot be read.
+func schedulerConfig(svc *unstructured.Unstructured, bases []Base) map[string]any {
+	own, _, _ := unstructured.NestedMap(svc.Object, "spec")
+	specs := []map[string]any{own}
+	for i := len(bases) - 1; i >= 0; i-- {
+		specs = append(specs, bases[i].Spec)
+	}
+	for _, spec := range specs {
+		if config, ok, _ := unstructured.NestedMap(spec, "router", "scheduler", "config"); ok {
+			inline, _ := config["inline"].(map[string]any)
+			return inline
+		}
+	}
+	return nil
+}
+
+// tenantFairness reports whether a scheduler with flow control takes the
+// tenants of priority 0, the regular tenants' class, in turn: the band that
+// priority 0 falls in (its own in flowControl.priorityBands, else
+// defaultPriorityBand) names as its fairnessPolicyRef a plugin of type
+// round-robin-fairness-policy. Without one the band runs llm-d router
+// v0.10.0's default, global-strict-fairness-policy, which serves the oldest
+// request first whatever its fairness ID (flowcontrol/registry/config.go
+// DefaultFairnessPolicyRef; seen on the lab, 2026-10-17: one tenant's single
+// request waited 45 s behind another's six).
+func tenantFairness(inline map[string]any) bool {
+	band, _, _ := unstructured.NestedMap(inline, "flowControl", "defaultPriorityBand")
+	bands, _, _ := unstructured.NestedSlice(inline, "flowControl", "priorityBands")
+	for _, b := range bands {
+		if m, ok := b.(map[string]any); ok {
+			if p, _, _ := unstructured.NestedInt64(m, "priority"); p == 0 {
+				band = m
+			}
+		}
+	}
+	ref, _, _ := unstructured.NestedString(band, "fairnessPolicyRef")
+	if ref == "" {
+		return false
+	}
+	plugins, _, _ := unstructured.NestedSlice(inline, "plugins")
+	for _, p := range plugins {
+		m, _ := p.(map[string]any)
+		kind, _ := m["type"].(string)
+		name, _ := m["name"].(string)
+		if name == "" {
+			name = kind
+		}
+		if name == ref {
+			return kind == "round-robin-fairness-policy"
+		}
+	}
+	return false
 }
 
 // flowControl reports whether an LLMInferenceService's scheduler runs flow

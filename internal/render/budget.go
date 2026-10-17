@@ -105,7 +105,8 @@ func (s State) budgets() []TenantBudget {
 //
 // The policy is only rendered while the gateway takes tokens only: the
 // headers it reads are the ones a token sets. It attaches where the API-key
-// policy does.
+// policy does. It also holds the rules that count tokens (tokenRules), and is
+// there for those alone while no tenant has a budget.
 func budgetPolicy(s State) *unstructured.Unstructured {
 	target := map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": s.GatewayName}
 	if s.ClientListener != "" {
@@ -136,18 +137,26 @@ func budgetPolicy(s State) *unstructured.Unstructured {
 			},
 		},
 	}
+	rules := []any{rule}
 	u := object(egAPI, "BackendTrafficPolicy", s.Namespace, BudgetPolicyName)
+	if s.CountsTokens() {
+		// After the budget rule, which is there without any budget too: a
+		// request without x-aigw-budget matches it not, and the token rules
+		// keep their positions.
+		rules = append(rules, tokenRules()...)
+		u.SetAnnotations(map[string]string{TokenCountsAnnotation: "true"})
+	}
 	u.Object["spec"] = map[string]any{
 		"targetRefs": []any{target},
-		"rateLimit":  map[string]any{"type": "Global", "global": map[string]any{"rules": []any{rule}}},
+		"rateLimit":  map[string]any{"type": "Global", "global": map[string]any{"rules": rules}},
 	}
 	return u
 }
 
-// hasBudgets reports whether the budget policy is rendered: while the
-// gateway takes tokens only, and some tenant has a budget. Without one the
-// policy is left out, so a cluster without global rate limiting in its
-// Envoy Gateway is not asked for it.
+// hasBudgets reports whether some tenant's budget is enforced: while the
+// gateway takes tokens only, and some tenant has a budget. Without one, and
+// without token counts, the policy is left out, so a cluster without global
+// rate limiting in its Envoy Gateway is not asked for it.
 func (s State) hasBudgets() bool {
 	return s.AuthEnabled && s.Identity.Mode == IdentityTokens && len(s.budgets()) > 0
 }

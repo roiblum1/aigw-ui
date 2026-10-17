@@ -170,6 +170,12 @@ type myUsage struct {
 	Days      []store.UsagePoint `json:"days"`
 	HoursFrom time.Time          `json:"hours_from"`
 	Hours     []store.UsagePoint `json:"hours"`
+	// TokenCounts is set when the gateways count the tenant's requests and
+	// tokens. TokenDays and TokenHours are what they counted, as Days and
+	// Hours are: numbers only, nothing of a prompt or an answer.
+	TokenCounts bool               `json:"token_counts"`
+	TokenDays   []store.TokenPoint `json:"token_days"`
+	TokenHours  []store.TokenPoint `json:"token_hours"`
 }
 
 // getMyUsage answers a tenant with its own budgets, usage and prices.
@@ -226,6 +232,19 @@ func (s *Server) getMyUsage(w http.ResponseWriter, r *http.Request) {
 	for _, p := range out.Days {
 		mine[p.ModelID] = true
 	}
+	out.TokenCounts = s.usage != nil && s.st.TokenCounts()
+	if out.TokenDays, err = s.st.TokenHistory(r.Context(), out.DaysFrom, store.StepDay, t.ID); err != nil {
+		fail(w, err)
+		return
+	}
+	if out.TokenHours, err = s.st.TokenHistory(r.Context(), out.HoursFrom, store.StepHour, t.ID); err != nil {
+		fail(w, err)
+		return
+	}
+	out.TokenDays, out.TokenHours = callable(out.TokenDays, calls), callable(out.TokenHours, calls)
+	for _, p := range out.TokenDays {
+		mine[p.ModelID] = true
+	}
 	models, err := s.st.ListModels(r.Context())
 	if err != nil {
 		fail(w, err)
@@ -243,4 +262,16 @@ func (s *Server) getMyUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// callable keeps the points of the models the tenant may call: what it sent
+// before it was held to some is not shown as a model it can use.
+func callable(points []store.TokenPoint, calls func(modelID string) bool) []store.TokenPoint {
+	out := []store.TokenPoint{}
+	for _, p := range points {
+		if calls(p.ModelID) {
+			out = append(out, p)
+		}
+	}
+	return out
 }

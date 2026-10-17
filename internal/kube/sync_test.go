@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -290,5 +291,32 @@ func TestSyncPricesEachModelOfASharedRoute(t *testing.T) {
 		if !strings.Contains(b, `"cel":"`+want+`"`) {
 			t.Errorf("patch %s, want the cost %s", b, want)
 		}
+	}
+}
+
+// While the gateway counts tokens, a route of the cluster's own that the
+// sync marks gets the keys it writes an answer's token counts under, once;
+// a key of the wrong type is put right, and they go when tokens are no
+// longer counted. A cost of the route's own stays.
+func TestWithCostsTokenKeys(t *testing.T) {
+	route := func(costs ...any) unstructured.Unstructured {
+		return unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"llmRequestCosts": costs}}}
+	}
+	theirs := map[string]any{"metadataKey": "llm_total", "type": "TotalToken"}
+	credits := map[string]any{"metadataKey": render.CreditsKey, "type": "CEL", "cel": "1u"}
+
+	got, changed := withCosts(route(theirs, credits), "1u", true)
+	if want := append([]any{theirs, credits}, render.TokenCosts()...); !changed || !reflect.DeepEqual(got, want) {
+		t.Fatalf("added: %v %v", changed, got)
+	}
+	if again, changed := withCosts(route(got...), "1u", true); changed || !reflect.DeepEqual(again, got) {
+		t.Fatalf("a second sync changed %v", again)
+	}
+	wrong := map[string]any{"metadataKey": render.CachedTokensKey, "type": "InputToken"}
+	if fixed, changed := withCosts(route(theirs, wrong), "", true); !changed || !reflect.DeepEqual(fixed, append([]any{theirs}, render.TokenCosts()...)) {
+		t.Fatalf("wrong type: %v %v", changed, fixed)
+	}
+	if off, changed := withCosts(route(got...), "1u", false); !changed || !reflect.DeepEqual(off, []any{theirs, credits}) {
+		t.Fatalf("not counted: %v %v", changed, off)
 	}
 }

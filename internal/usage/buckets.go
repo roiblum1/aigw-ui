@@ -47,28 +47,57 @@ type budgetBucket struct {
 	keys                 []*key
 }
 
+// fleet is what the counters are worked out from: the clusters' desired
+// states, the models and the tenants.
+type fleet struct {
+	clusters []store.Cluster
+	states   []render.State
+	models   []store.Model
+	tenants  []store.Tenant
+}
+
+func (s *Service) load(ctx context.Context) (fleet, error) {
+	var f fleet
+	var err error
+	if f.clusters, err = s.st.ListClusters(ctx); err != nil {
+		return f, err
+	}
+	if f.models, err = s.st.ListModels(ctx); err != nil {
+		return f, err
+	}
+	if f.tenants, err = s.st.ListTenants(ctx); err != nil {
+		return f, err
+	}
+	for _, c := range f.clusters {
+		state, err := s.st.RenderStateWithoutKeys(ctx, c.ID)
+		if err != nil {
+			return f, err
+		}
+		f.states = append(f.states, state)
+	}
+	return f, nil
+}
+
 // buckets works out, from the desired state of every cluster, which quotas,
 // pools and budgets across models exist and which Redis keys hold their
 // usage in the window that contains now. tenantID limits it to one tenant.
 func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) ([]*bucket, []*budgetBucket, error) {
-	clusters, err := s.st.ListClusters(ctx)
+	f, err := s.load(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	models, err := s.st.ListModels(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	tenants, err := s.st.ListTenants(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	modelBySlug := make(map[string]store.Model, len(models))
-	for _, m := range models {
+	out, budgets := s.bucketsOf(f, now, tenantID)
+	return out, budgets, nil
+}
+
+// bucketsOf is buckets for a fleet already read.
+func (s *Service) bucketsOf(f fleet, now time.Time, tenantID string) ([]*bucket, []*budgetBucket) {
+	modelBySlug := make(map[string]store.Model, len(f.models))
+	for _, m := range f.models {
 		modelBySlug[m.Slug] = m
 	}
-	tenantIDBySlug := make(map[string]string, len(tenants))
-	for _, t := range tenants {
+	tenantIDBySlug := make(map[string]string, len(f.tenants))
+	for _, t := range f.tenants {
 		tenantIDBySlug[t.Slug] = t.ID
 	}
 
@@ -78,11 +107,8 @@ func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) (
 	var out []*bucket
 	budgetBySlug := map[string]*budgetBucket{}
 	var budgets []*budgetBucket
-	for _, c := range clusters {
-		state, err := s.st.RenderStateWithoutKeys(ctx, c.ID)
-		if err != nil {
-			return nil, nil, err
-		}
+	for i, c := range f.clusters {
+		state := f.states[i]
 		for _, ct := range render.BudgetCounters(state) {
 			id := tenantIDBySlug[ct.TenantSlug]
 			if id == "" || (tenantID != "" && tenantID != id) {
@@ -141,7 +167,7 @@ func (s *Service) buckets(ctx context.Context, now time.Time, tenantID string) (
 			k.clusters = append(k.clusters, c.Name)
 		}
 	}
-	return out, budgets, nil
+	return out, budgets
 }
 
 // UsedAs is what the rule that counts the tenant own on the model counted

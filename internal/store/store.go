@@ -33,6 +33,8 @@ type Store struct {
 	box *secretbox.Box
 	// fleet is what every site's entry route has in common.
 	fleet render.FleetConfig
+	// tokenCounts is State.TokenCounts for every cluster.
+	tokenCounts bool
 	// tokens is what the hub writes into the tokens it signs.
 	tokens TokenSettings
 }
@@ -43,6 +45,13 @@ func (s *Store) SetTokens(t TokenSettings) { s.tokens = t }
 
 // Tokens returns what SetTokens set.
 func (s *Store) Tokens() TokenSettings { return s.tokens }
+
+// SetTokenCounts sets whether the gateways count each tenant's tokens by
+// model (render.State.TokenCounts). Call it before the first sync.
+func (s *Store) SetTokenCounts(on bool) { s.tokenCounts = on }
+
+// TokenCounts reports whether the gateways count each tenant's tokens.
+func (s *Store) TokenCounts() bool { return s.tokenCounts }
 
 // SetFleet sets the shared settings of the entry routes. Call it before the
 // store is used.

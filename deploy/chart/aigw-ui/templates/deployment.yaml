@@ -86,6 +86,8 @@ spec:
               value: {{ .Values.redis.tlsInsecure | quote }}
             - name: REDIS_ALLOW_RESET
               value: {{ .Values.redis.allowReset | quote }}
+            - name: REDIS_TOKEN_COUNTS
+              value: {{ .Values.redis.tokenCounts | quote }}
             - name: REDIS_KEY_PREFIX
               value: {{ .Values.redis.keyPrefix | quote }}
             {{- if or .Values.redis.caSecret .Values.redis.caConfigMap }}

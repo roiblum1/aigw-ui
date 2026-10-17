@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -137,6 +138,34 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	}
 	if _, err := c.dyn.Resource(btp).Namespace(ns).Get(ctx, render.BudgetPolicyName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("no budgets, yet the policy is there: %v", err)
+	}
+
+	// Token counts bring it back for their four rules, after the budget
+	// rule: the CRD keeps shadowMode, the two Distinct headers and the cost
+	// from metadata, and the route's token cost types are ones the AI
+	// gateway's CRD takes.
+	s.TokenCounts = true
+	if _, err := c.Sync(ctx, ns, render.Objects(s), nil); err != nil {
+		t.Fatalf("token counts: the API server refused a rendered object: %v", err)
+	}
+	if bp, err = c.dyn.Resource(btp).Namespace(ns).Get(ctx, render.BudgetPolicyName, metav1.GetOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	rl, _, _ = unstructured.NestedSlice(bp.Object, "spec", "rateLimit", "global", "rules")
+	if len(rl) != 5 || rl[2].(map[string]any)["shadowMode"] != true ||
+		fmt.Sprint(rl[2].(map[string]any)["cost"]) != "map[request:map[from:Number number:0] response:map[from:Metadata metadata:map[key:aigw_ui_input namespace:io.envoy.ai_gateway]]]" ||
+		strings.Count(fmt.Sprint(rl[2].(map[string]any)["clientSelectors"]), "type:Distinct") != 2 {
+		t.Fatalf("token rules as stored: %v", rl)
+	}
+	if r, err = c.dyn.Resource(route).Namespace(ns).Get(ctx, render.FleetName("glm-5-3"), metav1.GetOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if costs, _, _ := unstructured.NestedSlice(r.Object, "spec", "llmRequestCosts"); len(costs) != 4 || !reflect.DeepEqual(costs[1:], render.TokenCosts()) {
+		t.Fatalf("route costs with token counts: %v", costs)
+	}
+	s.TokenCounts = false
+	if _, err := c.Sync(ctx, ns, render.Objects(s), nil); err != nil {
+		t.Fatal(err)
 	}
 
 	// Own quotas by amount: the rule matches the amount's header exactly and

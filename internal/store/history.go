@@ -12,13 +12,34 @@ import (
 type UsageKey struct{ TenantID, ModelID string }
 
 // UsageCursor is what the counters of a tenant on a model held at the last
-// look, and the period they belonged to.
+// look before 0.30.0, and the period they belonged to. The first look after
+// the upgrade starts from them.
 type UsageCursor struct {
 	UsageKey
 	Window      string
 	WindowStart time.Time
 	Used        int64
 	BestEffort  int64
+}
+
+// Kinds of the counters the history reads. The token kinds are those of
+// render.TokenKind: "requests", "input", "cached" and "output".
+const (
+	KindUsed       = "used"
+	KindBestEffort = "best_effort"
+)
+
+// CounterCursor is what one counter in Redis held at the last look.
+type CounterCursor struct {
+	// Key is the counter's Redis key, which names its window too.
+	Key string
+	UsageKey
+	Kind string
+	// Unit is that of a "used" or "best_effort" counter.
+	Unit        string
+	Window      string
+	WindowStart time.Time
+	Value       int64
 }
 
 // UsageDelta is what a tenant used of a model since the last look, to be
@@ -31,55 +52,123 @@ type UsageDelta struct {
 	BestEffort int64
 }
 
+// TokenDelta is what a tenant sent to a model since the last look, to be
+// added to an hour of the token history.
+type TokenDelta struct {
+	UsageKey
+	Hour                            time.Time
+	Requests, Input, Cached, Output int64
+}
+
+// Before is what the last look left: a cursor for each counter that held
+// something, by its key, and the cursors from before 0.30.0, which only the
+// first look after the upgrade gets.
+type Before struct {
+	Cursors map[string]CounterCursor
+	Legacy  map[UsageKey]UsageCursor
+}
+
+// Look is what one look at the counters found: what to add to the history,
+// and the cursors that replace all the earlier ones.
+type Look struct {
+	Usage   []UsageDelta
+	Tokens  []TokenDelta
+	Cursors []CounterCursor
+}
+
 // usageLock keeps two servers from adding the same usage twice.
 const usageLock = 8150115
 
-// RecordUsage hands look the cursors of the last look, adds the usage it
-// returns to the history and stores the new cursors. One server at a time
-// does this, so nothing is counted twice.
-func (s *Store) RecordUsage(ctx context.Context, look func(map[UsageKey]UsageCursor) ([]UsageDelta, []UsageCursor, error)) error {
+// RecordUsage hands look what the last look left, adds what it found to the
+// history and stores its cursors. One server at a time does this, so
+// nothing is counted twice.
+func (s *Store) RecordUsage(ctx context.Context, look func(Before) (Look, error)) error {
 	return mapErr(pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, usageLock); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT tenant_id, model_id, window_size, window_start, used, best_effort FROM usage_cursors`)
+		before, err := readCursors(ctx, tx)
 		if err != nil {
 			return err
 		}
-		cursors := map[UsageKey]UsageCursor{}
-		for rows.Next() {
-			var c UsageCursor
-			if err := rows.Scan(&c.TenantID, &c.ModelID, &c.Window, &c.WindowStart, &c.Used, &c.BestEffort); err != nil {
-				rows.Close()
-				return err
-			}
-			cursors[c.UsageKey] = c
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		deltas, next, err := look(cursors)
+		found, err := look(before)
 		if err != nil {
 			return err
 		}
 		batch := &pgx.Batch{}
-		for _, d := range deltas {
+		for _, d := range found.Usage {
 			batch.Queue(`INSERT INTO usage_hours (tenant_id, model_id, hour, unit, used, best_effort) VALUES ($1, $2, $3, $4, $5, $6)
 				ON CONFLICT (tenant_id, model_id, hour, unit) DO UPDATE
 				SET used = usage_hours.used + EXCLUDED.used, best_effort = usage_hours.best_effort + EXCLUDED.best_effort`,
 				d.TenantID, d.ModelID, d.Hour.UTC().Truncate(time.Hour), d.Unit, d.Used, d.BestEffort)
 		}
-		for _, c := range next {
-			batch.Queue(`INSERT INTO usage_cursors (tenant_id, model_id, window_size, window_start, used, best_effort) VALUES ($1, $2, $3, $4, $5, $6)
-				ON CONFLICT (tenant_id, model_id) DO UPDATE
-				SET window_size = EXCLUDED.window_size, window_start = EXCLUDED.window_start, used = EXCLUDED.used, best_effort = EXCLUDED.best_effort`,
-				c.TenantID, c.ModelID, c.Window, c.WindowStart, c.Used, c.BestEffort)
+		for _, d := range found.Tokens {
+			batch.Queue(`INSERT INTO token_hours (tenant_id, model_id, hour, requests, input_tokens, cached_tokens, output_tokens)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+				ON CONFLICT (tenant_id, model_id, hour) DO UPDATE
+				SET requests = token_hours.requests + EXCLUDED.requests, input_tokens = token_hours.input_tokens + EXCLUDED.input_tokens,
+				    cached_tokens = token_hours.cached_tokens + EXCLUDED.cached_tokens, output_tokens = token_hours.output_tokens + EXCLUDED.output_tokens`,
+				d.TenantID, d.ModelID, d.Hour.UTC().Truncate(time.Hour), d.Requests, d.Input, d.Cached, d.Output)
+		}
+		keys := make([]string, 0, len(found.Cursors))
+		for _, c := range found.Cursors {
+			keys = append(keys, c.Key)
+			if old, ok := before.Cursors[c.Key]; ok && old == c {
+				continue
+			}
+			batch.Queue(`INSERT INTO usage_counter_cursors (redis_key, tenant_id, model_id, kind, unit, window_size, window_start, value)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+				ON CONFLICT (redis_key) DO UPDATE SET value = EXCLUDED.value`,
+				c.Key, c.TenantID, c.ModelID, c.Kind, c.Unit, c.Window, c.WindowStart, c.Value)
+		}
+		if len(before.Cursors) > 0 {
+			// The counters that held nothing this time, or whose window is
+			// over and was read to its end, lose their cursor.
+			batch.Queue(`DELETE FROM usage_counter_cursors WHERE NOT (redis_key = ANY($1))`, keys)
+		}
+		if len(before.Legacy) > 0 {
+			batch.Queue(`DELETE FROM usage_cursors`)
 		}
 		if batch.Len() == 0 {
 			return nil
 		}
 		return tx.SendBatch(ctx, batch).Close()
 	}))
+}
+
+// readCursors reads what the last look left.
+func readCursors(ctx context.Context, tx pgx.Tx) (Before, error) {
+	before := Before{Cursors: map[string]CounterCursor{}, Legacy: map[UsageKey]UsageCursor{}}
+	rows, err := tx.Query(ctx, `SELECT redis_key, tenant_id, model_id, kind, unit, window_size, window_start, value FROM usage_counter_cursors`)
+	if err != nil {
+		return before, err
+	}
+	for rows.Next() {
+		var c CounterCursor
+		if err := rows.Scan(&c.Key, &c.TenantID, &c.ModelID, &c.Kind, &c.Unit, &c.Window, &c.WindowStart, &c.Value); err != nil {
+			rows.Close()
+			return before, err
+		}
+		c.WindowStart = c.WindowStart.UTC()
+		before.Cursors[c.Key] = c
+	}
+	if err := rows.Err(); err != nil {
+		return before, err
+	}
+	rows, err = tx.Query(ctx, `SELECT tenant_id, model_id, window_size, window_start, used, best_effort FROM usage_cursors`)
+	if err != nil {
+		return before, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c UsageCursor
+		if err := rows.Scan(&c.TenantID, &c.ModelID, &c.Window, &c.WindowStart, &c.Used, &c.BestEffort); err != nil {
+			return before, err
+		}
+		c.WindowStart = c.WindowStart.UTC()
+		before.Legacy[c.UsageKey] = c
+	}
+	return before, rows.Err()
 }
 
 // UsagePoint is what one tenant used of one model in one step of the
@@ -121,9 +210,46 @@ func (s *Store) UsageHistory(ctx context.Context, from time.Time, step, tenantID
 		ORDER BY at, t.slug, m.name`, from, step, tenantID)
 }
 
+// TokenPoint is what one tenant sent to one model in one step of the token
+// history: an hour or a day.
+type TokenPoint struct {
+	At         time.Time `json:"at"`
+	TenantID   string    `json:"tenant_id"`
+	TenantSlug string    `json:"tenant_slug"`
+	ModelID    string    `json:"model_id"`
+	ModelName  string    `json:"model_name"`
+	Requests   int64     `json:"requests"`
+	// Input counts every input token, the cached ones too.
+	Input  int64 `json:"input_tokens"`
+	Cached int64 `json:"cached_tokens"`
+	Output int64 `json:"output_tokens"`
+}
+
+// TokenHistory returns the recorded requests and tokens from a point in time
+// on, oldest first, added up per step, as UsageHistory does.
+func (s *Store) TokenHistory(ctx context.Context, from time.Time, step, tenantID string) ([]TokenPoint, error) {
+	if step != StepDay {
+		step = StepHour
+	}
+	return list(ctx, s, func(r scanner) (TokenPoint, error) {
+		var p TokenPoint
+		err := r.Scan(&p.At, &p.TenantID, &p.TenantSlug, &p.ModelID, &p.ModelName, &p.Requests, &p.Input, &p.Cached, &p.Output)
+		p.At = p.At.UTC()
+		return p, err
+	}, `SELECT date_trunc($2, h.hour, 'UTC') AS at, h.tenant_id, t.slug, h.model_id, m.name,
+		       sum(h.requests)::bigint, sum(h.input_tokens)::bigint, sum(h.cached_tokens)::bigint, sum(h.output_tokens)::bigint
+		FROM token_hours h JOIN tenants t ON t.id = h.tenant_id JOIN models m ON m.id = h.model_id
+		WHERE h.hour >= $1 AND ($3 = '' OR h.tenant_id::text = $3)
+		GROUP BY at, h.tenant_id, t.slug, h.model_id, m.name
+		ORDER BY at, t.slug, m.name`, from, step, tenantID)
+}
+
 // PruneUsage deletes the history from before a point in time.
 func (s *Store) PruneUsage(ctx context.Context, before time.Time) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM usage_hours WHERE hour < $1`, before)
+	if _, err := s.db.Exec(ctx, `DELETE FROM usage_hours WHERE hour < $1`, before); err != nil {
+		return mapErr(err)
+	}
+	_, err := s.db.Exec(ctx, `DELETE FROM token_hours WHERE hour < $1`, before)
 	return mapErr(err)
 }
 

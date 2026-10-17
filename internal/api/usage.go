@@ -40,6 +40,14 @@ func (s *Server) resetUsage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "usage monitoring is off: the server has no Redis configured")
 		return
 	}
+	// What the counter holds since the history's last look would go with
+	// it; the history adds it first. A reset that cannot do that still
+	// resets: the history then misses at most a minute.
+	if s.history != nil {
+		if err := s.history.Tick(r.Context(), time.Now()); err != nil {
+			slog.Warn("usage reset: the history could not record the use before it", "err", err)
+		}
+	}
 	res, err := s.usage.Reset(r.Context(), r.PathValue("id"), r.PathValue("model_id"))
 	summary := "Reset usage of " + res.TenantSlug + " on " + res.ModelName
 	var redisErr usage.RedisError

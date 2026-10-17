@@ -164,7 +164,7 @@ func fleetRoute(s State, m Model) *unstructured.Unstructured {
 		backendRef["headerMutation"] = objectiveHeader(ObjectiveStandard)
 	}
 	u := modelRoute(s.Namespace, FleetName(m.Slug), m)
-	u.Object["spec"] = routeSpec(m, map[string]any{
+	u.Object["spec"] = routeSpec(s, m, map[string]any{
 		"parentRefs": []any{fleetParent(s)},
 		"rules": []any{
 			map[string]any{
