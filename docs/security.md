@@ -201,7 +201,10 @@ gateway checks a token on every request of the client listener, so that
 difference does not open anything there. On the lab a request
 with a forged `x-aigw-tenant` was still refused by its own spent budget
 (2026-10-16). The budget and quota rules read these headers, so this is what
-keeps a tenant to its own counters.
+keeps a tenant to its own counters. They reach the model server too: the
+gateway charges an answer's cost by reading them again when the answer
+ends, after the backend, so a backend that removed them would leave the cost
+uncharged. The backends the hub renders remove the credentials only.
 
 **Defense in depth.** On a listener without the hub's policy nothing removes
 them. The gateway chart's ClientTrafficPolicy already removes a client's

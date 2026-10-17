@@ -32,9 +32,8 @@ func TestIdentityKeys(t *testing.T) {
 	if strings.Contains(p, "jwt") || strings.Contains(p, "authorization") || !strings.Contains(p, `"sanitize":true`) {
 		t.Fatalf("policy: %s", p)
 	}
-	// The model server gets no credential to remove yet, only the headers
-	// that told the tenants apart.
-	if b := spec(t, find(t, objs, "AIServiceBackend", "glm5-3")); !strings.Contains(b, `"headerMutation":{"remove":["x-aigw-tenant","x-aigw-key","x-aigw-client-id","x-aigw-budget"]}`) {
+	// The model server gets no credential to remove yet.
+	if b := spec(t, find(t, objs, "AIServiceBackend", "glm5-3")); strings.Contains(b, "headerMutation") {
 		t.Fatalf("backend: %s", b)
 	}
 	if !has(objs, "Secret", KeysSecretName) {
@@ -77,7 +76,7 @@ func TestIdentityBoth(t *testing.T) {
 		t.Fatalf("revoked: %s", v)
 	}
 	for _, b := range []string{"glm5-3", "small"} {
-		if h := spec(t, find(t, objs, "AIServiceBackend", b)); !strings.Contains(h, `"headerMutation":{"remove":["authorization","x-api-key","x-aigw-tenant","x-aigw-key","x-aigw-client-id","x-aigw-budget"]}`) {
+		if h := spec(t, find(t, objs, "AIServiceBackend", b)); !strings.Contains(h, `"headerMutation":{"remove":["authorization","x-api-key"]}`) {
 			t.Fatalf("backend %s: %s", b, h)
 		}
 	}
@@ -127,6 +126,36 @@ func TestIdentityDeniedSplit(t *testing.T) {
 		claims := r.(map[string]any)["principal"].(map[string]any)["jwt"].(map[string]any)["claims"].([]any)
 		if n := len(claims[0].(map[string]any)["values"].([]any)); n > maxClaimValues {
 			t.Fatalf("%d values", n)
+		}
+	}
+}
+
+// A rate limit charges an answer's cost with a rule that reads the request's
+// headers again when the answer ends, and a backend removes a header from
+// those same headers: a model server's backend that removed the tenant and
+// the budget had every answer counted as 1 under a quota and as nothing
+// under a budget (the lab, 2026-10-17). No backend removes a header a rule
+// reads, in any identity mode.
+func TestBackendsKeepCountedHeaders(t *testing.T) {
+	counted := []string{TenantHeader, KeyHeader, ClientIDHeader, BudgetHeader, QuotaHeader("")}
+	for _, mode := range []string{IdentityKeys, IdentityBoth, IdentityTokens} {
+		// Model servers, and the backends of entry routes.
+		for _, s := range []State{testState(), fleetState()} {
+			s.AuthEnabled = true
+			s.Identity = identity(mode)
+			for _, o := range Objects(s) {
+				if o.GetKind() != "AIServiceBackend" {
+					continue
+				}
+				removed, _, _ := unstructured.NestedStringSlice(o.Object, "spec", "headerMutation", "remove")
+				for _, name := range removed {
+					for _, c := range counted {
+						if strings.HasPrefix(name, c) {
+							t.Errorf("%s: backend %s removes %s", mode, o.GetName(), name)
+						}
+					}
+				}
+			}
 		}
 	}
 }

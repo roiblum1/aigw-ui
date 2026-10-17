@@ -129,11 +129,11 @@ func TestQuotaAmountName(t *testing.T) {
 	}
 }
 
-// A model server never sees the headers that told the tenants apart. The
-// list is the same for any number of models with quotas by amount: the
-// AIServiceBackend takes 16 names at most, and a header per such model
-// made every backend invalid from the eleventh on.
-func TestModelServerLosesIdentityHeaders(t *testing.T) {
+// A model server's backend removes the credentials only, for any number of
+// models with quotas by amount: the AIServiceBackend takes 16 names at
+// most, and a header per such model made every backend invalid from the
+// eleventh on.
+func TestModelServerHeadersForAnyNumberOfModels(t *testing.T) {
 	s := testState()
 	s.Identity = Identity{Mode: IdentityTokens}
 	for i := range s.Models {
@@ -160,7 +160,7 @@ func TestModelServerLosesIdentityHeaders(t *testing.T) {
 			t.Fatalf("no backend %s", name)
 		}
 		got := fmt.Sprint(b.Object["spec"].(map[string]any)["headerMutation"])
-		if got != "map[remove:[authorization x-api-key x-aigw-tenant x-aigw-key x-aigw-client-id x-aigw-budget]]" {
+		if got != "map[remove:[authorization x-api-key]]" {
 			t.Fatalf("backend %s: %s", name, got)
 		}
 	}
