@@ -93,7 +93,7 @@ func Counters(s State) []Counter {
 		} else {
 			rules = tenantRules(m)
 		}
-		ruleCount := m.ruleCount()
+		ruleCount, inUse := m.ruleCount(), m.usedPositions() > 0
 		seen := map[string]bool{}
 		targets := m.targets()
 		overageAt := -1
@@ -113,8 +113,9 @@ func Counters(s State) []Counter {
 			}
 			seen[backend+"\x00"+t.Model] = true
 			prefix := quotaDomain + "_backend_name_" + backend + "_model_name_override_" + t.Model + "_"
-			if ruleCount > 0 || overage {
-				// The default bucket is named after the number of rules before it.
+			if inUse || overage {
+				// The default bucket is named after the number of rules
+				// before it, placeholders included (rulePositions).
 				limit, window := m.defaultBucket(overage)
 				pool := "rule-" + strconv.Itoa(ruleCount) + "-match--1"
 				out = append(out, Counter{

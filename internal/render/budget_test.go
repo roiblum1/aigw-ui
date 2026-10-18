@@ -232,7 +232,7 @@ func TestBudgetPassRule(t *testing.T) {
 	rules, _, _ := unstructured.NestedSlice(p.Object, "spec", "perModelQuotas")
 	got := rules[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
 	want := "map[clientSelectors:[map[headers:[map[name:x-aigw-budget type:RegularExpression value:.+] map[name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:4294967295]]"
-	if len(got) != 4 || fmt.Sprint(got[3]) != want || !strings.Contains(fmt.Sprint(got[0]), "66-1h") {
+	if len(got) != 8 || fmt.Sprint(got[3]) != want || !strings.Contains(fmt.Sprint(got[0]), "66-1h") || len(withoutPadding(t, got)) != 4 {
 		t.Fatalf("rules: %v", got)
 	}
 	if n := RuleCount(*m); n != 4 {
@@ -249,8 +249,8 @@ func TestBudgetPassRule(t *testing.T) {
 	held := map[string]bool{}
 	for _, c := range Counters(s) {
 		if c.Pool {
-			if key := c.RedisKey("", day); !strings.Contains(key, "rule-4-match--1") {
-				t.Fatalf("pool after the last rule: %s", key)
+			if key := c.RedisKey("", day); !strings.Contains(key, "rule-8-match--1") {
+				t.Fatalf("pool after the eight rules: %s", key)
 			}
 			continue
 		}
@@ -314,7 +314,7 @@ func TestBudgetPassRuleKeepsItsPosition(t *testing.T) {
 		}
 		p := quotaPolicies(s, *m)[0]
 		got, _, _ := unstructured.NestedSlice(p.Object, "spec", "perModelQuotas")
-		for _, r := range got[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any) {
+		for _, r := range withoutPadding(t, got[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)) {
 			switch v := fmt.Sprint(r); {
 			case strings.Contains(v, BudgetHeader):
 				rules = append(rules, "budget")
@@ -326,22 +326,23 @@ func TestBudgetPassRuleKeepsItsPosition(t *testing.T) {
 		}
 		return budget, pool, rules
 	}
-	before, _, rules := keys()
-	if !strings.Contains(before, "_rule-3-x-aigw-budget") || fmt.Sprint(rules) != "[66-1h - 100-1d-shadow budget]" {
-		t.Fatalf("before: %s %v", before, rules)
+	before, firstPool, rules := keys()
+	if !strings.Contains(before, "_rule-3-x-aigw-budget") || fmt.Sprint(rules) != "[66-1h - 100-1d-shadow budget]" || !strings.Contains(firstPool, "rule-8-match--1") {
+		t.Fatalf("before: %s %v %s", before, rules, firstPool)
 	}
 
 	// A new amount takes the next free position, which is after the rule.
+	// The pool keeps its counter too: the policy still has eight rules.
 	m.Amounts = append(m.Amounts, QuotaAmount{Slot: 4, Limit: 7, Window: "1m"})
 	after, pool, rules := keys()
-	if after != before || fmt.Sprint(rules) != "[66-1h - 100-1d-shadow budget 7-1m]" || !strings.Contains(pool, "rule-5-match--1") {
+	if after != before || fmt.Sprint(rules) != "[66-1h - 100-1d-shadow budget 7-1m]" || pool != firstPool {
 		t.Fatalf("after an amount was added: %s %v %s", after, rules, pool)
 	}
 	// Every amount after the first is freed: the positions stay held.
 	m.Amounts = m.Amounts[:1]
-	after, _, rules = keys()
-	if after != before || fmt.Sprint(rules) != "[66-1h - - budget]" {
-		t.Fatalf("after amounts were freed: %s %v", after, rules)
+	after, pool, rules = keys()
+	if after != before || fmt.Sprint(rules) != "[66-1h - - budget]" || pool != firstPool {
+		t.Fatalf("after amounts were freed: %s %v %s", after, rules, pool)
 	}
 	// Without budgets the position is not rendered, and the amounts keep theirs.
 	m.BudgetsHold = false

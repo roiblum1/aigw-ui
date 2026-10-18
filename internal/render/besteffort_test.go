@@ -154,8 +154,9 @@ func TestBestEffortQuotaPolicy(t *testing.T) {
 		if !reflect.DeepEqual(a["clientSelectors"], b["clientSelectors"]) || !reflect.DeepEqual(a["quota"], b["quota"]) {
 			t.Errorf("rule %d differs: %v and %v", i, a, b)
 		}
-		// Position 1 is a placeholder, which matches no request.
-		if shadow, _ := b["shadowMode"].(bool); !shadow && i != 1 {
+		// Position 1 and those after the last quota are placeholders, which
+		// match no request.
+		if shadow, _ := b["shadowMode"].(bool); !shadow && !isPlaceholder(b) {
 			t.Errorf("rule %d of the best-effort route can refuse: %v", i, b)
 		}
 	}

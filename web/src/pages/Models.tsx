@@ -338,7 +338,7 @@ function RulesLine({ model: m }: { model: Model }) {
   return (
     <div
       className="detail"
-      title="Bucket rules in the model's QuotaPolicy on each gateway. Every rule is checked for every request. With tokens only, tenants with the same quota of their own share one rule."
+      title="Bucket rules in the model's QuotaPolicy on each gateway. Every rule is checked for every request. With tokens only, tenants with the same quota of their own share one rule. The policy has empty rules after these up to a multiple of 8, so the pool's counter keeps its name."
     >
       {m.rules} {m.rules === 1 ? "rule" : "rules"}
       {m.rules_per_tenant > m.rules && `, ${m.rules_per_tenant} with a rule per tenant`}

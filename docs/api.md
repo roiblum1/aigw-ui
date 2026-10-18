@@ -337,7 +337,7 @@ gateway URL send `"gateway_url": ""`; that removes the token too.
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| GET | `/models` | | List with endpoints. `rules` the bucket rules of its QuotaPolicy and `rules_per_tenant` how many a rule per tenant quota would take instead of one per amount; `quota_rules` the positions the tenants' own quotas take while API keys are taken, `quota_amounts` the positions their amounts take with tokens only |
+| GET | `/models` | | List with endpoints. `rules` the positions of its QuotaPolicy's bucket rules in use (the policy has placeholders after them up to a multiple of 8) and `rules_per_tenant` how many a rule per tenant quota would take instead of one per amount; `quota_rules` the positions the tenants' own quotas take while API keys are taken, `quota_amounts` the positions their amounts take with tokens only |
 | POST | `/models` | model | `{"id": "..."}` |
 | PUT | `/models/{id}` | model; `name` is ignored, fields left out keep their stored value | `{"id": "..."}` |
 | DELETE | `/models/{id}` | | 204 |

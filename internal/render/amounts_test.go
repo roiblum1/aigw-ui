@@ -33,8 +33,8 @@ func amountState() State {
 	}
 }
 
-// One rule per amount at its position, with a placeholder for the free one,
-// then the default bucket.
+// One rule per amount at its position, with a placeholder for the free one
+// and for each position after the last up to eight, then the default bucket.
 func TestAmountPolicy(t *testing.T) {
 	s := amountState()
 	p := quotaPolicies(s, s.Models[0])[0]
@@ -43,7 +43,8 @@ func TestAmountPolicy(t *testing.T) {
 	want := "[" +
 		"map[clientSelectors:[map[headers:[map[name:x-aigw-quota-wallet-cheap type:Exact value:66-1h] map[name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1h limit:66]] " +
 		"map[clientSelectors:[map[headers:[map[name:x-aigw-client-id type:Exact value:aigw-ui-unused-position]]]] quota:map[duration:1d limit:1]] " +
-		"map[clientSelectors:[map[headers:[map[name:x-aigw-quota-wallet-cheap type:Exact value:100-1d-shadow] map[name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:100] shadowMode:true]]"
+		"map[clientSelectors:[map[headers:[map[name:x-aigw-quota-wallet-cheap type:Exact value:100-1d-shadow] map[name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:100] shadowMode:true]" +
+		strings.Repeat(" map[clientSelectors:[map[headers:[map[name:x-aigw-client-id type:Exact value:aigw-ui-unused-position]]]] quota:map[duration:1d limit:1]]", 5) + "]"
 	if got != want {
 		t.Fatalf("rules:\n%s\nwant\n%s", got, want)
 	}
@@ -58,7 +59,7 @@ func TestAmountPolicy(t *testing.T) {
 }
 
 // Each tenant has a counter of its own under its amount's rule; the default
-// bucket comes after the last position.
+// bucket comes after the eight positions the policy has.
 func TestAmountCounters(t *testing.T) {
 	now := time.Unix(1792065600+60, 0)
 	keys := map[string]string{}
@@ -75,7 +76,7 @@ func TestAmountCounters(t *testing.T) {
 		"walletcheck-a": prefix + "rule-0-x-aigw-quota-wallet-cheap|66-1h-match-0_rule-0-x-aigw-quota-wallet-cheap|66-1h-match-0_rule-0-x-aigw-tenant-match-1_walletcheck-a_" + hour,
 		"walletcheck-b": prefix + "rule-0-x-aigw-quota-wallet-cheap|66-1h-match-0_rule-0-x-aigw-quota-wallet-cheap|66-1h-match-0_rule-0-x-aigw-tenant-match-1_walletcheck-b_" + hour,
 		"walletcheck-c": prefix + "rule-2-x-aigw-quota-wallet-cheap|100-1d-shadow-match-0_rule-2-x-aigw-quota-wallet-cheap|100-1d-shadow-match-0_rule-2-x-aigw-tenant-match-1_walletcheck-c_" + day,
-		"pool":          prefix + "rule-3-match--1_rule-3-match--1_" + day,
+		"pool":          prefix + "rule-8-match--1_rule-8-match--1_" + day,
 	}
 	if fmt.Sprint(keys) != fmt.Sprint(want) {
 		t.Fatalf("keys:\n%v\nwant\n%v", keys, want)

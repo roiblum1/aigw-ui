@@ -679,6 +679,9 @@ its own. The gateway's rate limit service counts in Redis.
   that holds for the rule that lets budget tenants through as well: it was
   the last rule and moved when an amount was added after it, and a budget
   tenant's use in the minute before the move was missing from the history.
+  Since 0.33.0 the pool keeps its counter too: the gateway names it after
+  the number of rules, and the policy has a multiple of eight, with
+  placeholders after the last position in use.
 - *A rule per amount, not per tenant, with tokens.* The `QuotaPolicy` is
   checked on every request of the model and goes into every route of it; a
   rule per tenant grew it by one rule for every tenant with an own quota (a

@@ -48,7 +48,12 @@ func quotaRevision(m Model) string {
 		DryRun  bool          `json:",omitempty"`
 		Amounts []QuotaAmount `json:",omitempty"`
 		Budgets bool          `json:",omitempty"`
-	}{rules, limit, window, m.CostExpression, m.DryRun, amounts, m.passesBudgets()})
+		// The number of rules, placeholders included: the pool's entry in
+		// the route is named after it, so the route has to be built again
+		// when it changes, also when no amount or quota did (0.33.0, which
+		// padded every policy). It changed every model's revision once.
+		Positions int `json:",omitempty"`
+	}{rules, limit, window, m.CostExpression, m.DryRun, amounts, m.passesBudgets(), m.ruleCount()})
 	if err != nil {
 		return ""
 	}
@@ -139,6 +144,9 @@ func quotaPolicy(namespace string, m Model, targets []Target, overage bool) *uns
 		// them stay as they are.
 		rules = append(rules, budgetPassRule(overage))
 	}
+	for len(rules) < m.ruleCount() {
+		rules = append(rules, placeholderRule())
+	}
 	defaultLimit, defaultWindow := m.defaultBucket(overage)
 
 	// One target per backend and one quota entry per distinct model name.
@@ -201,10 +209,34 @@ func tenantMatch(slug string) map[string]any {
 	return map[string]any{"name": ClientIDHeader, "type": "RegularExpression", "value": TenantClientIDPattern(slug)}
 }
 
+// rulePositions is the multiple the number of bucket rules of a QuotaPolicy
+// is rounded up to, with placeholders after the last position in use.
+//
+// The default bucket, the model's pool, is counted under a name made of the
+// number of rules before it (Counters). That number followed the positions
+// in use, so adding an amount after the last one, freeing the last one, or
+// the first budget across models on the model renamed the pool's counter:
+// its window started again, and the tenants on the pool could use up to
+// twice the pool in it. Rounded up, the name changes only when the
+// positions in use cross a multiple of eight.
+//
+// Eight and not more: every rule, a placeholder too, is an entry in the
+// proxy's route for the model, about 1.2 KB each (lab, 2026-10-16), and a
+// change took 11 to 19 seconds to reach the proxy at 256 rules.
+const rulePositions = 8
+
 // ruleCount is how many bucket rules the model's QuotaPolicy has before its
-// default bucket: one per position of the tenant quotas, or of the amounts
-// and the rule for budgets across models at its own position.
+// default bucket: the positions in use (usedPositions), rounded up to a
+// multiple of rulePositions, and never fewer than that.
 func (m Model) ruleCount() int {
+	n := m.usedPositions()
+	return max(rulePositions, (n+rulePositions-1)/rulePositions*rulePositions)
+}
+
+// usedPositions is how many positions of the model's bucket rules something
+// holds: one per position of the tenant quotas, or of the amounts and the
+// rule for budgets across models at its own position.
+func (m Model) usedPositions() int {
 	var n int
 	if m.ByAmount {
 		n = len(amountRules(m))
@@ -227,8 +259,10 @@ func (m Model) budgetPassAt() int {
 	return len(tenantRules(m))
 }
 
-// RuleCount is how many bucket rules the model's QuotaPolicy has.
-func RuleCount(m Model) int { return m.ruleCount() }
+// RuleCount is how many positions of the model's QuotaPolicy hold a rule:
+// the policy has as many more placeholders as make a multiple of
+// rulePositions.
+func RuleCount(m Model) int { return m.usedPositions() }
 
 // tenantRules returns the bucket rules of a model in order: the rule at
 // index i belongs to the tenant quota with Slot i. The position of a rule is
