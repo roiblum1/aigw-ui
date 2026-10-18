@@ -298,8 +298,11 @@ each item waits for. Empty, the default, never.
 ## Before you measure
 
 - **The image.** Set `capacity.image` in the chart to an AIPerf image the
-  LLM clusters can pull. The offline bundle builds one from
-  `deploy/aiperf/Containerfile` and `load-images.sh` prints the value to
+  LLM clusters can pull. CI pushes one from `deploy/aiperf/Containerfile`
+  as `ghcr.io/roiblum1/aigw-aiperf:<AIPerf version>` (now `0.13.0`), once
+  per version: a push to `main` or a tag builds it only when that tag is
+  not in the registry yet; the
+  offline bundle builds the same and `load-images.sh` prints the value to
   set. It has the vocabulary of AIPerf's built-in tokenizer inside, so a
   measurement downloads nothing. CI runs the Job's script in that image
   against a stand-in for vLLM on every change.

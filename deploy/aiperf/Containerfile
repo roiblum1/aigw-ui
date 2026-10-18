@@ -1,6 +1,7 @@
 # The image a capacity measurement runs on the LLM clusters: AIPerf, with the
 # vocabulary of its built-in tokenizer inside, so a measurement downloads
-# nothing. Built by deploy/offline/build-bundle.sh.
+# nothing. Pushed by CI as ghcr.io/<owner>/aigw-aiperf:<AIPERF_VERSION>, and
+# built by deploy/offline/build-bundle.sh.
 FROM docker.io/library/python:3.13-slim
 ARG AIPERF_VERSION=0.13.0
 ENV PIP_NO_CACHE_DIR=1 \

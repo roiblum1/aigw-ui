@@ -7,6 +7,9 @@
 #   tag v1.2.3       tests, then image tags "1.2.3" and "latest", and a GitHub
 #                    release whose text is docs/release-notes/v1.2.3.md
 #
+# Both also push the AIPerf image, ghcr.io/<owner>/aigw-aiperf:<the AIPerf
+# version in deploy/aiperf/Containerfile>, when that tag is not there yet.
+#
 # Every run fails when the version in the chart has no release note.
 name: ci
 
@@ -236,6 +239,37 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The image capacity.image is set to. It is tagged with the AIPerf
+      # version it holds, not the hub's, because a hub of any version runs
+      # the same Job script on it. It is built only when that tag is not in
+      # the registry yet: a change to the Containerfile that should reach
+      # the clusters raises AIPERF_VERSION.
+      - name: AIPerf image tag
+        id: aiperf
+        run: |
+          version="$(sed -n 's/^ARG AIPERF_VERSION=//p' deploy/aiperf/Containerfile)"
+          test -n "$version"
+          tag="ghcr.io/${{ github.repository_owner }}/aigw-aiperf:$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "$tag" >/dev/null 2>&1; then
+            echo "$tag is in the registry already"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.aiperf.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/aiperf
+          file: deploy/aiperf/Containerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.aiperf.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=aiperf
+          cache-to: type=gha,scope=aiperf,mode=max
 
   # Upgrades one hub to the image that was just pushed. It runs only when
   # the repository variable HUB_DEPLOY is "true". The account it uses is in

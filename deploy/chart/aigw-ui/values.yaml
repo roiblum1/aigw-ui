@@ -40,8 +40,9 @@ config:
 
 # Capacity measurements: AIPerf in a Job on an LLM cluster, aimed at one pod
 # of a model. The LLM clusters pull this image, so it must be in a registry
-# they reach. Empty turns measurements off. Build it from
-# deploy/aiperf/Containerfile; the offline bundle does.
+# they reach. Empty turns measurements off. CI pushes it as
+# ghcr.io/roiblum1/aigw-aiperf:<AIPerf version>, built from
+# deploy/aiperf/Containerfile; the offline bundle builds the same.
 capacity:
   image: ""
   # When the hub measures by itself every LLMInferenceService that is not

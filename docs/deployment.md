@@ -24,7 +24,8 @@ helm upgrade --install aigw-ui deploy/chart/aigw-ui -n aigw-ui --create-namespac
 ```
 
 Images used: `ghcr.io/roiblum1/aigw-ui:<version>` and
-`quay.io/sclorg/postgresql-16-c9s:latest`.
+`quay.io/sclorg/postgresql-16-c9s:latest`; for capacity measurements,
+`ghcr.io/roiblum1/aigw-aiperf:0.13.0` (`capacity.image`).
 
 ## Disconnected install
 
@@ -105,7 +106,7 @@ Back up the encryption key straight away. See
 | `config.usageHistoryInterval` | `1m` | How often the usage counters are read to keep the usage history. At least `10s`; `0` keeps none. Needs `redis.url` |
 | `config.tenantPage` | `true` | Lets a tenant sign in at `/my-usage` with one of its API keys and see its own budgets and usage |
 | `config.bestEffortPriority` | `-1` | The priority of the request class `best-effort` the hub creates on the serving clusters. Below 0: a request without a class has 0. It has an effect only on a site whose scheduler acts on priorities |
-| `capacity.image` | empty | The AIPerf image a capacity measurement runs (`deploy/aiperf/`). Empty turns measurements off |
+| `capacity.image` | empty | The AIPerf image a capacity measurement runs (`deploy/aiperf/`; CI pushes `ghcr.io/roiblum1/aigw-aiperf:0.13.0`). Empty turns measurements off |
 | `capacity.window` | empty | When the hub measures by itself every LLMI that is not measured or whose result is stale, such as `Fri 22:00 - Sat 06:00 Asia/Jerusalem` or `01:00 - 05:00 UTC`. Empty never |
 | `capacity.peerMeasurements` | `false` | Measure prefill/decode LLMIs through the peer listener. Their Jobs run in the gateway's namespace with the peer client certificate; see [security](security.md) first |
 | `tokens.issuer`, `tokens.audience` | `aigw-ui`, `aigw-fleet` | What every token the hub signs says, and what the gateways require. A change refuses every token issued before |
