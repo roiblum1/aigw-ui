@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.33.0](v0.33.0.md) | not released yet | A model's pool keeps its counter when an amount is added after the last or the last is freed, and when the first budget across models comes or the last goes: every QuotaPolicy has a multiple of eight rules, placeholders after the positions in use |
 | [0.32.1](v0.32.1.md) | 2026-10-17 | 0.32.0's token policy used CEL Envoy does not build, and the proxy took no change after it; the span rule is now plain comparisons, tested on Envoy 1.39.1, and the tests check every CEL rule for what Envoy builds |
 | [0.32.0](v0.32.0.md) | 2026-10-17 | The budget tenants' rule on a model keeps its position, so the history no longer loses their last use; denied tokens are refused by spans of their expiry, not one line each for 180 days; quotas saved at once no longer fail with 409; the hub syncs at start and says how long it took to answer |
 | [0.31.0](v0.31.0.md) | 2026-10-17 | The hub talks to the clusters and to Postgres side by side: a sync that changes nothing took 4.6 s of 2 min 11 s for 20 models, writes the token policy first, and the usage reads read what the clusters share once |

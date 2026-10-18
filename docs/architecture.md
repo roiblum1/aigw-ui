@@ -247,8 +247,9 @@ what it last applied.
    upgrade keeps each model's rule where it was, after its amounts; a new
    model's is position 0, and its first amount takes 1. A new amount takes
    the lowest free position other than this one, so it may go after the
-   rule. The pool's counter is named after the number of rules, so its
-   count starts again when that number changes. It is rendered while an
+   rule. The pool's counter is named after the number of rules, a multiple
+   of eight since 0.33.0 (below, "The pool is named after the number of
+   rules"), so the rule coming or going leaves it as it is. It is rendered while an
    enabled tenant has a budget, on a model whose prices charge the budgets
    (not in a dry run), and such a model then gets its `QuotaPolicy` even
    without a quota, so that its pool holds the tenants with neither. The tenant's counters there only count (`Counter.Budget`): the
@@ -785,16 +786,29 @@ Two things follow from that name:
   its position is filled with a placeholder rule that matches no request, and
   the next new quota on that model takes it over. Adding or removing one
   tenant's quota therefore never renames another tenant's counter.
-- **The pool is named after the number of rules.** The pool's counter starts
-  again from zero for the current window when the number of rules changes:
-  when a quota or an amount is added at the end or the last one is removed,
-  and when the first budget across models is set or the last one removed (its
-  rule comes last). The self-test does both. With the default pool of 1 token
-  this does not matter; a large shared pool can let up to twice its limit
-  through in that window. On the lab, 2026-10-17, a pool of 20 credits an hour
-  counted under rule 5, 10 and 11 within one hour and let 78 through. The AI
-  gateway names the pool's counter after its position; the hub cannot keep it
-  still without padding every policy with empty rules.
+- **The pool is named after the number of rules.** The AI gateway names the
+  pool's counter after the number of bucket rules before it, placeholders
+  included (`DefaultBucketDescriptorKey(len(BucketRules))` in AI Gateway
+  v1.1.0 and v1.2.0, `internal/ratelimit/translator/translator.go`). Up to
+  0.32.x that number was the positions in use, so the pool's counter started
+  again from zero for the current window when a quota or an amount was added
+  at the end or the last one removed, and when the first budget across models
+  was set or the last one removed. On the lab, 2026-10-17, a pool of 20
+  credits an hour counted under rule 5, 10 and 11 within one hour and let 78
+  through.
+
+  Since 0.33.0 every `QuotaPolicy` has a multiple of eight rules: the
+  positions in use, then placeholders (`render.rulePositions`). The pool's
+  counter changes its name only when the positions in use cross a multiple
+  of eight, at the ninth or the seventeenth; a large shared pool can then let
+  up to twice its limit through in that window, as before. Eight and not
+  more because every rule, a placeholder too, is an entry in each route of
+  the model, and at 256 rules a change took 11 to 19 seconds to reach the
+  proxy (lab, 2026-10-16). A policy with no rule names its pool in another
+  form, without a rule number; the best-effort route's policy has rules
+  without any quota now, so the Usage page reads its pool where the gateway
+  counts it. The upgrade to 0.33.0 renames every pool's counter once. The
+  Models page still shows the positions in use as the model's rules.
 
 ## Token counts
 
@@ -961,7 +975,9 @@ the proxy took the configuration (operations, "nothing changes").
 Also not verified: that the gateway accepts the placeholder rule that keeps a
 removed quota's position, a rule with an `Exact` match on a client ID no key
 has. If it does not, the task shows "Applied, not accepted" after a quota is
-removed.
+removed. Since 0.33.0 every `QuotaPolicy` has placeholders, and not verified
+on a gateway either: that the pool is counted under `rule-8` after the
+upgrade, and the size the placeholders add to the proxy's routes.
 
 ## Requirements on each LLM cluster
 

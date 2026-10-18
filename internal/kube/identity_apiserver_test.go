@@ -90,13 +90,16 @@ func TestRealAPIServerIdentity(t *testing.T) {
 		t.Fatalf("budgets: the API server refused a rendered object: %v", err)
 	}
 	// The model's QuotaPolicy lets a tenant with a budget through: its last
-	// rule, as the CRD takes it.
+	// rule in use, as the CRD takes it, then placeholders up to eight rules.
 	if q, err = c.dyn.Resource(qp).Namespace(ns).Get(ctx, "glm-5-3", metav1.GetOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	quotas, _, _ = unstructured.NestedSlice(q.Object, "spec", "perModelQuotas")
 	rules = quotas[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
-	if last := fmt.Sprint(rules[len(rules)-1]); last != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-budget type:RegularExpression value:.+] map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:4294967295]]" {
+	if len(rules) != 8 {
+		t.Fatalf("%d rules, want eight", len(rules))
+	}
+	if last := fmt.Sprint(rules[render.RuleCount(s.Models[0])-1]); last != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-budget type:RegularExpression value:.+] map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:4294967295]]" {
 		t.Fatalf("the rule for budgets: %v", rules)
 	}
 	btp, _ := gvrFor("BackendTrafficPolicy")
@@ -185,8 +188,14 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	}
 	quotas, _, _ = unstructured.NestedSlice(q.Object, "spec", "perModelQuotas")
 	rules = quotas[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
-	if len(rules) != 1 || fmt.Sprint(rules[0]) != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-quota-glm-5-3 type:Exact value:500-1d] map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:500]]" {
+	if len(rules) != 8 || fmt.Sprint(rules[0]) != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-quota-glm-5-3 type:Exact value:500-1d] map[invert:false name:x-aigw-tenant type:Distinct]]]] quota:map[duration:1d limit:500]]" {
 		t.Fatalf("rules by amount: %v", rules)
+	}
+	// The other seven are placeholders, which match no request.
+	for _, r := range rules[1:] {
+		if got := fmt.Sprint(r); got != "map[clientSelectors:[map[headers:[map[invert:false name:x-aigw-client-id type:Exact value:aigw-ui-unused-position]]]] quota:map[duration:1d limit:1]]" {
+			t.Fatalf("a rule after the amount: %v", got)
+		}
 	}
 	if live, err = c.dyn.Resource(pol).Namespace(ns).Get(ctx, render.AuthPolicyName, metav1.GetOptions{}); err != nil {
 		t.Fatal(err)

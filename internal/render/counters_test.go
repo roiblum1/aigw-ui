@@ -14,9 +14,10 @@ func TestCounterRedisKey(t *testing.T) {
 	if len(counters) != 3 {
 		t.Fatalf("got %d counters, want the pool and one per tenant quota", len(counters))
 	}
-	// The default bucket comes after the two rules, so it is "rule-2".
+	// The default bucket comes after the two rules and six placeholders, so
+	// it is "rule-8".
 	pool := counters[0]
-	wantPool := `ai-gateway-quota_backend_name_ai-gateway/glm5-3_model_name_override_glm-5.3_rule-2-match--1_rule-2-match--1_1791331200`
+	wantPool := `ai-gateway-quota_backend_name_ai-gateway/glm5-3_model_name_override_glm-5.3_rule-8-match--1_rule-8-match--1_1791331200`
 	if got := pool.RedisKey("", now); !pool.Pool || pool.TenantSlug != "" || got != wantPool {
 		t.Errorf("pool (1d):\n got %s\nwant %s", got, wantPool)
 	}

@@ -39,6 +39,24 @@ func find(t *testing.T, objs []*unstructured.Unstructured, kind, name string) *u
 	return nil
 }
 
+// isPlaceholder reports whether a bucket rule is a placeholder, which
+// matches no request.
+func isPlaceholder(rule any) bool { return reflect.DeepEqual(rule, placeholderRule()) }
+
+// withoutPadding returns the bucket rules up to the last one that is not a
+// placeholder, and fails unless the policy has a multiple of eight rules.
+func withoutPadding(t *testing.T, rules []any) []any {
+	t.Helper()
+	if len(rules) == 0 || len(rules)%rulePositions != 0 {
+		t.Fatalf("%d bucket rules, want a multiple of %d", len(rules), rulePositions)
+	}
+	n := len(rules)
+	for n > 0 && isPlaceholder(rules[n-1]) {
+		n--
+	}
+	return rules[:n]
+}
+
 func TestFleetObjects(t *testing.T) {
 	objs := Objects(fleetState())
 

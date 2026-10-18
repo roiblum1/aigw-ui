@@ -65,8 +65,8 @@ func TestObjects(t *testing.T) {
 		t.Errorf("quota modelName = %v, want the upstream model name", entry["modelName"])
 	}
 	rules, _, _ := unstructured.NestedSlice(entry, "quota", "bucketRules")
-	if len(rules) != 2 {
-		t.Fatalf("got %d bucket rules, want 2", len(rules))
+	if rules = withoutPadding(t, rules); len(rules) != 2 {
+		t.Fatalf("got %d bucket rules before the placeholders, want 2", len(rules))
 	}
 	// Rules are sorted by tenant so every cluster renders the same policy.
 	first, _, _ := unstructured.NestedSlice(rules[0].(map[string]any), "clientSelectors")
@@ -226,8 +226,8 @@ func TestQuotaPolicyNeverRendersInvalidQuota(t *testing.T) {
 	}
 	var got []string
 	durations(policy.Object, &got)
-	if len(got) != 6 { // serviceQuota, defaultBucket, three placeholders and team-d
-		t.Errorf("got durations %v, want six", got)
+	if len(got) != 10 { // serviceQuota, defaultBucket, team-d, and seven placeholders: three before it and four after
+		t.Errorf("got durations %v, want ten", got)
 	}
 	for _, d := range got {
 		if !validQuota(1, d) {
@@ -277,7 +277,7 @@ func TestQuotaPolicyKeepsRulePositions(t *testing.T) {
 	}}}
 	policy := Objects(s)[3]
 	perModel, _, _ := unstructured.NestedSlice(policy.Object, "spec", "perModelQuotas")
-	rules := perModel[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any)
+	rules := withoutPadding(t, perModel[0].(map[string]any)["quota"].(map[string]any)["bucketRules"].([]any))
 	var selectors []string
 	for _, r := range rules {
 		header := r.(map[string]any)["clientSelectors"].([]any)[0].(map[string]any)["headers"].([]any)[0].(map[string]any)
