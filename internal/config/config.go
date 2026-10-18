@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -56,6 +57,10 @@ type Config struct {
 	// TenantPage lets a tenant see its own usage by signing in with one of
 	// its API keys.
 	TenantPage bool
+	// GatewayURL is the address the people who use the models send their
+	// requests to. The tenants' page puts it in the setup it shows; empty
+	// leaves a placeholder.
+	GatewayURL string
 
 	// CapacityImage is the AIPerf image a capacity measurement runs on the
 	// clusters. Empty turns measurements off.
@@ -151,6 +156,10 @@ func Load() (*Config, error) {
 		return nil, errors.New("USAGE_HISTORY_INTERVAL must be a duration of at least 10s such as 1m, or 0 to keep no usage history")
 	}
 	c.TenantPage = envOr("TENANT_PAGE", "true") == "true"
+	c.GatewayURL = strings.TrimRight(os.Getenv("GATEWAY_URL"), "/")
+	if u, err := url.Parse(c.GatewayURL); c.GatewayURL != "" && (err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "") {
+		return nil, errors.New("GATEWAY_URL must be an http or https address such as https://llm.example.com")
+	}
 	c.CapacityImage = os.Getenv("CAPACITY_IMAGE")
 	c.CapacityEvery, err = time.ParseDuration(envOr("CAPACITY_INTERVAL", "20s"))
 	if err != nil || c.CapacityEvery < 5*time.Second {

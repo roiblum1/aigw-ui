@@ -519,10 +519,12 @@ quotas. Disabling it stops all its keys at once.
 **Why.** Quotas belong to the tenant, not to a key, so a team can rotate
 keys without losing or doubling its budget.
 
-### Create and revoke an API key
+### Create, show and revoke an API key
 
-**What it does.** A new key is shown once. Revoking a key removes it from
-every cluster on the next sync, a few seconds later.
+**What it does.** A new key or token is shown when it is created, and
+**Show** shows it in full again later (since 0.33.0; a personal key cannot
+be shown). Revoking a key removes it from every cluster on the next sync, a
+few seconds later.
 
 **How.** The key is stored encrypted and written into one Secret per
 cluster, under `data`. Each sync also compares the Secret on the cluster
@@ -536,6 +538,10 @@ entry for the whole run (0.32.0; see [security](security.md#tokens)).
 
 - *Encrypted, not hashed.* Every sync has to write the keys to the clusters
   again, so the server needs the keys themselves.
+- *Shown again, with a trace.* The server can decrypt a token or API key, so
+  hiding it after creation only made an admin revoke and re-create it to
+  hand it on. **Show** is a `POST` (`/api/v1/keys/{id}/reveal`), so each
+  time is in the audit log; the answer is never cached or compressed.
 - *`data`, not `stringData`.* Server-side apply cannot remove an entry that
   came in through `stringData`, and the gateway trusts every entry: a
   revoked key would keep working.
@@ -549,7 +555,11 @@ them within minutes.
 **How.** The helper `aigw-token`, Claude Code's `apiKeyHelper`, trades the
 key at the hub (`POST /api/v1/token`) for a token that lives a week and
 carries the tenant's budget and models as they are then, and gets a new one
-every 10 minutes. The gateways check the token as any other.
+every 10 minutes. The gateways check the token as any other. The person
+sets it up from `/my-usage`, signed in with the key: **Set up Claude Code**
+gives one line that runs the installer the hub serves (`/clients/install.sh`).
+It downloads `aigw-token` and the `aigw-usage` plugin from the hub, signs in,
+and writes Claude Code's settings.
 
 **Why.**
 
@@ -563,6 +573,10 @@ every 10 minutes. The gateways check the token as any other.
 - *Hashed, not encrypted.* No gateway needs the key, so the hub keeps only
   its hash. The tokens are not stored either: a revoked key's tokens are
   refused by the key's client ID, which each of them carries.
+- *Installed from the hub.* The clients' machines may have no internet, and
+  the hub is the one address they all reach. The files are in the hub's
+  binary, so they match the hub's version. The key is asked for on the
+  terminal, never put in the command, where the shell would keep it.
 
 ### Set a budget across models
 

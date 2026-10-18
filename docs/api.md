@@ -135,7 +135,7 @@ Request bodies are never stored.
 | GET | `/usage` | Tokens used in the current window, for every tenant quota (`budget: true` on a model where the tenant's budget across models holds it: the limit is the model's and only counts), and `budgets`: what each tenant used of its budget across models, in credits (`tenant_id`, `tenant_slug`, `limit`, `window`, `used`, `resets_at`, `counters`) |
 | GET | `/usage?tenant_id=<id>` | The same for one tenant |
 | GET | `/usage/history?step=day&days=30` | What every tenant used of every model per day or hour |
-| GET | `/my/usage` | A tenant's own budgets, usage, prices, requests and tokens. Takes one of the tenant's API keys as the bearer token, not the admin token |
+| GET | `/my/usage` | A tenant's own budgets, usage, prices, requests and tokens, and `gateway_url` (`config.gatewayURL`, `""` when not set) for the setup the page shows. Takes one of the tenant's API keys as the bearer token, not the admin token |
 | POST | `/token` | | A new token for a personal key, which a user's helper asks for: `{"token": "eyJ...", "expires_at", "expires_in"}` (seconds), signed with the tenant's budget and models as they are now; `Cache-Control: no-store`. Takes the personal key as the bearer token, not the admin token. 401 for a key that is unknown, revoked or of a disabled tenant; 429 after ten wrong keys from one address in a minute |
 | POST | `/tenants/{id}/quotas/{model_id}/reset` | `{"counters": 1, "deleted": 1}`. The tenant's usage on that model is back to zero |
 | POST | `/tenants/{id}/budget/reset` | `{"counters": 1, "deleted": 1}`. The tenant's use of its budget across models is back to zero for the running period; 404 without a budget applied to a cluster |
@@ -205,6 +205,20 @@ hours) and `tenant_id`. A `tenant_id` that is not a UUID is answered 404.
 no point. `used` is what was used within the tenant's budget and
 `best_effort` what was used after it, in the model's `unit`. Times are UTC.
 The server reads the counters once a minute, so the last minute is missing.
+
+### Client files
+
+`GET /clients/{name}`, outside `/api/v1`, with no sign-in: the tools for the
+people who use the models, from the hub's binary (0.33.0), so that a
+machine with no internet installs them. `Cache-Control: no-cache`; 404 for
+any other name.
+
+| Name | Is |
+|---|---|
+| `install.sh` | The installer `/my-usage` shows: `curl -fsSL <hub>/clients/install.sh \| sh -s -- <hub> [<gateway>]` |
+| `aigw-token` | Claude Code's `apiKeyHelper` for personal keys |
+| `claude-code.tar.gz` | The `aigw-usage` plugin as a marketplace: `.claude-plugin/marketplace.json` (marketplace `aigw`) and `aigw-usage/`; unpack it and `claude plugin marketplace add <dir>` |
+| `aigw-usage.ts` | The Oh My Pi extension |
 
 ### A tenant's own usage
 
@@ -430,7 +444,7 @@ See [charging by cost](pricing.md).
 | PUT | `/models/{id}/prices` | `{"input_usd", "cached_usd", "output_usd", "now", "note"}` | The list. Replaces prices that were waiting |
 | DELETE | `/models/{id}/prices/pending` | | 204. 404 when none were waiting |
 | PUT | `/models/{id}/prices/dry-run` | `{"enabled"}` | 204. 409 for a model without prices in use |
-| GET | `/market?q=` | | `{"source", "snapshot_date", "models"}`: up to 25 entries of the market snapshot whose id, Hugging Face id or name holds `q` |
+| GET | `/market?q=` | | `{"source", "snapshot_date", "models"}`: up to 25 entries of the market snapshot that hold every word of `q`, in any order, in their id, Hugging Face id or name |
 | PUT | `/models/{id}/market-id` | `{"market_id"}` | 204. An entry of the snapshot; `""` is no market price; `null` follows the annotation and the served names again. Changes no price |
 
 - The three prices are dollars for a million tokens. They are stored as
@@ -481,6 +495,7 @@ be given; and what is left to give under its overcommit limit
 | PUT | `/tenants/{id}/models` | `{"models": ["<model id>", ...]}`, or `{"models": null}` for every model | The tenant. Any other model is refused (403) for the tokens signed from now on, which carry the list; an empty list refuses every model. 409 while the gateways take API keys too, and when the list leaves out a model the tenant has a quota on; the message names those models |
 | DELETE | `/tenants/{id}` | | 204 |
 | POST | `/tenants/{id}/keys` | `{"name", "kind"}` | `{"key": {...}, "secret": "eyJ..."}`. `kind` is `token`, the default; `personal` for a personal key (`aigw-pk-...`), which `POST /token` takes; or `key` for an API key of the kind before 0.18, refused (409) while a model has a standard. A key has `kind`; a token `expires_at`; a personal key `renewed_at`, when it last got a token, and `expires_at`, when that token expires |
+| POST | `/keys/{id}/reveal` | | `{"key": {...}, "secret": "eyJ..."}`: a token or API key in full again (0.33.0), `Cache-Control: no-store`, in the audit log as `key.reveal`. 409 for a personal key, which is stored only as a hash, and for a revoked key; 404 for an unknown one |
 | DELETE | `/keys/{id}` | | 204, key revoked; a token is refused by every gateway after its next sync, until it expires |
 | GET | `/signing-keys` | | `{"keys": [{"id", "created_at", "retired_at", "tokens"}], "identity", "issuer", "audience", "lifetime_days", "denied", "denied_spans"}`. `identity` is `keys` (API keys only, no token issued), `both` or `tokens`; `tokens` of a key counts the unrevoked tokens it signed that have not expired; `denied` counts the tokens the gateways refuse until they expire (revoked, or of a deleted tenant), and `denied_spans` the spans of expiry that stand for runs of them in the token policy (0.32.0; [security](security.md#tokens)) |
 | POST | `/signing-keys/rotate` | | `{"id"}` of the new signing key |

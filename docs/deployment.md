@@ -105,6 +105,7 @@ Back up the encryption key straight away. See
 | `config.overageThreshold` | `0.9` | The share of its budget a tenant has to have used to be moved to best-effort, from `0.5` to `1` |
 | `config.usageHistoryInterval` | `1m` | How often the usage counters are read to keep the usage history. At least `10s`; `0` keeps none. Needs `redis.url` |
 | `config.tenantPage` | `true` | Lets a tenant sign in at `/my-usage` with one of its API keys and see its own budgets and usage |
+| `config.gatewayURL` | empty | The gateway's address (`GATEWAY_URL`), such as `https://llm.example.com`, which `/my-usage` puts in the setup it shows as Claude Code's `ANTHROPIC_BASE_URL`. Empty leaves it out and the page says to set it |
 | `config.bestEffortPriority` | `-1` | The priority of the request class `best-effort` the hub creates on the serving clusters. Below 0: a request without a class has 0. It has an effect only on a site whose scheduler acts on priorities |
 | `capacity.image` | empty | The AIPerf image a capacity measurement runs (`deploy/aiperf/`; CI pushes `ghcr.io/roiblum1/aigw-aiperf:0.13.0`). Empty turns measurements off |
 | `capacity.window` | empty | When the hub measures by itself every LLMI that is not measured or whose result is stale, such as `Fri 22:00 - Sat 06:00 Asia/Jerusalem` or `01:00 - 05:00 UTC`. Empty never |

@@ -55,7 +55,7 @@ type Store interface {
 	CreateCapacityRun(ctx context.Context, r store.NewRun) error
 	GetCapacityRun(ctx context.Context, id string) (store.CapacityRun, error)
 	RunningCapacityRuns(ctx context.Context) ([]store.CapacityRun, error)
-	UpdateCapacityRun(ctx context.Context, id string, dataset *capacity.Dataset, steps []capacity.Step) error
+	UpdateCapacityRun(ctx context.Context, id string, settings *capacity.Settings, dataset *capacity.Dataset, steps []capacity.Step) error
 	// CreateCapacityRun drains the run's site and FinishCapacityRun
 	// restores it, each in the transaction that records the run.
 	FinishCapacityRun(ctx context.Context, id, status, detail string) error
@@ -387,10 +387,19 @@ func (s *Service) follow(ctx context.Context, run store.CapacityRun, now time.Ti
 	var log capacity.Log
 	if started {
 		log = capacity.ParseLog(text)
-		if log.Dataset != nil || len(log.Steps) > len(run.Steps) {
-			if err := s.st.UpdateCapacityRun(ctx, run.ID, log.Dataset, log.Steps); err != nil && !errors.Is(err, store.ErrNotFound) {
+		var fitted *capacity.Settings
+		// Fitting changes only the longest prompt and answer.
+		if f := log.Fit; f != nil && (f.Settings.MaxPromptTokens != run.Settings.MaxPromptTokens || f.Settings.MaxOutputTokens != run.Settings.MaxOutputTokens) {
+			fitted = &log.Fit.Settings
+		}
+		if fitted != nil || log.Dataset != nil || len(log.Steps) > len(run.Steps) {
+			if err := s.st.UpdateCapacityRun(ctx, run.ID, fitted, log.Dataset, log.Steps); err != nil && !errors.Is(err, store.ErrNotFound) {
 				return err
 			}
+		}
+		// The Job measures with the settings it fitted to the instance.
+		if log.Fit != nil {
+			run.Settings = log.Fit.Settings
 		}
 	}
 

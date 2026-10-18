@@ -118,14 +118,16 @@ func matches(hfID string, names []string) bool {
 	return false
 }
 
-// Search returns up to limit entries whose id, Hugging Face id or name holds
-// q, ignoring case: entries without a ":" variant first, then by id.
+// Search returns up to limit entries that hold every word of q in their id,
+// Hugging Face id or name, ignoring case: entries without a ":" variant
+// first, then by id. The words are matched one by one because people write
+// "Qwen 3.8" where the catalog has "qwen3.8".
 func (s *Snapshot) Search(q string, limit int) []Entry {
-	q = strings.ToLower(strings.TrimSpace(q))
+	words := strings.Fields(strings.ToLower(q))
 	out := []Entry{}
 	for _, e := range s.Models {
-		if q == "" || strings.Contains(strings.ToLower(e.ID), q) || strings.Contains(strings.ToLower(e.HFID), q) ||
-			strings.Contains(strings.ToLower(e.Name), q) {
+		text := strings.ToLower(e.ID + " " + e.HFID + " " + e.Name)
+		if holdsAll(text, words) {
 			out = append(out, e)
 		}
 	}
@@ -140,6 +142,15 @@ func (s *Snapshot) Search(q string, limit int) []Entry {
 		out = out[:limit]
 	}
 	return out
+}
+
+func holdsAll(text string, words []string) bool {
+	for _, w := range words {
+		if !strings.Contains(text, w) {
+			return false
+		}
+	}
+	return true
 }
 
 // Prices are a model's prices in dollars for a million tokens.

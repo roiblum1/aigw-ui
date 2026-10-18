@@ -44,7 +44,14 @@ func TestCapacityRuns(t *testing.T) {
 		{Concurrency: 1, Requests: 60, DurationSeconds: 300, InputTokens: 2_000_000, TTFTP95: 900, ITLP95: 20},
 		{Concurrency: 2, Requests: 60, DurationSeconds: 300, InputTokens: 4_000_000, TTFTP95: 9000, ITLP95: 20},
 	}
-	if err := s.UpdateCapacityRun(ctx, first, &capacity.Dataset{Sessions: 200, PromptMean: 99000}, steps); err != nil {
+	// The Job fitted the settings to the instance: the run keeps the fitted
+	// ones, and later updates without settings leave them.
+	fitted := set
+	fitted.MaxPromptTokens, fitted.MaxOutputTokens = 6692, 1500
+	if err := s.UpdateCapacityRun(ctx, first, &fitted, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateCapacityRun(ctx, first, nil, &capacity.Dataset{Sessions: 200, PromptMean: 99000}, steps); err != nil {
 		t.Fatal(err)
 	}
 	running, err := s.RunningCapacityRuns(ctx)
@@ -64,12 +71,12 @@ func TestCapacityRuns(t *testing.T) {
 	if err := s.FinishCapacityRun(ctx, first, RunFailed, "late"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("finished twice: %v", err)
 	}
-	if err := s.UpdateCapacityRun(ctx, first, nil, nil); !errors.Is(err, ErrNotFound) {
+	if err := s.UpdateCapacityRun(ctx, first, nil, nil, nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("update after the end: %v", err)
 	}
 	run, err := s.GetCapacityRun(ctx, first)
 	if err != nil || run.Status != RunSucceeded || run.FinishedAt == nil || run.Result.Best == nil || run.Result.Best.Concurrency != 1 ||
-		run.Settings.StepSeconds != set.StepSeconds || len(run.Result.Steps) != 2 || run.PerInstance() == nil {
+		run.Settings.StepSeconds != set.StepSeconds || run.Settings.MaxPromptTokens != 6692 || len(run.Result.Steps) != 2 || run.PerInstance() == nil {
 		t.Fatalf("run = %+v, %v", run, err)
 	}
 
@@ -92,7 +99,7 @@ func TestCapacityRuns(t *testing.T) {
 		if err := s.CreateCapacityRun(ctx, n); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.UpdateCapacityRun(ctx, r.id, nil, r.steps); err != nil {
+		if err := s.UpdateCapacityRun(ctx, r.id, nil, nil, r.steps); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.FinishCapacityRun(ctx, r.id, RunSucceeded, ""); err != nil {

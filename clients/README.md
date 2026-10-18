@@ -4,6 +4,34 @@ For the people who use the models: `aigw-token`, which signs Claude Code in
 to the gateway with a personal key, and two small add-ons that show a
 tenant's budget inside the coding agent and warn before it is spent.
 
+## From the hub
+
+Every file here is also in the hub's binary and served at
+`<hub>/clients/` with no sign-in, so a machine with no internet installs
+from the hub (since 0.33.0). Sign in on `<hub>/my-usage` with your personal
+key; **Set up Claude Code** there shows the one line to run:
+
+```sh
+curl -fsSL https://aigw.example.com/clients/install.sh | sh -s -- https://aigw.example.com https://<the gateway>
+```
+
+[`install/install.sh`](install/install.sh) installs `aigw-token` in
+`~/.local/bin` and signs it in (it asks for the personal key on the terminal,
+or reads `AIGW_PERSONAL_KEY`), sets `apiKeyHelper`, `ANTHROPIC_BASE_URL` and
+the status line in `~/.claude/settings.json` with `node` (everything else is
+kept; the old file is kept as `settings.json.aigw-backup`), and installs the
+`aigw-usage` plugin from `<hub>/clients/claude-code.tar.gz` with `claude
+plugin marketplace add` and `claude plugin install`. Without `node` or
+`claude` it says what to do by hand. Run it again after a hub upgrade to get
+the new files; it keeps the sign-in.
+
+| `<hub>/clients/` | Is |
+|---|---|
+| `install.sh` | The installer above |
+| `aigw-token` | [`aigw-token/aigw-token`](aigw-token/aigw-token) |
+| `claude-code.tar.gz` | [`claude-code/`](claude-code) as the marketplace `aigw` |
+| `aigw-usage.ts` | [`omp/aigw-usage.ts`](omp/aigw-usage.ts) |
+
 ## aigw-token
 
 [`aigw-token/aigw-token`](aigw-token/aigw-token) is Claude Code's
@@ -162,7 +190,13 @@ as thinking on both paths, and reasoning tokens are charged as output.
 
 - aigw-token: against a stand-in for the hub: sign-in, a new token, the
   token kept, a hub that fails, a revoked key, no hub.
+- install.sh: against a stand-in for the hub and for `claude`: everything
+  installed and the settings merged, a second run that keeps the sign-in
+  and updates the marketplace, no `node` and no `claude`, a wrong key. On
+  2026-10-18 against a local 0.33.0 hub with Claude Code 2.1.292 in an
+  empty config directory: the plugin installed and enabled from the hub's
+  archive, `aigw-token` signed in and printing a token.
 
 ```sh
-node --test clients/claude-code/scripts/ clients/aigw-token/
+node --test clients/claude-code/scripts/ clients/aigw-token/ clients/install/
 ```

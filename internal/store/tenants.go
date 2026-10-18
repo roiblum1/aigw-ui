@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -196,6 +197,24 @@ func (s *Store) CreateKey(ctx context.Context, tenantID, name string) (APIKey, s
 func (s *Store) RevokeKey(ctx context.Context, id string) (APIKey, error) {
 	k, err := scanKey(s.db.QueryRow(ctx, `UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL RETURNING `+keyColumns, id))
 	return k, mapErr(err)
+}
+
+// KeySecret returns a key and its secret, decrypted: an API key or a token,
+// which are stored encrypted because a sync writes them to the clusters. A
+// personal key is stored only as its hash and comes back with no secret.
+func (s *Store) KeySecret(ctx context.Context, id string) (APIKey, string, error) {
+	var enc []byte
+	var k APIKey
+	err := s.db.QueryRow(ctx, `SELECT `+keyColumns+`, key_enc FROM api_keys WHERE id = $1`, id).Scan(
+		&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt, &k.Kind, &k.ExpiresAt, &k.RenewedAt, &enc)
+	if err != nil || enc == nil {
+		return k, "", mapErr(err)
+	}
+	plain, err := s.box.Open(enc)
+	if err != nil {
+		return k, "", fmt.Errorf("decrypt key %s: %w", k.ClientID, err)
+	}
+	return k, string(plain), nil
 }
 
 // ---- quotas ----

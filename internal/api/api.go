@@ -34,6 +34,9 @@ type Server struct {
 	// tenantPage lets tenants sign in with an API key to see their own usage.
 	tenantPage  bool
 	keyFailures keyFailures
+	// gatewayURL is the gateway's address the tenants' page shows; "" when
+	// not configured.
+	gatewayURL string
 	// history records the use since its last look; nil without it.
 	history recorder
 }
@@ -41,6 +44,13 @@ type Server struct {
 // recorder records what was used since the last look (history.Service).
 type recorder interface {
 	Tick(ctx context.Context, now time.Time) error
+}
+
+// WithGatewayURL gives the gateway's address the tenants' page shows in its
+// setup.
+func (s *Server) WithGatewayURL(u string) *Server {
+	s.gatewayURL = u
+	return s
 }
 
 // WithHistory has a reset record the use it takes away first.
@@ -118,6 +128,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("DELETE /api/v1/tenants/{id}", s.deleteTenant)
 	api.HandleFunc("POST /api/v1/tenants/{id}/keys", s.createKey)
 	api.HandleFunc("DELETE /api/v1/keys/{id}", s.revokeKey)
+	api.HandleFunc("POST /api/v1/keys/{id}/reveal", s.revealKey)
 	api.HandleFunc("GET /api/v1/signing-keys", s.signingKeys)
 	api.HandleFunc("POST /api/v1/signing-keys/rotate", s.rotateSigningKey)
 	api.HandleFunc("PUT /api/v1/tenants/{id}/budget", s.setTenantBudget)
@@ -131,6 +142,9 @@ func (s *Server) Handler() http.Handler {
 	root.Handle("GET /api/v1/my/usage", s.tenantAuth(http.HandlerFunc(s.getMyUsage)))
 	// A new token for a personal key, which a user's helper asks for.
 	root.HandleFunc("POST /api/v1/token", s.renewToken)
+	// The tools for the people who use the models, which the tenants' page
+	// installs from here: nothing secret, so no sign-in.
+	root.HandleFunc("GET /clients/{name}", s.clientFile)
 	root.Handle("/api/", s.auth(timed(s.audit(api))))
 	root.HandleFunc("GET /upstream-docs/", s.upstreamDocs)
 	root.HandleFunc("/", s.ui)

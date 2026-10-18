@@ -80,7 +80,8 @@ func TestRunnerPeer(t *testing.T) {
 	var sni, host string
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host = r.Host
-		fmt.Fprint(w, `{"object":"list","data":[{"id":"m","object":"model","max_model_len":8192}]}`)
+		// Too short for any measurement: the Job stops right after it asked.
+		fmt.Fprint(w, `{"object":"list","data":[{"id":"m","object":"model","max_model_len":1200}]}`)
 	}))
 	server.TLS = &tls.Config{Certificates: []tls.Certificate{cert}, ClientCAs: pool, ClientAuth: tls.RequireAndVerifyClientCert,
 		GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) { sni = h.ServerName; return nil, nil }}
@@ -96,7 +97,7 @@ func TestRunnerPeer(t *testing.T) {
 	cmd.Env = append(os.Environ(), "AIGW_CAPACITY="+string(config), "AIGW_WORK="+dir)
 	out, _ := cmd.CombinedOutput()
 	l := ParseLog(string(out))
-	if l.Error == "" || l.Error[:29] != "the model takes at most 8,192" || sni != "peers.llm.test" || host != "peers.llm.test" {
+	if l.Error == "" || l.Error[:29] != "the model takes at most 1,200" || sni != "peers.llm.test" || host != "peers.llm.test" {
 		t.Fatalf("error %q, sni %q, host %q\n%s", l.Error, sni, host, out)
 	}
 }

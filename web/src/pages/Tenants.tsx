@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { ArrowLeft, Copy, Plus, Users } from "lucide-react";
+import { ArrowLeft, Copy, Eye, Plus, Users } from "lucide-react";
 import { api, type ApiKey, type SigningKeys, type Tenant } from "../api";
 import {
   Empty,
@@ -244,7 +244,8 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   const usage = useLoad(() => api.usage(props.id), "usage/" + props.id);
   usePolling(usage.reload, REFRESH_MS);
   const action = useAction();
-  const [newKey, setNewKey] = useState<{ secret: string; key: ApiKey } | null>(null);
+  // A key just created, or one shown again (again: true).
+  const [newKey, setNewKey] = useState<{ secret: string; key: ApiKey; again?: boolean } | null>(null);
   const [keyName, setKeyName] = useState("");
   // Every hook comes before the return below: the first render, without
   // data, must call the same hooks as the next one.
@@ -310,7 +311,9 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
           A <strong>personal key</strong> is for a person in Claude Code: its helper trades the key at the hub for a
           token that lives a few days, and gets a new one every few minutes, so a change of budget or models reaches the
           person with nothing to do. A <strong>token</strong> is for a tool that takes a fixed API key; it carries the
-          budget and models of the day it is created. Revoking either refuses it on every gateway after the next sync.
+          budget and models of the day it is created. Revoking either refuses it on every gateway after the next sync.{" "}
+          <strong>Show</strong> gives a token in full again; a personal key is kept only as a hash and cannot be shown:
+          create a new one.
         </p>
         <form className="inline-form" onSubmit={createKey}>
           <input value={keyName} placeholder="Key name, e.g. dana-laptop" onChange={(e) => setKeyName(e.target.value)} />
@@ -378,13 +381,25 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
                     ) : expired(k) ? (
                       <span className="badge pending">Expired</span>
                     ) : (
-                      <button
-                        className="danger"
-                        disabled={action.busy}
-                        onClick={() => confirm("Revoke this key?") && act(() => api.revokeKey(k.id))}
-                      >
-                        Revoke
-                      </button>
+                      <>
+                        {k.kind !== "personal" && (
+                          <button
+                            disabled={action.busy}
+                            title="Show it in full, to hand on. Every time it is shown is in the audit log."
+                            onClick={() => action.run(async () => setNewKey({ ...(await api.revealKey(k.id)), again: true }))}
+                          >
+                            <Eye />
+                            Show
+                          </button>
+                        )}
+                        <button
+                          className="danger"
+                          disabled={action.busy}
+                          onClick={() => confirm("Revoke this key?") && act(() => api.revokeKey(k.id))}
+                        >
+                          Revoke
+                        </button>
+                      </>
                     )}
                   </td>
                 </tr>
@@ -418,11 +433,23 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
 
       {newKey && (
         <Modal
-          title={newKey.key.kind === "personal" ? "Personal key created" : newKey.key.kind === "token" ? "Token created" : "Key created"}
+          title={
+            newKey.again
+              ? `${newKey.key.kind === "token" ? "Token" : "API key"} ${newKey.key.client_id}`
+              : newKey.key.kind === "personal"
+                ? "Personal key created"
+                : newKey.key.kind === "token"
+                  ? "Token created"
+                  : "Key created"
+          }
           onClose={() => setNewKey(null)}
         >
           <p>
-            Copy it now. It is not shown again.{" "}
+            {newKey.key.kind === "personal"
+              ? "Copy it now. It is not shown again: only its hash is kept."
+              : newKey.again
+                ? "Shown again on request; this is in the audit log."
+                : "Copy it now, or show it again later from this list."}{" "}
             {newKey.key.kind === "token" && (
               <>
                 The client pastes it as its API key: <span className="mono">Authorization: Bearer …</span> or{" "}
@@ -431,9 +458,9 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
             )}
             {newKey.key.kind === "personal" && (
               <>
-                The person signs in once with <span className="mono">aigw-token</span> (in the repository's{" "}
-                <span className="mono">clients/aigw-token</span>) and names it as Claude Code's{" "}
-                <span className="mono">apiKeyHelper</span>; see the user guide.
+                The person signs in with this key on <span className="mono">{window.location.origin}/my-usage</span>,
+                where <strong>Set up</strong> installs <span className="mono">aigw-token</span> and the Claude Code
+                plugin from this hub.
               </>
             )}
           </p>

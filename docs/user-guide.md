@@ -249,6 +249,7 @@ clients and `/anthropic/v1/messages` for Anthropic-style ones.
 | Action | Effect |
 |---|---|
 | Edit a quota | Change the tokens or the window in the quota's own row, then **Save**. What the tenant has used in the current window stays counted against the new limit; a new window starts a new count |
+| Show a key | A token or API key in full again, to hand on (since 0.33.0). Each time is in the audit log as `key.reveal`. A personal key cannot be shown: the hub keeps only its hash; create a new one |
 | Revoke a key | The key or token stops working after the next sync. A revoked personal key gets no new token, and the tokens it got are refused |
 | Disable a tenant | Its keys and quotas are removed from the clusters, and its tokens refused, until it is enabled again |
 | Delete a tenant | Removes the tenant, its keys and its quotas |
@@ -359,12 +360,14 @@ tokens** at the top of the Tenants page says what the gateways take now:
 
 **Personal keys and `aigw-token`.** A personal key is what a person keeps
 on their machine; the hub stores only its hash, and the gateways never see
-it. The helper `aigw-token` (in the repository, `clients/aigw-token`; it
-needs `sh` and `curl`) trades it at the hub (`POST /api/v1/token`) for a
+it. The helper `aigw-token` (`clients/aigw-token`, served by the hub at
+`/clients/aigw-token`; it needs `sh` and `curl`) trades it at the hub (`POST /api/v1/token`) for a
 token that lives 7 days (`tokens.renewedLifetimeHours`), carrying the
 tenant's budget and models as they are then, and asks for a new one every
-10 minutes. Claude Code runs it as its `apiKeyHelper`, so the person sets
-it up once:
+10 minutes. Claude Code runs it as its `apiKeyHelper`. The person signs in
+on `/my-usage` with the personal key, and **Set up Claude Code** there gives
+one line that does all of it from the hub, with no internet needed (see
+[the tenants' own page](#the-tenants-own-page)). By hand:
 
 ```sh
 aigw-token login https://<the hub>     # paste the personal key when asked
@@ -555,11 +558,12 @@ The page needs `redis.url` to be set, see [deployment](deployment.md).
 ## The tenants' own page
 
 A tenant can see its own budgets and usage without the admin token. It
-opens `/my-usage` on the hub's address and signs in with any of its API
-keys. The sign-in page of the hub links to it.
+opens `/my-usage` on the hub's address and signs in with a personal key or
+any of its API keys or tokens. The sign-in page of the hub links to it.
 
 | Section | Shows |
 |---|---|
+| Set up Claude Code | One line to paste in a terminal: `curl -fsSL <hub>/clients/install.sh \| sh -s -- <hub> <gateway>`. It installs `aigw-token` in `~/.local/bin` and signs it in (it asks for the personal key on the terminal), sets `apiKeyHelper`, `ANTHROPIC_BASE_URL` and the status line in `~/.claude/settings.json` (everything else is kept, the old file is kept as `settings.json.aigw-backup`), and installs the `aigw-usage` plugin with `claude plugin`. Every file comes from the hub (`/clients/`), so it works with no internet. Below it, the same step by step, and the Oh My Pi extension. Open by default after a sign-in with a personal key; with a token or API key it says a personal key is needed. The gateway's address comes from `config.gatewayURL`; without it the line has none and the page says to set it |
 | Your budget across models | The tenant's budget across every priced model, when it has one: what is used and left, when the next period starts, and whether a gateway holds the tenant to it |
 | Your models | The models the tenant may call, when it is held to some; the budgets and prices below are of those only |
 | Your budgets | For each model the tenant has a budget on: what is used and left in the running period, when the next period starts, and whether its requests are served as best-effort or refused |

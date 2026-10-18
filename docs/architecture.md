@@ -897,6 +897,13 @@ per model what the cache saved at the model's prices.
 The UI serves it at `/my-usage`, a path of its own next to the admin
 pages, with its own sign-in. See [security](security.md#the-tenants-own-page).
 
+The page's **Set up Claude Code** runs the installer from `/clients/`,
+which the hub serves without a sign-in from files compiled into its binary
+(package `clients`, `clients/embed.go`): `install.sh`, `aigw-token`, the Omp
+extension, and the Claude Code plugin packed on first request as a
+marketplace archive (`claude-code.tar.gz`, the same bytes every time). The
+answer carries `gateway_url` from `config.gatewayURL` for the line it shows.
+
 ## Not verified on a real gateway
 
 **Run on a gateway.** On OpenShift 4.22 with Envoy Gateway 1.9.1 and Envoy

@@ -87,8 +87,14 @@ follow `aigw-ui.io/capacity-per-instance`.
 ## Tenant API keys
 
 Keys are stored encrypted rather than hashed, because every sync has to write
-them to the clusters. The UI and API show a key only once, when it is created.
-Afterwards only the first characters are shown.
+them to the clusters. The list shows only a key's first characters, or a
+token's last. Since 0.33.0 an admin can show a token or API key in full
+again (**Show**, `POST /api/v1/keys/{id}/reveal`): whoever holds the admin
+token could already read every key from the clusters' Secret, or have a new
+token signed, so it opens nothing new, and each time is in the audit log as
+`key.reveal`, with the address it came from. The answer carries
+`Cache-Control: no-store` and is not gzipped. A personal key is stored only
+as its hash and cannot be shown; a revoked key is not shown either.
 
 **Revoking.** A revoked API key, and every API key of a disabled or deleted
 tenant, is removed from the Secret by the next sync of each cluster. For
@@ -143,6 +149,16 @@ these, so that the length of one cannot tell anything about the secret in it
 keeps the key and the last token in `~/.config/aigw`, readable by the user
 only, and passes the key to `curl` on stdin, so it is not on any command
 line.
+
+**The client files.** `/clients/` (the installer, `aigw-token`, the Claude
+Code plugin and the Oh My Pi extension) needs no sign-in: the files hold no
+secret and are the same for everyone, copied from the hub's binary. The
+installer asks for the personal key on the terminal, or takes it from
+`AIGW_PERSONAL_KEY`, and never puts it on a command line. It changes
+`~/.claude/settings.json` only through `node`, keeps every other setting,
+and keeps the old file as `settings.json.aigw-backup`. Piping a script from
+the hub into `sh` trusts the hub and its TLS certificate as much as the
+helper itself does.
 
 **The signing key** is an EC P-256 key the hub makes when it signs its first
 token. Its private half is stored in Postgres, encrypted with the encryption

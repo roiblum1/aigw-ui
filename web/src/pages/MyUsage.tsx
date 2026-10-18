@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { LogOut } from "lucide-react";
+import { Check, Copy, LogOut, Wrench } from "lucide-react";
 import { api, Unauthorized, type MyBudget, type MyUsage as Report, type Unit } from "../api";
 import BrandMark from "../BrandMark";
 import { CreditsTrigger, Footer } from "../Credits";
@@ -231,6 +231,94 @@ function Workload(props: { report: Report; range: "hours" | "days"; onRange: (r:
   );
 }
 
+/** A command to paste into a terminal, with a button that copies it. */
+function Command({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () =>
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  return (
+    <div className="relative">
+      <pre className="code pr-24">{text}</pre>
+      <button className="absolute right-2 top-2" onClick={copy}>
+        {copied ? <Check /> : <Copy />}
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * How to set up aigw-token and the Claude Code plugin, from this hub: the
+ * hub serves both, so it works where GitHub cannot be reached. The personal
+ * key is asked for in the terminal, never put in a command.
+ */
+function SetUp({ signedInWith, gateway }: { signedInWith: string; gateway: string }) {
+  const hub = window.location.origin;
+  const personal = signedInWith.startsWith("aigw-pk-");
+  const gw = gateway || "<the gateway's address>";
+  return (
+    <details className="card" open={personal}>
+      <summary className="flex cursor-pointer items-center gap-2">
+        <Wrench className="size-4" />
+        <h2 className="m-0">Set up Claude Code</h2>
+      </summary>
+      {!personal && (
+        <p className="banner warn">
+          You signed in with a token or an API key. The setup needs a <strong>personal key</strong> (it starts with{" "}
+          <span className="mono">aigw-pk-</span>): ask your admin for one.
+        </p>
+      )}
+      <p className="hint">
+        Run this in a terminal on your machine (macOS, Linux or WSL). It asks for your personal key. It installs{" "}
+        <span className="mono">aigw-token</span> in <span className="mono">~/.local/bin</span> and signs it in, which gets
+        Claude Code a fresh token every 10 minutes; points Claude Code at the gateway in{" "}
+        <span className="mono">~/.claude/settings.json</span>, keeping everything else there; and installs the{" "}
+        <span className="mono">aigw-usage</span> plugin, which shows your budget in the status line. Everything comes
+        from this hub. Restart Claude Code afterwards.
+      </p>
+      <Command text={`curl -fsSL ${hub}/clients/install.sh | sh -s -- ${hub}${gateway ? " " + gateway : ""}`} />
+      {!gateway && (
+        <p className="hint">
+          This hub was not told the gateway's address: set <span className="mono">env.ANTHROPIC_BASE_URL</span> in{" "}
+          <span className="mono">~/.claude/settings.json</span> to it afterwards, or ask your admin.
+        </p>
+      )}
+      <details className="mt-3">
+        <summary className="cursor-pointer text-[13.5px] font-medium">Step by step, or without the installer</summary>
+        <p className="hint mt-3">1. aigw-token, signed in with your personal key (paste it when asked):</p>
+        <Command
+          text={`mkdir -p ~/.local/bin
+curl -fsSLo ~/.local/bin/aigw-token ${hub}/clients/aigw-token
+chmod +x ~/.local/bin/aigw-token
+~/.local/bin/aigw-token login ${hub}`}
+        />
+        <p className="hint">2. In ~/.claude/settings.json:</p>
+        <Command
+          text={`{
+  "apiKeyHelper": "~/.local/bin/aigw-token",
+  "env": { "ANTHROPIC_BASE_URL": "${gw}" }
+}`}
+        />
+        <p className="hint">3. The usage plugin (needs node 18 or later), then run /aigw-usage:setup in Claude Code:</p>
+        <Command
+          text={`mkdir -p ~/.claude/aigw-marketplace
+curl -fsSL ${hub}/clients/claude-code.tar.gz | tar -xzf - -C ~/.claude/aigw-marketplace
+claude plugin marketplace add ~/.claude/aigw-marketplace
+claude plugin install aigw-usage@aigw --config hub_url=${hub}`}
+        />
+        <p className="hint">Oh My Pi: the usage extension.</p>
+        <Command
+          text={`mkdir -p ~/.omp/agent/extensions
+curl -fsSLo ~/.omp/agent/extensions/aigw-usage.ts ${hub}/clients/aigw-usage.ts`}
+        />
+      </details>
+    </details>
+  );
+}
+
 function SignIn({ onKey }: { onKey: (key: string, report: Report) => void }) {
   const [key, setKey] = useState("");
   const [error, setError] = useState("");
@@ -260,11 +348,12 @@ function SignIn({ onKey }: { onKey: (key: string, report: Report) => void }) {
         </div>
         <ErrorBanner message={error} />
         <label className="field">
-          <span>API key</span>
-          <input type="password" required autoFocus placeholder="sk-…" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} />
+          <span>Personal key</span>
+          <input type="password" required autoFocus placeholder="aigw-pk-…" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} />
           <small>
-            Any key of your team. It is only used to find your team, and stays in this tab until you close it. You see
-            your own team and no other.
+            Your personal key, or any key or token of your team. It is only used to find your team, and stays in this
+            tab until you close it. You see your own team and no other. Signed in with a personal key, the page also
+            sets up Claude Code for you.
           </small>
         </label>
         <button type="submit" className="primary mt-1 w-full" disabled={busy}>
@@ -357,6 +446,7 @@ export default function MyUsage() {
         <ErrorBanner message={error} />
         {report && (
           <>
+            <SetUp signedInWith={key} gateway={report.gateway_url} />
             {report.budget && (
               <section className="card">
                 <h2>Your budget across models</h2>

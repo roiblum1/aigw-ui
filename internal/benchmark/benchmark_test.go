@@ -86,7 +86,10 @@ func (f *fakeStore) RunningCapacityRuns(context.Context) ([]store.CapacityRun, e
 	return out, nil
 }
 
-func (f *fakeStore) UpdateCapacityRun(_ context.Context, id string, d *capacity.Dataset, steps []capacity.Step) error {
+func (f *fakeStore) UpdateCapacityRun(_ context.Context, id string, set *capacity.Settings, d *capacity.Dataset, steps []capacity.Step) error {
+	if set != nil {
+		f.runs[id].Settings = *set
+	}
 	f.runs[id].Dataset, f.runs[id].Steps = d, steps
 	return nil
 }
@@ -241,6 +244,24 @@ func TestStartAndFollow(t *testing.T) {
 	s.Tick(ctx, time.Now())
 	if r.Status != store.RunSucceeded || !strings.Contains(r.Detail, "at 2 in flight") {
 		t.Fatalf("done: %+v", r)
+	}
+}
+
+// A Job that fitted the settings to the instance: the run keeps the fitted
+// settings, and is judged by them.
+func TestFollowKeepsFittedSettings(t *testing.T) {
+	st, cl, s := setup("registry/aiperf:1")
+	ctx := context.Background()
+	run, err := s.Start(ctx, live("glm-0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fitted := capacity.DefaultProfile().Settings(8192, capacity.ModeLive)
+	line, _ := json.Marshal(capacity.Fit{MaxModelLen: 8192, Settings: fitted})
+	cl.log = "AIGW-FIT " + string(line) + "\n" + twoSteps
+	s.Tick(ctx, time.Now())
+	if r := st.runs[run.ID]; r.Settings.MaxPromptTokens != 6692 || r.Settings.MaxOutputTokens != 1500 || len(r.Steps) != 2 {
+		t.Fatalf("run settings = %+v", r.Settings)
 	}
 }
 

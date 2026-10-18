@@ -132,7 +132,14 @@ measured again, and capacity does not fall to zero at once.
 A deployment that takes shorter requests than the profile's longest prompt
 (`aigw-ui.io/max-model-len`, or what the pod lists under `/v1/models`) gets
 every part of a session scaled down by the same factor: one profile cannot
-hand a 100,000-token prompt to a model that takes 8,192.
+hand a 100,000-token prompt to a model that takes 8,192. The longest prompt
+becomes the length less the longest answer; when that leaves less than twice
+the answer, the answer becomes a quarter of the length. With the annotation
+the hub scales the settings before the Job starts. Without it, as when vLLM
+chooses the length itself, the Job scales them by the same rule to what the
+pod lists, prints them first (`AIGW-FIT`, with the sessions it made for
+them), and the run keeps them and is judged by them (since 0.33.0; before,
+the Job stopped with "the model takes at most …").
 
 ## How a measurement works
 
@@ -307,8 +314,10 @@ each item waits for. Empty, the default, never.
   measurement downloads nothing. CI runs the Job's script in that image
   against a stand-in for vLLM on every change.
 - **The model's length.** Before anything else the Job asks the instance
-  (`/v1/models`) how long a request it takes, and stops at once when the
-  profile, scaled to the deployment, still does not fit.
+  (`/v1/models`) how long a request it takes, and scales the settings down
+  to it when they ask for more (see above). It stops at once only when the
+  model takes too little for a measurement: a prompt of less than 1,000
+  tokens after scaling, which is a length under about 1,334.
 - **One at a time.** A model is measured once at a time.
 - **Network.** The Job must reach the pod's port, and for prefill/decode
   the gateway and the decode pods from the gateway's namespace. A

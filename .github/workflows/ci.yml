@@ -112,7 +112,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Format
-        run: test -z "$(gofmt -l cmd internal docs)" || { gofmt -l cmd internal docs; exit 1; }
+        run: test -z "$(gofmt -l cmd internal docs clients)" || { gofmt -l cmd internal docs clients; exit 1; }
 
       - name: Vet
         run: go vet ./...
@@ -156,7 +156,7 @@ jobs:
           npm run build
 
       - name: Test the Claude Code plugin
-        run: node --test clients/claude-code/scripts/ clients/aigw-token/
+        run: node --test clients/claude-code/scripts/ clients/aigw-token/ clients/install/
 
       - name: Lint and render the chart
         run: hack/check-chart.sh

@@ -157,8 +157,11 @@ type myUsage struct {
 	DisplayName string    `json:"display_name"`
 	At          time.Time `json:"at"`
 	// UsageEnabled is false when the server reads no usage counters.
-	UsageEnabled bool       `json:"usage_enabled"`
-	Budgets      []myBudget `json:"budgets"`
+	UsageEnabled bool `json:"usage_enabled"`
+	// GatewayURL is the address to send requests to, for the setup the page
+	// shows; "" when the hub is not told it.
+	GatewayURL string     `json:"gateway_url"`
+	Budgets    []myBudget `json:"budgets"`
 	// Budget is the tenant's budget across models, nil when it has none.
 	Budget *myTenantBudget `json:"budget"`
 	// Models names the models the tenant may call, nil for every model.
@@ -184,7 +187,7 @@ func (s *Server) getMyUsage(w http.ResponseWriter, r *http.Request) {
 	t := r.Context().Value(tenantKey{}).(store.Tenant)
 	now := time.Now().UTC()
 	today := now.Truncate(24 * time.Hour)
-	out := myUsage{Tenant: t.Slug, DisplayName: t.DisplayName, At: now, Budgets: []myBudget{}, Prices: []myPrice{},
+	out := myUsage{Tenant: t.Slug, DisplayName: t.DisplayName, At: now, GatewayURL: s.gatewayURL, Budgets: []myBudget{}, Prices: []myPrice{},
 		DaysFrom: today.AddDate(0, 0, -29), HoursFrom: today.AddDate(0, 0, -1)}
 
 	// A tenant held to some models is shown a budget or a price on those

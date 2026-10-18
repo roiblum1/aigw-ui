@@ -236,6 +236,10 @@ does, and read the header.
 | A budget tenant's history shows less of a model for a day than its counters in Redis | A hub before 0.32.0 moved the rule that counts budget tenants on a model whenever an amount was added after it; use in the minute before the move was not added | Upgrade; the rule no longer moves. What was lost is not added afterwards |
 | Saving quotas for many tenants at once fails now and then with 409 `already exists` | A hub from 0.24.0 to 0.31.0: two quotas, or two new amounts, on one model saved at the same time picked the same free position | Upgrade, or save the failed one again. From 0.32.0 quotas on one model are saved in turn |
 | A script's API calls are slow and the UI's are not | The script's time is the network's and the uncompressed transfer's | Compare with `Server-Timing` (above); send `Accept-Encoding: gzip` |
+| A capacity measurement fails with `the model takes at most N tokens, prompt and answer together, and the settings ask for up to …` | A hub before 0.33.0: the model does not declare `aigw-ui.io/max-model-len` (vLLM chose its length) and the profile asks for more | Upgrade; the Job then scales the settings to the length the pod lists, and the run shows the scaled ones. Or annotate the Service with its length |
+| A capacity measurement fails with `too few for a measurement` | The model takes under about 1,334 tokens, so even a scaled session has no prompt of 1,000 | Expected; such a model is not measured |
+| `/my-usage`'s setup line has no gateway address | `config.gatewayURL` is empty | Set it to the address clients send their requests to |
+| The installer stops with `could not download aigw-token` | The machine cannot reach the hub at the address the page showed, or curl does not trust the hub's certificate | Check the address from that machine; give curl the CA (`CURL_CA_BUNDLE`) |
 | Requests are rejected with 429 for a tenant that has no quota | The model has quotas for other tenants, so this one only has the shared pool | Give the tenant a quota |
 
 ## Upgrading Envoy Gateway to 1.10

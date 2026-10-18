@@ -17,7 +17,7 @@ func valid(t *testing.T) {
 		"OVERAGE_INTERVAL", "OVERAGE_THRESHOLD", "BEST_EFFORT_PRIORITY",
 		"FLEET_PEER_SNI", "FLEET_DOMAIN", "FLEET_PEER_CA_CONFIGMAP", "FLEET_PEER_CLIENT_SECRET", "FLEET_SESSION_HEADER",
 		"CAPACITY_PEER_MEASUREMENTS", "TOKEN_ISSUER", "TOKEN_AUDIENCE", "TOKEN_LIFETIME_DAYS", "TOKEN_RENEWED_LIFETIME_HOURS",
-		"MEMORY_LIMIT",
+		"MEMORY_LIMIT", "GATEWAY_URL",
 	} {
 		t.Setenv(name, "")
 	}
@@ -56,8 +56,21 @@ func TestLoadDefaults(t *testing.T) {
 	if c.MemoryLimit != 0 {
 		t.Errorf("memory limit = %d without MEMORY_LIMIT", c.MemoryLimit)
 	}
+	if c.GatewayURL != "" {
+		t.Errorf("gateway address = %q without GATEWAY_URL", c.GatewayURL)
+	}
 	if got := strings.Join(c.Fleet.SessionHeaders, ","); got != "x-claude-code-session-id,x-openwebui-chat-id" {
 		t.Errorf("session headers = %q", got)
+	}
+}
+
+// The gateway's address is kept without a trailing slash, so that the setup
+// the tenants' page shows does not double it.
+func TestLoadGatewayURL(t *testing.T) {
+	valid(t)
+	t.Setenv("GATEWAY_URL", "https://llm.example.com/")
+	if c, err := Load(); err != nil || c.GatewayURL != "https://llm.example.com" {
+		t.Fatalf("gateway address = %+v, %v", c, err)
 	}
 }
 
@@ -107,6 +120,8 @@ func TestLoadRefuses(t *testing.T) {
 		// The chart passes the limit in bytes, as the pod's spec gives it.
 		{"MEMORY_LIMIT", "1Gi", "MEMORY_LIMIT"},
 		{"MEMORY_LIMIT", "-1", "MEMORY_LIMIT"},
+		{"GATEWAY_URL", "llm.example.com", "GATEWAY_URL"},
+		{"GATEWAY_URL", "ftp://llm.example.com", "GATEWAY_URL"},
 	} {
 		t.Run(tc.name+"="+tc.value, func(t *testing.T) {
 			valid(t)

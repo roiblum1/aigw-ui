@@ -370,14 +370,76 @@ def model_length():
     return None
 
 
+AGENTIC_MAX_PROMPT = 167000  # capacity.agenticMaxPrompt
+# The shortest prompt a measurement may grow to (capacity.Settings.Validate).
+MIN_PROMPT_TOKENS = 1000
+
+
+def go_round(x):
+    """Go's math.Round for the non-negative numbers used here: halves go up,
+    where Python's round() goes to the even number."""
+    return float(int(x + 0.5))
+
+
+def fit(s, longest):
+    """The settings for a model that takes at most longest tokens, by the
+    rule of capacity.Profile.Settings: the longest prompt shrinks to what is
+    left after the longest answer, and when that leaves less than twice the
+    answer, the answer is a quarter of the length."""
+    s = dict(s)
+    if longest - s["max_output_tokens"] < s["max_prompt_tokens"]:
+        s["max_prompt_tokens"] = max(longest - s["max_output_tokens"], 0)
+        if s["max_prompt_tokens"] < 2 * s["max_output_tokens"]:
+            s["max_output_tokens"] = max(longest // 4, 16)
+            s["max_prompt_tokens"] = longest - s["max_output_tokens"]
+    return s
+
+
+def agentic(s):
+    """AIPerf's coding-agent session settings for settings s, as
+    capacity.Agentic makes them: every part of a session scaled by one factor."""
+    f = min(s["max_prompt_tokens"] / AGENTIC_MAX_PROMPT, 1)
+
+    def tokens(n):
+        return int(max(go_round(n * f), 1))
+    answer = int(min(1000, go_round(s["max_output_tokens"] * 2 / 3)))
+    block = int(min(512, max(64, go_round(512 * f / 16) * 16)))
+    shared = s.get("shared_prefix_tokens") or 32000
+    return {
+        "new_tokens_per_turn": {"mean": tokens(6000), "median": tokens(6000), "max": tokens(10000), "bias": 1.1},
+        "generation_length": {"mean": answer, "median": answer, "max": s["max_output_tokens"]},
+        "inter_turn_delay": {
+            "agentic_fraction": 0.7,
+            "agentic_delay": {"mean": 2500, "median": 1800, "max": 10000},
+            "human_delay": {"mean": 40000, "median": 25000, "max": 120000},
+            "max": s.get("pause_ms", 0),
+        },
+        "reset": {"base_probability": 0.01, "context_scaling": 1.5},
+        "max_prompt_tokens": s["max_prompt_tokens"],
+        "block_size": block,
+        "cache": {
+            "layer1_tokens": tokens(shared),
+            "layer1_5_tokens": 0,
+            "layer2": {"mean": tokens(15000), "median": tokens(5000), "max": tokens(30000)},
+            "layer1_5_groups": {"num_groups": 1, "zipf_alpha": 0.6},
+        },
+    }
+
+
 # A request longer than the model takes is refused, so every step would only
-# count errors. The deployment may not declare its length to the hub.
+# count errors. vLLM may choose its length itself, so the deployment does not
+# always declare it to the hub: the settings are then fitted here to what the
+# instance says, by the hub's own rule, and the hub keeps the fitted ones.
 longest = model_length()
-need = settings["max_prompt_tokens"] + settings["max_output_tokens"]
-if longest is not None and need > longest:
-    emit("ERROR", {"error": "the model takes at most {:,} tokens, prompt and answer together, and the settings ask for up to {:,}: "
-                            "set the longest prompt to at most {:,}".format(longest, need, max(longest - settings["max_output_tokens"], 0))})
-    sys.exit(1)
+if longest is not None and settings["max_prompt_tokens"] + settings["max_output_tokens"] > longest:
+    fitted = fit(settings, longest)
+    if fitted["max_prompt_tokens"] < MIN_PROMPT_TOKENS:
+        emit("ERROR", {"error": "the model takes at most {:,} tokens, prompt and answer together: too few for a measurement, "
+                                "which needs a prompt of at least {:,}".format(longest, MIN_PROMPT_TOKENS)})
+        sys.exit(1)
+    settings = fitted
+    cfg["agentic"] = agentic(settings)
+    emit("FIT", {"max_model_len": longest, "settings": settings, "agentic": cfg["agentic"]})
 
 # A drained instance still finishes what it had; anything after that is
 # other traffic, and would be counted as the instance's own.

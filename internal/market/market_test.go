@@ -49,6 +49,16 @@ func TestMatch(t *testing.T) {
 	if got := s.Search("", 3); len(got) != 3 {
 		t.Fatalf("search limit: %d", len(got))
 	}
+	// Each word is matched on its own, in any field and any order: the
+	// catalog writes "qwen3" where a person types "Qwen 3".
+	for _, q := range []string{"Qwen 3", "coder qwen", "  qwen3-coder  ", "Qwen/Qwen3-Coder-480B", "qwen 480b"} {
+		if got := s.Search(q, 10); len(got) != 1 || got[0].ID != "qwen/qwen3-coder" {
+			t.Fatalf("search %q: %+v", q, got)
+		}
+	}
+	if got := s.Search("qwen glm", 10); len(got) != 0 {
+		t.Fatalf("search with a word no entry holds: %+v", got)
+	}
 	if _, ok := s.Find("b/two"); !ok {
 		t.Fatal("find")
 	}

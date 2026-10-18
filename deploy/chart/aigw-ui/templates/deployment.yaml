@@ -64,6 +64,10 @@ spec:
               value: {{ .Values.config.usageHistoryInterval | quote }}
             - name: TENANT_PAGE
               value: {{ .Values.config.tenantPage | quote }}
+            {{- with .Values.config.gatewayURL }}
+            - name: GATEWAY_URL
+              value: {{ . | quote }}
+            {{- end }}
             - name: BEST_EFFORT_PRIORITY
               value: {{ .Values.config.bestEffortPriority | quote }}
             {{- with .Values.capacity.image }}

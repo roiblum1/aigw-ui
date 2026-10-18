@@ -194,12 +194,16 @@ func (s *Store) LatestCapacityRuns(ctx context.Context) ([]CapacityRun, error) {
 	return out, nil
 }
 
-// UpdateCapacityRun stores what a running run has printed so far.
-func (s *Store) UpdateCapacityRun(ctx context.Context, id string, dataset *capacity.Dataset, steps []capacity.Step) error {
+// UpdateCapacityRun stores what a running run has printed so far. Settings
+// not nil are the ones the Job fitted to the instance, and replace those the
+// run was started with.
+func (s *Store) UpdateCapacityRun(ctx context.Context, id string, settings *capacity.Settings, dataset *capacity.Dataset, steps []capacity.Step) error {
 	if steps == nil {
 		steps = []capacity.Step{}
 	}
-	return affected(s.db.Exec(ctx, `UPDATE capacity_runs SET dataset = $2, steps = $3 WHERE id = $1 AND status = 'running'`, id, dataset, steps))
+	return affected(s.db.Exec(ctx,
+		`UPDATE capacity_runs SET dataset = $2, steps = $3, settings = COALESCE($4::jsonb, settings) WHERE id = $1 AND status = 'running'`,
+		id, dataset, steps, settings))
 }
 
 // FinishCapacityRun ends a run, and restores the site of a run that drained

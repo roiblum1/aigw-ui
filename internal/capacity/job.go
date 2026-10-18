@@ -187,8 +187,20 @@ type Dataset struct {
 	PromptMax  int64   `json:"prompt_max"`
 }
 
+// Fit is what a Job prints when the instance takes shorter requests than
+// its settings ask for: the instance's length, and the settings and sessions
+// it fitted to it by the rule of Profile.Settings.
+type Fit struct {
+	MaxModelLen int            `json:"max_model_len"`
+	Settings    Settings       `json:"settings"`
+	Agentic     map[string]any `json:"agentic"`
+}
+
 // Log is what the Job has printed so far.
 type Log struct {
+	// Fit is set when the Job fitted the settings to the instance: the run
+	// is measured with Fit.Settings, not with the settings it was given.
+	Fit     *Fit
 	Dataset *Dataset
 	Steps   []Step
 	// Done is set when the Job printed its last line. Error when it gave
@@ -209,6 +221,11 @@ func ParseLog(text string) Log {
 			continue
 		}
 		switch kind {
+		case "AIGW-FIT":
+			var f Fit
+			if json.Unmarshal([]byte(body), &f) == nil {
+				l.Fit = &f
+			}
 		case "AIGW-DATASET":
 			var d Dataset
 			if json.Unmarshal([]byte(body), &d) == nil {

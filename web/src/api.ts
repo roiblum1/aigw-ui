@@ -781,6 +781,8 @@ export interface MyUsage {
   display_name: string;
   at: string;
   usage_enabled: boolean;
+  /** The gateway's address for the setup the page shows; "" when the hub is not told it. */
+  gateway_url: string;
   budgets: MyBudget[];
   budget: MyTenantBudget | null;
   /** The models the tenant may call, null for every model. */
@@ -1038,6 +1040,8 @@ export const api = {
   createKey: (tenantId: string, name: string, kind: "token" | "personal" = "token") =>
     request<{ key: ApiKey; secret: string }>("POST", `/tenants/${tenantId}/keys`, { name, kind }),
   revokeKey: (id: string) => request<void>("DELETE", `/keys/${id}`),
+  /** A token or API key in full, again; a personal key cannot be shown (409). */
+  revealKey: (id: string) => request<{ key: ApiKey; secret: string }>("POST", `/keys/${id}/reveal`),
   signingKeys: () => request<SigningKeys>("GET", "/signing-keys"),
   rotateSigningKey: () => request<{ id: string }>("POST", "/signing-keys/rotate"),
   setQuota: (tenantId: string, model_id: string, token_limit: number, window: Window, shadow: boolean) =>

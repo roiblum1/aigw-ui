@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -227,15 +228,51 @@ func TestRunnerCacheBeforeVLLM16(t *testing.T) {
 	}
 }
 
-// A model shorter than the settings would refuse every request: the Job stops
-// before it makes up any session, and says what to set.
+// A model that takes shorter requests than the settings ask for, and did not
+// declare its length to the hub (vLLM chose it): the Job fits the settings
+// to the length the instance lists, by the hub's own rule, makes the sessions
+// for the fitted settings and measures. The settings and sessions it prints
+// are what Profile.Settings and Agentic give for that length: the lengths
+// cover the prompt shrunk alone, and the answer cut to a quarter.
+func TestRunnerFitsTheModel(t *testing.T) {
+	for _, length := range []int{4096, 8192, 40960} {
+		out := runRunner(t, Defaults(0), &instance{maxModelLen: length})
+		l := ParseLog(out)
+		if !l.Done || l.Error != "" || l.Fit == nil || l.Fit.MaxModelLen != length {
+			t.Fatalf("%d: not fitted and done:\n%s", length, out)
+		}
+		want := Defaults(length)
+		if !reflect.DeepEqual(l.Fit.Settings, want) {
+			t.Fatalf("%d: fitted settings\n%+v, want\n%+v", length, l.Fit.Settings, want)
+		}
+		var agentic map[string]any
+		data, _ := json.Marshal(Agentic(want))
+		if err := json.Unmarshal(data, &agentic); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(l.Fit.Agentic, agentic) {
+			t.Fatalf("%d: sessions\n%v, want\n%v", length, l.Fit.Agentic, agentic)
+		}
+	}
+}
+
+// Settings that already fit are left alone: no fit is printed.
+func TestRunnerKeepsSettingsThatFit(t *testing.T) {
+	l := ParseLog(runRunner(t, Defaults(8192), &instance{maxModelLen: 8192}))
+	if !l.Done || l.Fit != nil {
+		t.Fatalf("fit = %+v, done = %v", l.Fit, l.Done)
+	}
+}
+
+// A model too short for any measurement: the Job stops before it makes up
+// any session.
 func TestRunnerModelTooShort(t *testing.T) {
-	out := runRunner(t, Defaults(0), &instance{maxModelLen: 8192})
+	out := runRunner(t, Defaults(0), &instance{maxModelLen: 1200})
 	l := ParseLog(out)
-	if l.Dataset != nil || len(l.Steps) != 0 || l.Done {
+	if l.Dataset != nil || len(l.Steps) != 0 || l.Done || l.Fit != nil {
 		t.Fatalf("it went on:\n%s", out)
 	}
-	want := "the model takes at most 8,192 tokens, prompt and answer together, and the settings ask for up to 168,500: set the longest prompt to at most 6,692"
+	want := "the model takes at most 1,200 tokens, prompt and answer together: too few for a measurement, which needs a prompt of at least 1,000"
 	if l.Error != want {
 		t.Fatalf("error = %q", l.Error)
 	}

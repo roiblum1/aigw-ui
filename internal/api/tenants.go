@@ -183,6 +183,28 @@ func (s *Server) revokeKey(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// revealKey shows an API key or a token again, in full, so that an admin can
+// hand it on. It is a POST so that every reveal is in the audit log. A
+// personal key cannot be shown: only its hash is stored.
+func (s *Server) revealKey(w http.ResponseWriter, r *http.Request) {
+	k, secret, err := s.st.KeySecret(r.Context(), r.PathValue("id"))
+	switch {
+	case err != nil:
+		fail(w, err)
+		return
+	case k.RevokedAt != nil:
+		writeError(w, http.StatusConflict, "this "+keyKind(k.Kind)+" is revoked.")
+		return
+	case secret == "":
+		writeError(w, http.StatusConflict, "a "+keyKind(k.Kind)+" is stored only as a hash and cannot be shown again: create a new one.")
+		return
+	}
+	note(r, "key.reveal", "Showed "+keyKind(k.Kind)+" "+k.ClientID)
+	// The secret is in no cache, and is not compressed (see compress).
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"key": k, "secret": secret})
+}
+
 func (s *Server) upsertQuota(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		ModelID    string `json:"model_id"`

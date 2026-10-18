@@ -22,6 +22,7 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 COPY docs/ docs/
+COPY clients/ clients/
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /aigw-ui ./cmd/server
 
