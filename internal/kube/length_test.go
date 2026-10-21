@@ -117,21 +117,21 @@ func TestServedLength(t *testing.T) {
 		workloadPod("den-1", "den", "", true, "", 0),
 	)
 	for range 2 {
-		if n := c.servedLength(ctx, g, llmis("glm", nil), now); n != 32768 {
-			t.Fatalf("glm: %d", n)
+		if n, denied := c.servedLength(ctx, g, llmis("glm", nil), now); n != 32768 || denied {
+			t.Fatalf("glm: %d %v", n, denied)
 		}
 	}
 	if asked("http:glm-0:8000") != 1 || asked("http:glm-p:8000") != 0 || asked("http:glm-x:8000") != 0 {
 		t.Fatalf("asked glm-0 %d, glm-p %d, glm-x %d times", asked("http:glm-0:8000"), asked("http:glm-p:8000"), asked("http:glm-x:8000"))
 	}
-	if n := c.servedLength(ctx, g, llmis("tls", nil), now); n != 65536 {
+	if n, _ := c.servedLength(ctx, g, llmis("tls", nil), now); n != 65536 {
 		t.Fatalf("tls: %d", n)
 	}
 
-	// Refused: one pod a look, each again only after lengthRetry.
+	// Refused: one pod a look, each again only after lengthRetry, and said.
 	for i, at := range []time.Duration{0, time.Minute, 2 * time.Minute, lengthRetry + time.Second} {
-		if n := c.servedLength(ctx, g, llmis("den", nil), now.Add(at)); n != 0 {
-			t.Fatalf("den: %d", n)
+		if n, denied := c.servedLength(ctx, g, llmis("den", nil), now.Add(at)); n != 0 || !denied {
+			t.Fatalf("den: %d %v", n, denied)
 		}
 		want := [][2]int{{1, 0}, {1, 1}, {1, 1}, {2, 1}}[i]
 		if got := [2]int{asked("http:den-0:8000"), asked("http:den-1:8000")}; got != want {
@@ -144,7 +144,7 @@ func TestServedLength(t *testing.T) {
 	if _, kept := c.lengths["uid-glm-0"]; kept {
 		t.Fatal("a pod that is gone is remembered")
 	}
-	if n := c.servedLength(ctx, pods(workloadPod("glm-9", "glm", "", true, "HTTP", 8000)), llmis("glm", nil), now); n != 0 || asked("http:glm-9:8000") != 1 {
+	if n, _ := c.servedLength(ctx, pods(workloadPod("glm-9", "glm", "", true, "HTTP", 8000)), llmis("glm", nil), now); n != 0 || asked("http:glm-9:8000") != 1 {
 		t.Fatalf("glm-9: %d, asked %d times", n, asked("http:glm-9:8000"))
 	}
 }

@@ -149,6 +149,12 @@ func discoveryNote(c store.Cluster, capacity []kube.ModelCapacity) string {
 		}
 	}
 	for _, mc := range capacity {
+		if mc.LengthDenied {
+			notes = append(notes, "not allowed to get pods/proxy, so the length of a model whose deployments declare none (aigw-ui.io/max-model-len) is not read from its servers")
+			break
+		}
+	}
+	for _, mc := range capacity {
 		if mc.ConfigsDenied {
 			notes = append(notes, "not allowed to list LLMInferenceServiceConfigs, so a change in a config or preset an LLMInferenceService is built on does not mark its measurement stale")
 			break

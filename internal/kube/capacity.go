@@ -98,6 +98,10 @@ type ModelCapacity struct {
 	// LLMInferenceServiceConfigs: the spec hash then holds their names only,
 	// and a change in one does not mark a measurement stale.
 	ConfigsDenied bool
+	// LengthDenied is set when the hub was not allowed to ask a model
+	// server for its length (get on pods/proxy): a deployment that declares
+	// none then has no length.
+	LengthDenied bool
 }
 
 // Pool names an InferencePool: the set of pods of one deployment that its
@@ -160,8 +164,9 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 		w    weights.Workload
 		note string
 		// length is what the deployment's servers say they take, when it
-		// declares none.
-		length int
+		// declares none; lengthDenied that the hub may not ask them.
+		length       int
+		lengthDenied bool
 	}
 	reads := make([]read, len(items))
 	now := time.Now()
@@ -177,7 +182,7 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 			reads[i].w, reads[i].note = workload(svc)
 			c.liveWorkload(ctx, svc, &reads[i].w)
 			if svc.GetAnnotations()[MaxModelLenAnnotation] == "" {
-				reads[i].length = c.servedLength(ctx, gpus, svc, now)
+				reads[i].length, reads[i].lengthDenied = c.servedLength(ctx, gpus, svc, now)
 			}
 		})
 	}
@@ -229,6 +234,7 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 			length = strconv.Itoa(reads[i].length)
 		}
 		mc.MaxModelLen = addValue(mc.MaxModelLen, length)
+		mc.LengthDenied = mc.LengthDenied || reads[i].lengthDenied
 		if p, ok := pool(svc); ok {
 			mc.Pools = append(mc.Pools, p)
 		}

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -27,16 +28,19 @@ const lengthRetry = 10 * time.Minute
 // lengthTimeout bounds one question to a pod.
 const lengthTimeout = 5 * time.Second
 
-// servedLength is what one pod said, or when it was asked without an answer.
+// servedLength is what one pod said, or when it was asked without an answer
+// and whether the API server refused the hub the question.
 type servedLength struct {
 	length int
 	asked  time.Time
+	denied bool
 }
 
 // servedLength returns the length the ready pods of an LLMInferenceService
 // take: what the first of them that answers says. It asks at most one pod
-// on each look; 0 while none has said.
-func (c *Client) servedLength(ctx context.Context, g gpuShapes, svc *unstructured.Unstructured, now time.Time) int {
+// on each look; 0 while none has said. denied is set when the hub may not
+// ask (no get on pods/proxy).
+func (c *Client) servedLength(ctx context.Context, g gpuShapes, svc *unstructured.Unstructured, now time.Time) (length int, denied bool) {
 	asked := false
 	for i := range g.pods {
 		p := &g.pods[i]
@@ -48,24 +52,27 @@ func (c *Client) servedLength(ctx context.Context, g gpuShapes, svc *unstructure
 		s, known := c.lengths[p.GetUID()]
 		c.lengthMu.Unlock()
 		if s.length > 0 {
-			return s.length
+			return s.length, false
 		}
 		if asked || (known && now.Sub(s.asked) < lengthRetry) {
+			denied = denied || s.denied
 			continue
 		}
 		asked = true
-		n, _ := c.askLength(ctx, p)
+		n, err := c.askLength(ctx, p)
+		s = servedLength{length: n, asked: now, denied: apierrors.IsForbidden(err)}
 		c.lengthMu.Lock()
 		if c.lengths == nil {
 			c.lengths = map[types.UID]servedLength{}
 		}
-		c.lengths[p.GetUID()] = servedLength{length: n, asked: now}
+		c.lengths[p.GetUID()] = s
 		c.lengthMu.Unlock()
 		if n > 0 {
-			return n
+			return n, false
 		}
+		denied = denied || s.denied
 	}
-	return 0
+	return 0, denied
 }
 
 // forgetLengths drops what pods that are gone said. Only a full list of
