@@ -244,10 +244,12 @@ person's personal key.
 - The addresses are `""` when `config.gatewayURL` is not set.
 - `models` are the models the tenant may call that have an endpoint, by
   the names the gateway routes on.
-- `context_window` is the least `aigw-ui.io/max-model-len` of the model's
-  deployments, or else the market snapshot's length for the model, or 0.
-  The market's figure is the model's own longest, which a server started
-  with a shorter `--max-model-len` does not take.
+- `context_window` is the least length of the model's deployments: the one
+  declared in `aigw-ui.io/max-model-len`, or else what its model servers
+  report on their own `/v1/models` (`max_model_len`), which discovery asks
+  (0.34.0). Without either, the market snapshot's length for the model, the
+  model's own longest, which a server started shorter does not take; else
+  0.
 - `prices` are dollars per million tokens, `null` without prices.
 - `claude_code` is `config.claudeCode.model` and `.smallModel` where the
   tenant may call them. Otherwise it is the tenant's priciest model (by

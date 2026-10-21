@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -80,8 +81,10 @@ type ModelCapacity struct {
 	Step float64
 	// Detail says how the number came about, for display.
 	Detail string
-	// Revision and MaxModelLen are what the model's deployments declare. More
-	// than one value on a cluster is joined with ", ".
+	// Revision is what the model's deployments declare, and MaxModelLen the
+	// longest request they take: declared in aigw-ui.io/max-model-len, or
+	// else what their servers say (servedLength). More than one value on a
+	// cluster is joined with ", ".
 	Revision    string
 	MaxModelLen string
 	// Pools are the InferencePools the model's deployments are served
@@ -156,8 +159,12 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 	type read struct {
 		w    weights.Workload
 		note string
+		// length is what the deployment's servers say they take, when it
+		// declares none.
+		length int
 	}
 	reads := make([]read, len(items))
+	now := time.Now()
 	slots := make(chan struct{}, applyWorkers)
 	for i := range items {
 		svc := &items[i]
@@ -169,9 +176,13 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 			defer func() { <-slots }()
 			reads[i].w, reads[i].note = workload(svc)
 			c.liveWorkload(ctx, svc, &reads[i].w)
+			if svc.GetAnnotations()[MaxModelLenAnnotation] == "" {
+				reads[i].length = c.servedLength(ctx, gpus, svc, now)
+			}
 		})
 	}
 	wg.Wait()
+	c.forgetLengths(gpus)
 
 	byModel := map[string]*ModelCapacity{}
 	for i := range items {
@@ -213,7 +224,11 @@ func (c *Client) Capacity(ctx context.Context) ([]ModelCapacity, error) {
 		}
 		mc.Detail += describeWorkload(svc, w, instances, known) + note
 		mc.Revision = addValue(mc.Revision, svc.GetAnnotations()[RevisionAnnotation])
-		mc.MaxModelLen = addValue(mc.MaxModelLen, svc.GetAnnotations()[MaxModelLenAnnotation])
+		length := svc.GetAnnotations()[MaxModelLenAnnotation]
+		if length == "" && reads[i].length > 0 {
+			length = strconv.Itoa(reads[i].length)
+		}
+		mc.MaxModelLen = addValue(mc.MaxModelLen, length)
 		if p, ok := pool(svc); ok {
 			mc.Pools = append(mc.Pools, p)
 		}

@@ -42,12 +42,17 @@ instances, find each deployment's GPU and tell what it runs, and gets the
 `Deployment` or `LeaderWorkerSet` each service's status names, for its ready
 count. It gets the HTTPRoutes Envoy Gateway names when a policy of their
 own replaces the hub's `SecurityPolicy` on them, to leave a route that
-forwards nothing out of the sync's warning. Without list on pods and nodes
+forwards nothing out of the sync's warning. It gets `pods/proxy` on those
+pods, to ask one model server per deployment for its `/v1/models` (the
+longest request it takes), once per pod; that request goes through the API
+server and carries nothing of a tenant's. Without list on pods and nodes
 the instances are still counted, the GPUs are not known, and the cluster's
 discovery message says what was not allowed; without get on the workloads
 the count KServe copies into the service's status is used; without get on
 HTTPRoutes the gateway chart's health check, where it is on, is warned
 about on every sync;
+without get on `pods/proxy` a model's length is the one its deployments
+declare, or the market's;
 without list on pods or on the configs, a change of image or of a shared
 config does not mark a measurement stale
 ([capacity](capacity.md#what-is-measured-each-llminferenceservice)). A ServiceAccount

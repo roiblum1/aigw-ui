@@ -156,8 +156,9 @@ mkdir -p ~/.omp/agent/extensions
 curl -fsSLo ~/.omp/agent/extensions/aigw-usage.ts https://<the hub>/clients/aigw-usage.ts
 ```
 
-A model's length is the `aigw-ui.io/max-model-len` of its deployments, or
-else the market's figure for it; the longest answer is a quarter of it, at
+A model's length is what its servers report (vLLM's `max_model_len`), or
+the `aigw-ui.io/max-model-len` of its deployments, or else the market's
+figure for it; the longest answer is a quarter of it, at
 most 16,384 tokens. Without either, omp takes 128,000 and 16,384.
 
 A provider `aigw` of your own in `models.yml` is left as it is, and the

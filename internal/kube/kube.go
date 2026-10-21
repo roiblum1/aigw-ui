@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
@@ -75,6 +76,11 @@ type Client struct {
 	// the object first.
 	mu   sync.Mutex
 	seen map[string]seenObject
+
+	// lengths holds what each workload pod's model server said its length
+	// is, by pod (servedLength).
+	lengthMu sync.Mutex
+	lengths  map[types.UID]servedLength
 }
 
 // The requests a second a Client sends at most, after a burst. client-go's

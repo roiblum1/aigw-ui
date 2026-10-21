@@ -590,10 +590,15 @@ Draining the last site that has capacity is refused. Both are in the task
 log and the audit log.
 
 **Recipe check.** Each `LLMInferenceService` can declare
-`aigw-ui.io/model-revision` and `aigw-ui.io/max-model-len`. The Models page
-warns when the sites that serve a model declare different values: a different
-revision means one model name gives different answers, and a smaller
-`max-model-len` means a long request fails at that site. The tool only warns;
+`aigw-ui.io/model-revision` and `aigw-ui.io/max-model-len`. Since 0.34.0 a
+deployment without the length annotation has the length its servers report:
+discovery asks one ready pod's model server for `/v1/models`
+(`max_model_len`) through the API server's pod proxy, at the scheme and port
+of its readiness check, once per pod (`kube.servedLength`, remembered by pod
+UID; a pod that does not answer is asked again after 10 minutes). The Models
+page warns when the sites that serve a model differ: a different revision
+means one model name gives different answers, and a smaller length means a
+long request fails at that site. The tool only warns;
 the operator decides, and can drain a site.
 
 ## Best-effort route

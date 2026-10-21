@@ -216,10 +216,24 @@ func serverURLs(pod unstructured.Unstructured, ports []int64) ([]string, error) 
 	return out, nil
 }
 
-// serverURL reads where a pod's model server listens from the readiness
-// check of its main container. KServe's vLLM serves plain HTTP on 8000.
+// serverURL reads where a pod's model server listens (serverPort). A
+// measurement reaches plain HTTP only.
 func serverURL(pod unstructured.Unstructured) (string, error) {
+	scheme, port := serverPort(pod)
+	if scheme == "https" {
+		return "", fmt.Errorf("the model server answers over HTTPS only, which a measurement does not reach yet")
+	}
 	ip, _, _ := unstructured.NestedString(pod.Object, "status", "podIP")
+	if strings.Contains(ip, ":") {
+		ip = "[" + ip + "]"
+	}
+	return fmt.Sprintf("http://%s:%d", ip, port), nil
+}
+
+// serverPort reads the scheme ("http" or "https") and the port of a pod's
+// model server from the readiness check of its main container. KServe's
+// vLLM serves plain HTTP on 8000.
+func serverPort(pod unstructured.Unstructured) (string, int64) {
 	containers, _, _ := unstructured.NestedSlice(pod.Object, "spec", "containers")
 	var main map[string]any
 	for _, c := range containers {
@@ -227,10 +241,10 @@ func serverURL(pod unstructured.Unstructured) (string, error) {
 			main = m
 		}
 	}
-	port, scheme := int64(8000), "HTTP"
+	port, scheme := int64(8000), "http"
 	if get, ok, _ := unstructured.NestedMap(main, "readinessProbe", "httpGet"); ok {
 		if s, ok := get["scheme"].(string); ok && s != "" {
-			scheme = s
+			scheme = strings.ToLower(s)
 		}
 		switch p := get["port"].(type) {
 		case int64:
@@ -243,13 +257,7 @@ func serverURL(pod unstructured.Unstructured) (string, error) {
 			}
 		}
 	}
-	if strings.EqualFold(scheme, "HTTPS") {
-		return "", fmt.Errorf("the model server answers over HTTPS only, which a measurement does not reach yet")
-	}
-	if strings.Contains(ip, ":") {
-		ip = "[" + ip + "]"
-	}
-	return fmt.Sprintf("http://%s:%d", ip, port), nil
+	return scheme, port
 }
 
 func namedPort(container map[string]any, name string) (int64, bool) {
