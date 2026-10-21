@@ -34,9 +34,12 @@ type Server struct {
 	// tenantPage lets tenants sign in with an API key to see their own usage.
 	tenantPage  bool
 	keyFailures keyFailures
-	// gatewayURL is the gateway's address the tenants' page shows; "" when
-	// not configured.
+	// gatewayURL is the gateway's address, without an API's path, that the
+	// tenants' clients are set up with; "" when not configured.
 	gatewayURL string
+	// claudeModel and claudeSmallModel are the models an operator chose for
+	// Claude Code; "" lets each tenant's prices choose.
+	claudeModel, claudeSmallModel string
 	// history records the use since its last look; nil without it.
 	history recorder
 }
@@ -46,10 +49,17 @@ type recorder interface {
 	Tick(ctx context.Context, now time.Time) error
 }
 
-// WithGatewayURL gives the gateway's address the tenants' page shows in its
-// setup.
+// WithGatewayURL gives the gateway's address the tenants' clients are set
+// up with.
 func (s *Server) WithGatewayURL(u string) *Server {
 	s.gatewayURL = u
+	return s
+}
+
+// WithClaudeCode gives the models Claude Code is set up with, for its work
+// and for its background tasks, where a tenant may call them.
+func (s *Server) WithClaudeCode(model, smallModel string) *Server {
+	s.claudeModel, s.claudeSmallModel = model, smallModel
 	return s
 }
 
@@ -140,6 +150,7 @@ func (s *Server) Handler() http.Handler {
 	root.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	// A tenant's own usage, by one of its API keys and not the admin token.
 	root.Handle("GET /api/v1/my/usage", s.tenantAuth(http.HandlerFunc(s.getMyUsage)))
+	root.Handle("GET /api/v1/my/models", s.tenantAuth(http.HandlerFunc(s.getMyModels)))
 	// A new token for a personal key, which a user's helper asks for.
 	root.HandleFunc("POST /api/v1/token", s.renewToken)
 	// The tools for the people who use the models, which the tenants' page

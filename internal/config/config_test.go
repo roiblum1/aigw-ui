@@ -17,7 +17,7 @@ func valid(t *testing.T) {
 		"OVERAGE_INTERVAL", "OVERAGE_THRESHOLD", "BEST_EFFORT_PRIORITY",
 		"FLEET_PEER_SNI", "FLEET_DOMAIN", "FLEET_PEER_CA_CONFIGMAP", "FLEET_PEER_CLIENT_SECRET", "FLEET_SESSION_HEADER",
 		"CAPACITY_PEER_MEASUREMENTS", "TOKEN_ISSUER", "TOKEN_AUDIENCE", "TOKEN_LIFETIME_DAYS", "TOKEN_RENEWED_LIFETIME_HOURS",
-		"MEMORY_LIMIT", "GATEWAY_URL",
+		"MEMORY_LIMIT", "GATEWAY_URL", "CLAUDE_CODE_MODEL", "CLAUDE_CODE_SMALL_MODEL",
 	} {
 		t.Setenv(name, "")
 	}
@@ -64,13 +64,31 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
-// The gateway's address is kept without a trailing slash, so that the setup
-// the tenants' page shows does not double it.
+// The gateway's address is kept without a trailing slash and without an
+// API's path, which an address copied from Claude Code's or an OpenAI
+// client's settings has, so that the setup adds each API's path once. A
+// prefix before it is kept.
 func TestLoadGatewayURL(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://llm.example.com/":                  "https://llm.example.com",
+		"https://llm.example.com/anthropic":         "https://llm.example.com",
+		"http://10.0.0.5/anthropic/":                "http://10.0.0.5",
+		"https://llm.example.com/v1":                "https://llm.example.com",
+		"https://example.com/llm/v1":                "https://example.com/llm",
+		"https://example.com/llm":                   "https://example.com/llm",
+		" https://llm.example.com/anthropic-proxy ": "https://llm.example.com/anthropic-proxy",
+	} {
+		valid(t)
+		t.Setenv("GATEWAY_URL", raw)
+		if c, err := Load(); err != nil || c.GatewayURL != want {
+			t.Errorf("%q: gateway address = %+v, %v; want %q", raw, c, err, want)
+		}
+	}
 	valid(t)
-	t.Setenv("GATEWAY_URL", "https://llm.example.com/")
-	if c, err := Load(); err != nil || c.GatewayURL != "https://llm.example.com" {
-		t.Fatalf("gateway address = %+v, %v", c, err)
+	t.Setenv("CLAUDE_CODE_MODEL", " GLM5.3 ")
+	t.Setenv("CLAUDE_CODE_SMALL_MODEL", "qwen-small")
+	if c, err := Load(); err != nil || c.ClaudeCodeModel != "GLM5.3" || c.ClaudeCodeSmallModel != "qwen-small" {
+		t.Fatalf("Claude Code models = %+v, %v", c, err)
 	}
 }
 

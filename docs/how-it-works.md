@@ -548,18 +548,22 @@ entry for the whole run (0.32.0; see [security](security.md#tokens)).
 
 ### Give a person a personal key
 
-**What it does.** A person signs Claude Code in once with a personal key and
-never handles a token; a change of the tenant's budget or models reaches
-them within minutes.
+**What it does.** A person sets up Claude Code and Oh My Pi with one line
+and a personal key, and never handles a token, an address or a model name;
+a change of the tenant's budget or models reaches them within minutes.
 
 **How.** The helper `aigw-token`, Claude Code's `apiKeyHelper`, trades the
 key at the hub (`POST /api/v1/token`) for a token that lives a week and
 carries the tenant's budget and models as they are then, and gets a new one
-every 10 minutes. The gateways check the token as any other. The person
-sets it up from `/my-usage`, signed in with the key: **Set up Claude Code**
-gives one line that runs the installer the hub serves (`/clients/install.sh`).
-It downloads `aigw-token` and the `aigw-usage` plugin from the hub, signs in,
-and writes Claude Code's settings.
+every 10 minutes. The gateways check the token as any other. The admin
+gives the person the key with one line to run, which the Tenants page shows
+when the key is made and `/my-usage` shows again: it runs the installer the
+hub serves (`/clients/install.sh`). That downloads `aigw-token` from the
+hub and signs in, asks the hub for the gateway's address and the person's
+models (`GET /api/v1/my/models`), writes Claude Code's settings with them
+and installs its `aigw-usage` plugin, and puts the Oh My Pi extension in
+place, which adds the models to omp each time it starts. Last it checks
+that the gateway takes the token.
 
 **Why.**
 
@@ -573,6 +577,16 @@ and writes Claude Code's settings.
 - *Hashed, not encrypted.* No gateway needs the key, so the hub keeps only
   its hash. The tokens are not stored either: a revoked key's tokens are
   refused by the key's client ID, which each of them carries.
+- *Stored while API keys are taken.* Then Envoy's API key check runs first
+  and refuses what it does not list, a good token included. So the hub
+  stores the key's token, lists it with the API keys, and gives the helper
+  the same one until a new one has reached the gateways: one sync every 3.5
+  days a key, not one every 10 minutes (0.34.0).
+- *Models from the hub.* Claude Code asks for Claude models unless told
+  otherwise, and omp knows only the models it is given. The hub knows which
+  models the tenant may call, their lengths and prices, so the person types
+  none of them. An admin picks Claude Code's models (`config.claudeCode`);
+  without that, the tenant's priciest and cheapest.
 - *Installed from the hub.* The clients' machines may have no internet, and
   the hub is the one address they all reach. The files are in the hub's
   binary, so they match the hub's version. The key is asked for on the

@@ -68,6 +68,17 @@ spec:
             - name: GATEWAY_URL
               value: {{ . | quote }}
             {{- end }}
+            {{- /* Absent from the values of a release before 0.34.0 that an upgrade reuses. */}}
+            {{- with .Values.config.claudeCode | default dict }}
+            {{- with .model }}
+            - name: CLAUDE_CODE_MODEL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .smallModel }}
+            - name: CLAUDE_CODE_SMALL_MODEL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             - name: BEST_EFFORT_PRIORITY
               value: {{ .Values.config.bestEffortPriority | quote }}
             {{- with .Values.capacity.image }}

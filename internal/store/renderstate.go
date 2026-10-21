@@ -184,7 +184,13 @@ func (s *Store) renderState(ctx context.Context, c Cluster, f *fleetReads, withK
 			return k, nil
 		}, `SELECT k.client_id, k.key_enc FROM api_keys k JOIN tenants t ON t.id = k.tenant_id
 		    WHERE k.kind <> 'personal' AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now()) AND t.enabled
-		    ORDER BY k.client_id`)
+		    UNION ALL
+		    -- The tokens personal keys got while the gateways take API keys
+		    -- too (listedToken), each under the tenant's slug and its jti.
+		    SELECT t.slug || '.' || p.jti, p.token_enc FROM personal_tokens p
+		    JOIN api_keys k ON k.id = p.key_id JOIN tenants t ON t.id = k.tenant_id
+		    WHERE k.revoked_at IS NULL AND p.expires_at > now() AND t.enabled
+		    ORDER BY 1`)
 	})
 	st.Keys = slices.Clone(keys)
 	return st, err

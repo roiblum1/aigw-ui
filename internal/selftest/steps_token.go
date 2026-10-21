@@ -82,9 +82,10 @@ func (t *test) revokedToken() (string, string) {
 
 // personalKey gives the temporary tenant a personal key and trades it for
 // a token, as a user's helper does at POST /api/v1/token, and expects the
-// gateway to take that token. Then it revokes the key and expects the
-// token to be refused: tokens a personal key got are not stored, so the
-// gateway refuses them by the key's client ID.
+// gateway to take that token. While the gateways take API keys too, the
+// key's token is stored and listed, which takes a sync. Then it revokes the
+// key and expects the token to be refused: the gateway refuses the tokens a
+// personal key got by the key's client ID.
 func (t *test) personalKey() (string, string) {
 	switch {
 	case t.key == "":
@@ -98,9 +99,15 @@ func (t *test) personalKey() (string, string) {
 	}
 	set := t.tokenSettings()
 	set.RenewedLifetime = tokenLife
-	renewed, _, _, err := t.r.st.RenewToken(t.ctx, secret, set, time.Now())
+	got, err := t.r.st.RenewToken(t.ctx, secret, set, time.Now())
 	if err != nil {
 		return Failed, "The personal key got no token: " + err.Error()
+	}
+	renewed := got.Token
+	if t.mode == render.IdentityBoth {
+		if _, err := t.sync("Self-test of " + t.cluster.Name + ": listed the token of the personal key of " + t.tenant.Slug); err != nil {
+			return Failed, "Sync: " + err.Error()
+		}
 	}
 	if status, ok := t.until(renewed, false); !ok {
 		return Failed, fmt.Sprintf("The gateway never took the token the personal key got within %d seconds (last: %s).", int(keyWait.Seconds()), status)

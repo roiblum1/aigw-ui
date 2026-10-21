@@ -140,7 +140,8 @@ only its SHA-256 hash; the gateways never see it. The tokens it gets live
 `tokens.renewedLifetimeHours` (168 by default) and are not stored: each has
 its own `jti` and the key's client ID as `cid`. Revoking the key, or
 deleting its tenant, refuses those tokens by their `cid` at every gateway
-until the last one expires, and a disabled tenant's key gets none. Wrong
+until the last one expires, and a disabled tenant's key gets none. While the
+gateways take API keys too, they are stored after all (below). Wrong
 keys count against the address as on the tenants' page: ten a minute, then
 429. The answer carries `Cache-Control: no-store`, as does the answer that
 shows a new key or token once; the hub gzips its other answers but not
@@ -154,11 +155,16 @@ line.
 Code plugin and the Oh My Pi extension) needs no sign-in: the files hold no
 secret and are the same for everyone, copied from the hub's binary. The
 installer asks for the personal key on the terminal, or takes it from
-`AIGW_PERSONAL_KEY`, and never puts it on a command line. It changes
-`~/.claude/settings.json` only through `node`, keeps every other setting,
-and keeps the old file as `settings.json.aigw-backup`. Piping a script from
-the hub into `sh` trusts the hub and its TLS certificate as much as the
-helper itself does.
+`AIGW_PERSONAL_KEY`, and never puts it on a command line. It sends the key
+to the hub on `curl`'s stdin, as `aigw-token` does, for `GET
+/api/v1/my/models`. It changes `~/.claude/settings.json` only through
+`node`, keeps every other setting, and keeps the old file as
+`settings.json.aigw-backup`. It does not touch `~/.omp/agent/models.yml`:
+the Oh My Pi extension adds the models when omp starts, and keeps the last
+list (names, lengths, prices; no secret) in `~/.config/aigw/models.json` for
+when the hub cannot be reached. omp gets its tokens by running `aigw-token`,
+as Claude Code does. Piping a script from the hub into `sh` trusts the hub
+and its TLS certificate as much as the helper itself does.
 
 **The signing key** is an EC P-256 key the hub makes when it signs its first
 token. Its private half is stored in Postgres, encrypted with the encryption
@@ -258,7 +264,31 @@ not log request headers.
 **The switch from API keys.** While any enabled tenant still has an API key,
 the gateways take both: the API key check lists every API key and every
 token, does not remove the credential, and lets the JWT check run after it,
-which passes a request that holds no token (`failOpen`). Rules then refuse a
+which passes a request that holds no token (`failOpen`). Envoy runs the API
+key check first and refuses anything it does not list, a token whose
+signature is good included, before the JWT check sees it.
+
+A personal key's tokens are therefore stored then, encrypted with the
+encryption key, in `personal_tokens`, and listed in the Secret under the
+tenant's slug and the token's `jti`. Up to 0.33.0 they were not, and every
+token a personal key got was refused with 401 while API keys were taken. The
+helper renews every 10 minutes, and a sync for each renewal would keep the
+gateways busy and refuse each new token until it arrived. So the hub gives
+the key's helper the same stored token on every renewal. Once that token is
+half its life old (3.5 days by default), the hub signs a new one and queues
+a sync, and gives the new one out two minutes later, when the sync has
+taken it to the gateways. A key has at most two tokens listed at a time. A
+key made while API keys are taken gets its first token when it is made, so
+the gateways have it before its owner signs in. A key from before has none,
+so its first renewal signs one at once, which the gateways take a sync
+later. The installer waits for that (up to 60 s). Each listed token takes
+about 1 KB of the Secret, which etcd holds to 1 MiB, with the API keys and
+the admins' tokens: both mode is for the switch, not for a thousand people.
+A revoked key's tokens leave the list at the next sync, and stay refused by
+their `cid` as with tokens only. With tokens only, nothing is stored. A
+token stored in both mode carries the limits it was signed with, which the
+gateways do not read until they take tokens only, and the helper gets one
+signed then within 10 minutes of the switch. Rules then refuse a
 revoked or disabled tenant's token, let a token that checked out through,
 and refuse any other credential shaped like a token (`eyJ…`), such as an
 expired token still listed. An API key starts with `sk-` and is never taken
@@ -316,7 +346,9 @@ A token is checked on the hub against its own public keys: signature,
 issuer, audience and expiry, then that it is one of the tenant's keys and
 not revoked.
 
-- **What a key opens.** `GET /api/v1/my/usage` and nothing else. The admin
+- **What a key opens.** `GET /api/v1/my/usage` and `GET /api/v1/my/models`
+  (the gateway's address and the tenant's models, for its clients), and
+  nothing else. The admin
   API answers 401 to a tenant's key, and the page's endpoint answers 401 to
   the admin token.
 - **What it shows.** The tenant the key belongs to, taken from the key and

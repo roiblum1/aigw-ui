@@ -33,10 +33,18 @@ config:
   # its own budgets and usage. It sees nothing of another tenant.
   tenantPage: true
   # The gateway's address, which the people who use the models send their
-  # requests to, such as https://llm.example.com. /my-usage puts it in the
-  # setup it shows (Claude Code's ANTHROPIC_BASE_URL). Empty shows a
-  # placeholder there.
+  # requests to, such as https://llm.example.com: without an API's path. The
+  # setup /my-usage shows adds /anthropic for Claude Code and /v1 for Oh My
+  # Pi (an address that ends with either is taken as well). Empty leaves it
+  # out of the setup.
   gatewayURL: ""
+  # The models the setup gives Claude Code, by the names the gateway routes
+  # on: model for its work, smallModel for its small background tasks such
+  # as naming a conversation. A tenant that may not call one, or with it
+  # empty, gets its priciest model and its cheapest.
+  claudeCode:
+    model: ""
+    smallModel: ""
   # The priority of the request class "best-effort", which the hub creates
   # next to each model's InferencePool for a model in best-effort mode. A
   # request without a class has priority 0. It has an effect only on a site

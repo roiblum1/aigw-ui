@@ -415,9 +415,7 @@ func (s *Store) SignUnstored(ctx context.Context, c token.Claims) (string, error
 // IdentityMode is Identity's mode alone, without reading anything else.
 func (s *Store) IdentityMode(ctx context.Context) (string, error) {
 	var signed, apiKeys bool
-	err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM signing_keys),
-	                                  EXISTS (SELECT 1 FROM api_keys k JOIN tenants t ON t.id = k.tenant_id
-	                                          WHERE k.kind = 'key' AND k.revoked_at IS NULL AND t.enabled)`).Scan(&signed, &apiKeys)
+	err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM signing_keys), `+liveAPIKeys).Scan(&signed, &apiKeys)
 	switch {
 	case err != nil || !signed:
 		return render.IdentityKeys, mapErr(err)

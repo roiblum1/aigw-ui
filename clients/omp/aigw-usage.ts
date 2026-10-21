@@ -1,19 +1,22 @@
-// Oh My Pi extension: shows your budget on the AI gateway in the status
-// area and tells you once when it is nearly spent, spent, or served as
-// best-effort. /aigw-usage lists every budget.
+// Oh My Pi extension for the AI gateway. It adds the models you may call to
+// omp, as the provider "aigw" (`omp --model aigw/<model>`), with their
+// lengths and prices from the hub and tokens from aigw-token; it shows your
+// budget in the status area and tells you once when it is nearly spent,
+// spent, or served as best-effort. /aigw-usage lists every budget.
 //
-// Install: copy this file to ~/.omp/agent/extensions/. With aigw-token
-// signed in (it gives omp its tokens, see clients/README.md) there is
-// nothing to set: the hub and the personal key it keeps are used. Otherwise
-// set
+// The hub's installer puts it in ~/.omp/agent/extensions/ (see
+// clients/README.md). With aigw-token signed in there is nothing to set:
+// the hub and the personal key it keeps are used. Otherwise set
 //   AIGW_HUB_URL   the address of the AI Gateway Control hub
 //   AIGW_API_KEY   your key for the gateway
-// AIGW_WARN_AT is the percent to warn at (90).
+// AIGW_WARN_AT is the percent to warn at (90). A provider "aigw" of your
+// own in ~/.omp/agent/models.yml is left as it is, and no model is added.
 //
-// It asks the hub only, at most every 30 seconds and after each turn. No
-// prompt and no answer is sent anywhere.
+// It asks the hub only: for the models when omp starts (the last list is
+// kept for when the hub cannot be reached), for the budgets at most every
+// 30 seconds and after each turn. No prompt and no answer is sent anywhere.
 
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
@@ -50,13 +53,88 @@ function budgetsOf(body: { budgets?: Budget[]; budget?: TenantBudget | null }): 
 	return out;
 }
 
+/** Where aigw-token keeps its sign-in, and this extension the last list of models. */
+const configDir = () => process.env.AIGW_CONFIG_DIR || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "aigw");
+
 /** The hub and personal key that `aigw-token login` kept, if any. */
 function helperLogin(): { hub: string; key: string } {
-	const dir = process.env.AIGW_CONFIG_DIR || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "aigw");
+	const dir = configDir();
 	try {
 		return { hub: readFileSync(join(dir, "hub"), "utf8").trim(), key: readFileSync(join(dir, "personal-key"), "utf8").trim() };
 	} catch {
 		return { hub: "", key: "" };
+	}
+}
+
+/** A model of GET /api/v1/my/models. */
+interface ClientModel {
+	name: string;
+	context_window: number;
+	prices: { input: number; cached: number; output: number } | null;
+}
+
+/** The answer of GET /api/v1/my/models. */
+interface Clients {
+	openai_base_url: string;
+	models: ClientModel[];
+}
+
+/** omp's model, as models.yml and registerProvider take it. */
+export interface OmpModel {
+	id: string;
+	name: string;
+	contextWindow?: number;
+	maxTokens?: number;
+	cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+}
+
+/**
+ * omp's models for the hub's: a known length bounds the answer to a quarter
+ * of it, at most omp's own default of 16,384 tokens, so that a long prompt
+ * and its answer fit; an unknown one is left to omp (128,000 tokens).
+ */
+export function ompModels(models: ClientModel[]): OmpModel[] {
+	return models.map(m => ({
+		id: m.name,
+		name: m.name,
+		...(m.context_window > 0 ? { contextWindow: m.context_window, maxTokens: Math.min(16384, Math.floor(m.context_window / 4)) } : {}),
+		...(m.prices ? { cost: { input: m.prices.input, output: m.prices.output, cacheRead: m.prices.cached, cacheWrite: 0 } } : {}),
+	}));
+}
+
+/** Whether a models.yml defines the provider aigw itself: a key "aigw:" indented under providers. */
+export function definesAigw(yaml: string): boolean {
+	return /^\s+aigw:\s*(#.*)?$/m.test(yaml);
+}
+
+/** The command omp runs for a token: aigw-token where the installer puts it, or on the PATH. */
+function tokenCommand(): string {
+	const installed = join(homedir(), ".local", "bin", "aigw-token");
+	return `!${existsSync(installed) ? installed : "aigw-token"}`;
+}
+
+/**
+ * The tenant's models from the hub, or the last list kept when it cannot be
+ * reached; the answer is kept for that. Undefined when there is neither.
+ */
+async function fetchClients(hub: string, key: string): Promise<{ clients?: Clients; error?: string }> {
+	const kept = join(configDir(), "models.json");
+	try {
+		const res = await fetch(`${hub}/api/v1/my/models`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(3000) });
+		if (res.ok) {
+			const clients = (await res.json()) as Clients;
+			try {
+				mkdirSync(configDir(), { recursive: true, mode: 0o700 });
+				writeFileSync(kept, JSON.stringify(clients));
+			} catch {}
+			return { clients };
+		}
+		if (res.status === 401) return { error: "the hub does not accept this key" };
+	} catch {}
+	try {
+		return { clients: JSON.parse(readFileSync(kept, "utf8")) as Clients, error: "the hub cannot be reached: the models are the last ones it gave" };
+	} catch {
+		return { error: "the hub cannot be reached and no list of models was kept" };
 	}
 }
 
@@ -128,11 +206,36 @@ function warning(b: Budget): string {
 		: `${b.model_name}: ${percent(b)}% of your budget is used (${usedOf(b)}). It resets at ${clock(b.resets_at)}.`;
 }
 
-export default function aigwUsage(pi: ExtensionAPI) {
+export default async function aigwUsage(pi: ExtensionAPI) {
 	const login = helperLogin();
 	const hub = (process.env.AIGW_HUB_URL || login.hub).replace(/\/+$/, "");
 	const key = process.env.AIGW_API_KEY || login.key;
 	const warnAt = Number(process.env.AIGW_WARN_AT) || 90;
+
+	// The models, registered before omp picks one. Told once a session
+	// starts, when something kept them out.
+	let modelsNote = "";
+	let yaml = "";
+	try {
+		yaml = readFileSync(join(homedir(), ".omp", "agent", "models.yml"), "utf8");
+	} catch {}
+	if (definesAigw(yaml)) {
+		modelsNote = "~/.omp/agent/models.yml defines the provider aigw, so the gateway's models from the hub are not added. Remove it there to get them.";
+	} else if (hub && key) {
+		const { clients, error } = await fetchClients(hub, key);
+		if (clients && !clients.openai_base_url) {
+			modelsNote = "the hub is not told the gateway's address (config.gatewayURL), so no model is added.";
+		} else if (clients) {
+			pi.registerProvider("aigw", {
+				baseUrl: clients.openai_base_url,
+				api: "openai-completions",
+				// With aigw-token signed in, omp runs it for a token, and again after a 401.
+				apiKey: process.env.AIGW_API_KEY || tokenCommand(),
+				models: ompModels(clients.models),
+			});
+		}
+		if (error) modelsNote = `models: ${error}.`;
+	}
 
 	let state: State | undefined;
 	// The level each budget was last warned at, by model, window and the end
@@ -195,8 +298,11 @@ export default function aigwUsage(pi: ExtensionAPI) {
 
 	const quietly = (ctx: ExtensionContext, maxAge: number) => show(ctx, maxAge).catch(() => {});
 
-	pi.setLabel("AI gateway usage");
-	pi.on("session_start", async (_event, ctx) => quietly(ctx, 30));
+	pi.setLabel("AI gateway");
+	pi.on("session_start", async (_event, ctx) => {
+		if (modelsNote && ctx.hasUI) ctx.ui.notify(`AI gateway: ${modelsNote}`, "warning");
+		await quietly(ctx, 30);
+	});
 	// After a turn the counters have just moved, so ask again soon.
 	pi.on("turn_end", async (_event, ctx) => quietly(ctx, 5));
 

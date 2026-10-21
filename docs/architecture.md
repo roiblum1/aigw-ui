@@ -671,7 +671,13 @@ tokens (`internal/render/identity.go`). Its authorization rules refuse, in
 order: revoked tokens and those of deleted tenants, by `jti` and, since
 0.32.0, by spans of their expiry (`revoked-span`, see
 [security](security.md#tokens)); revoked personal keys' tokens, by `cid`;
-disabled tenants, by `sub`; and a model not in the token's list. A fleet cluster must have a *Client listener* set. The `SecurityPolicy`
+disabled tenants, by `sub`; and a model not in the token's list. During
+the switch the Secret `aigw-ui-api-keys` lists the API keys, the admins'
+tokens and, since 0.34.0, the tokens personal keys got (`personal_tokens`,
+under `<slug>.<jti>`), since Envoy's API key check runs first and refuses
+what it does not list; a personal key's helper gets the same stored token
+until a new one has had two minutes to reach the gateways
+(`store.listedToken`, [security](security.md#tokens)). A fleet cluster must have a *Client listener* set. The `SecurityPolicy`
 attaches to the whole Gateway unless the cluster has one; then it attaches to that listener alone
 (`sectionName`). A gateway that also has a listener for requests forwarded by
 other sites needs this: the entry gateway removes the key before forwarding,
@@ -897,12 +903,25 @@ per model what the cache saved at the model's prices.
 The UI serves it at `/my-usage`, a path of its own next to the admin
 pages, with its own sign-in. See [security](security.md#the-tenants-own-page).
 
-The page's **Set up Claude Code** runs the installer from `/clients/`,
-which the hub serves without a sign-in from files compiled into its binary
-(package `clients`, `clients/embed.go`): `install.sh`, `aigw-token`, the Omp
-extension, and the Claude Code plugin packed on first request as a
-marketplace archive (`claude-code.tar.gz`, the same bytes every time). The
-answer carries `gateway_url` from `config.gatewayURL` for the line it shows.
+The page's **Set up Claude Code and Oh My Pi** runs the installer from
+`/clients/`, which the hub serves without a sign-in from files compiled into
+its binary (package `clients`, `clients/embed.go`): `install.sh`,
+`aigw-token`, the Omp extension, and the Claude Code plugin packed on first
+request as a marketplace archive (`claude-code.tar.gz`, the same bytes every
+time).
+
+`GET /api/v1/my/models` (`internal/api/myclients.go`, 0.34.0) takes the same
+keys and gives what the clients are set up with: the gateway's address
+(`config.gatewayURL`, a path of `/anthropic` or `/v1` dropped at startup)
+with `/anthropic` and `/v1` added, the models the tenant may call that have
+an endpoint, with their length and prices in dollars, and Claude Code's
+model and small model (`config.claudeCode`, else the tenant's priciest and
+cheapest). The installer writes them into Claude Code's settings
+(`ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` and the alias models,
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` when
+the length is known). The Omp extension asks for them when omp starts and
+registers them as the provider `aigw` (`pi.registerProvider`), with
+`!aigw-token` as the key command, so nothing is written to `models.yml`.
 
 ## Not verified on a real gateway
 

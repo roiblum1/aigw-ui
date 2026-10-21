@@ -58,9 +58,15 @@ type Config struct {
 	// its API keys.
 	TenantPage bool
 	// GatewayURL is the address the people who use the models send their
-	// requests to. The tenants' page puts it in the setup it shows; empty
-	// leaves a placeholder.
+	// requests to, without the API's path: the setup the tenants' page shows
+	// adds /anthropic for Claude Code and /v1 for OpenAI clients. Empty
+	// leaves it out.
 	GatewayURL string
+	// ClaudeCodeModel and ClaudeCodeSmallModel are the models the setup
+	// gives Claude Code, for its work and for its small background tasks,
+	// to a tenant that may call them. Empty, or a model the tenant may not
+	// call: its priciest model and its cheapest.
+	ClaudeCodeModel, ClaudeCodeSmallModel string
 
 	// CapacityImage is the AIPerf image a capacity measurement runs on the
 	// clusters. Empty turns measurements off.
@@ -156,10 +162,12 @@ func Load() (*Config, error) {
 		return nil, errors.New("USAGE_HISTORY_INTERVAL must be a duration of at least 10s such as 1m, or 0 to keep no usage history")
 	}
 	c.TenantPage = envOr("TENANT_PAGE", "true") == "true"
-	c.GatewayURL = strings.TrimRight(os.Getenv("GATEWAY_URL"), "/")
+	c.GatewayURL = gatewayRoot(os.Getenv("GATEWAY_URL"))
 	if u, err := url.Parse(c.GatewayURL); c.GatewayURL != "" && (err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "") {
 		return nil, errors.New("GATEWAY_URL must be an http or https address such as https://llm.example.com")
 	}
+	c.ClaudeCodeModel = strings.TrimSpace(os.Getenv("CLAUDE_CODE_MODEL"))
+	c.ClaudeCodeSmallModel = strings.TrimSpace(os.Getenv("CLAUDE_CODE_SMALL_MODEL"))
 	c.CapacityImage = os.Getenv("CAPACITY_IMAGE")
 	c.CapacityEvery, err = time.ParseDuration(envOr("CAPACITY_INTERVAL", "20s"))
 	if err != nil || c.CapacityEvery < 5*time.Second {
@@ -197,4 +205,19 @@ func envOr(name, def string) string {
 		return v
 	}
 	return def
+}
+
+// gatewayRoot is the gateway's address without a trailing slash and without
+// the path of one of its APIs, which an address copied from a client's
+// settings ends with: Claude Code's ANTHROPIC_BASE_URL ends with /anthropic,
+// an OpenAI client's base URL with /v1. A path before them is kept, for a
+// gateway behind a prefix.
+func gatewayRoot(raw string) string {
+	u := strings.TrimRight(strings.TrimSpace(raw), "/")
+	for _, api := range []string{"/anthropic", "/v1"} {
+		if root, ok := strings.CutSuffix(u, api); ok {
+			return root
+		}
+	}
+	return u
 }

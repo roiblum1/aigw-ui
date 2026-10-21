@@ -4,7 +4,7 @@ import { api, Unauthorized, type MyBudget, type MyUsage as Report, type Unit } f
 import BrandMark from "../BrandMark";
 import { CreditsTrigger, Footer } from "../Credits";
 import { Bar, Legend, TimeBars, fmt, paletteColor } from "../charts";
-import { ErrorBanner, formatAmount, formatDollars, formatNumber, formatPrice, windowLabel } from "../components";
+import { ErrorBanner, formatAmount, formatDollars, formatNumber, formatPrice, useLoad, windowLabel } from "../components";
 import { stepLabel } from "../history";
 import { byModel, cacheOver, percent, requestsOver, shortTokens, tokensOver, totals } from "../workload";
 import { HistoryView, Seg } from "./History";
@@ -251,19 +251,31 @@ function Command({ text }: { text: string }) {
 }
 
 /**
- * How to set up aigw-token and the Claude Code plugin, from this hub: the
- * hub serves both, so it works where GitHub cannot be reached. The personal
- * key is asked for in the terminal, never put in a command.
+ * How to set up aigw-token, Claude Code and Oh My Pi, from this hub: the hub
+ * serves every file and gives the gateway's address and the models, so it
+ * works where GitHub cannot be reached. The personal key is asked for in
+ * the terminal, never put in a command.
  */
 function SetUp({ signedInWith, gateway }: { signedInWith: string; gateway: string }) {
   const hub = window.location.origin;
   const personal = signedInWith.startsWith("aigw-pk-");
+  const setup = useLoad(() => api.myModels(signedInWith));
   const gw = gateway || "<the gateway's address>";
+  const cc = setup.data?.claude_code;
+  const models = setup.data?.models ?? [];
+  // Claude Code takes a model it does not know for 200,000 tokens long and
+  // asks for answers of up to 32,000; the installer gives it the model's.
+  const length = models.find((m) => m.name === cc?.model)?.context_window ?? 0;
+  const limits = length
+    ? `,
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "${length}",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "${Math.min(32000, Math.floor(length / 4))}"`
+    : "";
   return (
     <details className="card" open={personal}>
       <summary className="flex cursor-pointer items-center gap-2">
         <Wrench className="size-4" />
-        <h2 className="m-0">Set up Claude Code</h2>
+        <h2 className="m-0">Set up Claude Code and Oh My Pi</h2>
       </summary>
       {!personal && (
         <p className="banner warn">
@@ -274,18 +286,34 @@ function SetUp({ signedInWith, gateway }: { signedInWith: string; gateway: strin
       <p className="hint">
         Run this in a terminal on your machine (macOS, Linux or WSL). It asks for your personal key. It installs{" "}
         <span className="mono">aigw-token</span> in <span className="mono">~/.local/bin</span> and signs it in, which gets
-        Claude Code a fresh token every 10 minutes; points Claude Code at the gateway in{" "}
-        <span className="mono">~/.claude/settings.json</span>, keeping everything else there; and installs the{" "}
-        <span className="mono">aigw-usage</span> plugin, which shows your budget in the status line. Everything comes
-        from this hub. Restart Claude Code afterwards.
+        your tools a fresh token every 10 minutes. Then it sets up what you have installed: <strong>Claude Code</strong>{" "}
+        (the gateway, your models and the <span className="mono">aigw-usage</span> plugin, keeping everything else in{" "}
+        <span className="mono">~/.claude/settings.json</span>) and <strong>Oh My Pi</strong> (an extension that adds your
+        models and shows your budget). Last, it checks that the gateway takes your token. Everything comes from this hub.
+        Restart Claude Code and Oh My Pi afterwards.
       </p>
-      <Command text={`curl -fsSL ${hub}/clients/install.sh | sh -s -- ${hub}${gateway ? " " + gateway : ""}`} />
+      <Command text={`curl -fsSL ${hub}/clients/install.sh | sh -s -- ${hub}`} />
       {!gateway && (
-        <p className="hint">
-          This hub was not told the gateway's address: set <span className="mono">env.ANTHROPIC_BASE_URL</span> in{" "}
-          <span className="mono">~/.claude/settings.json</span> to it afterwards, or ask your admin.
+        <p className="banner warn">
+          This hub was not told the gateway's address (<span className="mono">config.gatewayURL</span>), so the setup
+          cannot point your tools at it. Ask your admin.
         </p>
       )}
+      {cc && (
+        <p className="hint">
+          Claude Code will ask for <span className="mono">{cc.model}</span>, and for{" "}
+          <span className="mono">{cc.small_model}</span> for its small background tasks. In Oh My Pi:{" "}
+          <span className="mono">omp --model aigw/{cc.model}</span>, or any of{" "}
+          {models.map((m, i) => (
+            <span key={m.name}>
+              {i > 0 && ", "}
+              <span className="mono">aigw/{m.name}</span>
+            </span>
+          ))}
+          .
+        </p>
+      )}
+      {setup.data && !cc && <p className="hint">You may call no model yet: ask your admin.</p>}
       <details className="mt-3">
         <summary className="cursor-pointer text-[13.5px] font-medium">Step by step, or without the installer</summary>
         <p className="hint mt-3">1. aigw-token, signed in with your personal key (paste it when asked):</p>
@@ -295,21 +323,30 @@ curl -fsSLo ~/.local/bin/aigw-token ${hub}/clients/aigw-token
 chmod +x ~/.local/bin/aigw-token
 ~/.local/bin/aigw-token login ${hub}`}
         />
-        <p className="hint">2. In ~/.claude/settings.json:</p>
+        <p className="hint">2. Claude Code, in ~/.claude/settings.json:</p>
         <Command
           text={`{
   "apiKeyHelper": "~/.local/bin/aigw-token",
-  "env": { "ANTHROPIC_BASE_URL": "${gw}" }
+  "env": {
+    "ANTHROPIC_BASE_URL": "${gw}/anthropic",
+    "ANTHROPIC_MODEL": "${cc?.model ?? "<a model>"}",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "${cc?.model ?? "<a model>"}",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "${cc?.model ?? "<a model>"}",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "${cc?.small_model ?? "<a small model>"}"${limits}
+  }
 }`}
         />
-        <p className="hint">3. The usage plugin (needs node 18 or later), then run /aigw-usage:setup in Claude Code:</p>
+        <p className="hint">3. Claude Code's usage plugin (needs node 18 or later), then run /aigw-usage:setup in Claude Code:</p>
         <Command
           text={`mkdir -p ~/.claude/aigw-marketplace
 curl -fsSL ${hub}/clients/claude-code.tar.gz | tar -xzf - -C ~/.claude/aigw-marketplace
 claude plugin marketplace add ~/.claude/aigw-marketplace
 claude plugin install aigw-usage@aigw --config hub_url=${hub}`}
         />
-        <p className="hint">Oh My Pi: the usage extension.</p>
+        <p className="hint">
+          4. Oh My Pi: the extension, which adds your models as <span className="mono">aigw/&lt;model&gt;</span> and shows
+          your budget. It needs aigw-token signed in (step 1).
+        </p>
         <Command
           text={`mkdir -p ~/.omp/agent/extensions
 curl -fsSLo ~/.omp/agent/extensions/aigw-usage.ts ${hub}/clients/aigw-usage.ts`}
@@ -353,7 +390,7 @@ function SignIn({ onKey }: { onKey: (key: string, report: Report) => void }) {
           <small>
             Your personal key, or any key or token of your team. It is only used to find your team, and stays in this
             tab until you close it. You see your own team and no other. Signed in with a personal key, the page also
-            sets up Claude Code for you.
+            sets up Claude Code and Oh My Pi for you.
           </small>
         </label>
         <button type="submit" className="primary mt-1 w-full" disabled={busy}>

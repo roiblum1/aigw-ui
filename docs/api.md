@@ -135,8 +135,9 @@ Request bodies are never stored.
 | GET | `/usage` | Tokens used in the current window, for every tenant quota (`budget: true` on a model where the tenant's budget across models holds it: the limit is the model's and only counts), and `budgets`: what each tenant used of its budget across models, in credits (`tenant_id`, `tenant_slug`, `limit`, `window`, `used`, `resets_at`, `counters`) |
 | GET | `/usage?tenant_id=<id>` | The same for one tenant |
 | GET | `/usage/history?step=day&days=30` | What every tenant used of every model per day or hour |
-| GET | `/my/usage` | A tenant's own budgets, usage, prices, requests and tokens, and `gateway_url` (`config.gatewayURL`, `""` when not set) for the setup the page shows. Takes one of the tenant's API keys as the bearer token, not the admin token |
-| POST | `/token` | | A new token for a personal key, which a user's helper asks for: `{"token": "eyJ...", "expires_at", "expires_in"}` (seconds), signed with the tenant's budget and models as they are now; `Cache-Control: no-store`. Takes the personal key as the bearer token, not the admin token. 401 for a key that is unknown, revoked or of a disabled tenant; 429 after ten wrong keys from one address in a minute |
+| GET | `/my/usage` | A tenant's own budgets, usage, prices, requests and tokens, and `gateway_url` (`config.gatewayURL` without an API's path, `""` when not set). Takes one of the tenant's API keys as the bearer token, not the admin token |
+| GET | `/my/models` | What the tenant's clients are set up with (0.34.0): the gateway's addresses, the models it may call and Claude Code's two models; see [A tenant's clients](#a-tenants-clients). Takes one of the tenant's keys, as `/my/usage` |
+| POST | `/token` | | A token for a personal key, which a user's helper asks for: `{"token": "eyJ...", "expires_at", "expires_in"}` (seconds), signed with the tenant's budget and models as they are now; `Cache-Control: no-store`. While the gateways take API keys too, it is the key's stored token, the same until a new one is signed at half its life and has had two minutes to reach the gateways (see [security](security.md)); a renewal that stores one queues a sync (`key.renew` in the task log). Takes the personal key as the bearer token, not the admin token. 401 for a key that is unknown, revoked or of a disabled tenant; 429 after ten wrong keys from one address in a minute |
 | POST | `/tenants/{id}/quotas/{model_id}/reset` | `{"counters": 1, "deleted": 1}`. The tenant's usage on that model is back to zero |
 | POST | `/tenants/{id}/budget/reset` | `{"counters": 1, "deleted": 1}`. The tenant's use of its budget across models is back to zero for the running period; 404 without a budget applied to a cluster |
 
@@ -215,10 +216,43 @@ any other name.
 
 | Name | Is |
 |---|---|
-| `install.sh` | The installer `/my-usage` shows: `curl -fsSL <hub>/clients/install.sh \| sh -s -- <hub> [<gateway>]` |
+| `install.sh` | The installer `/my-usage` shows: `curl -fsSL <hub>/clients/install.sh \| sh -s -- <hub>`. It takes the gateway's address and the models from `GET /my/models`; an address given after the hub's is used instead |
 | `aigw-token` | Claude Code's `apiKeyHelper` for personal keys |
 | `claude-code.tar.gz` | The `aigw-usage` plugin as a marketplace: `.claude-plugin/marketplace.json` (marketplace `aigw`) and `aigw-usage/`; unpack it and `claude plugin marketplace add <dir>` |
-| `aigw-usage.ts` | The Oh My Pi extension |
+| `aigw-usage.ts` | The Oh My Pi extension: it adds the tenant's models from `GET /my/models` as the provider `aigw`, and shows the budget |
+
+### A tenant's clients
+
+`GET /my/models` takes the same keys as `GET /my/usage`, with the same 401,
+429 and 404. The installer and the Oh My Pi extension ask it with the
+person's personal key.
+
+```json
+{
+  "gateway_url": "https://llm.example.com",
+  "anthropic_base_url": "https://llm.example.com/anthropic",
+  "openai_base_url": "https://llm.example.com/v1",
+  "claude_code": {"model": "GLM5.3", "small_model": "Qwen3.8-27B"},
+  "models": [
+    {"name": "GLM5.3", "context_window": 131072,
+     "prices": {"input": 0.6, "cached": 0.11, "output": 2.2}},
+    {"name": "Qwen3.8-27B", "context_window": 0, "prices": null}
+  ]
+}
+```
+
+- The addresses are `""` when `config.gatewayURL` is not set.
+- `models` are the models the tenant may call that have an endpoint, by
+  the names the gateway routes on.
+- `context_window` is the least `aigw-ui.io/max-model-len` of the model's
+  deployments, or else the market snapshot's length for the model, or 0.
+  The market's figure is the model's own longest, which a server started
+  with a shorter `--max-model-len` does not take.
+- `prices` are dollars per million tokens, `null` without prices.
+- `claude_code` is `config.claudeCode.model` and `.smallModel` where the
+  tenant may call them. Otherwise it is the tenant's priciest model (by
+  output price, then input price) and its cheapest; models without prices
+  come last, then by name. `null` when the tenant may call no model.
 
 ### A tenant's own usage
 

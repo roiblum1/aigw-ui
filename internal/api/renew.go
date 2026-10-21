@@ -23,7 +23,7 @@ func (s *Server) renewToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	plain, expires, t, err := s.st.RenewToken(r.Context(), strings.TrimSpace(key), s.st.Tokens(), now)
+	got, err := s.st.RenewToken(r.Context(), strings.TrimSpace(key), s.st.Tokens(), now)
 	if errors.Is(err, store.ErrNotFound) {
 		s.keyFailures.add(addr, now)
 		slog.Warn("token renewal: wrong key", "remote_addr", addr)
@@ -35,12 +35,18 @@ func (s *Server) renewToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Every user renews several times an hour: worth a debug line only.
-	slog.Debug("token renewed", "tenant", t.Slug)
+	slog.Debug("token renewed", "tenant", got.Tenant.Slug)
+	if got.Listed {
+		// While the gateways take API keys too, they take only the tokens
+		// they list. This one is given out once a sync has had time to
+		// take it there, unless the key had none to give.
+		s.sy.Changed(r.Context(), "key.renew", "Listed a new token of a personal key of "+got.Tenant.Slug+" for the gateways, which take API keys too")
+	}
 	// A token is a credential: no cache may keep it (RFC 6749, 5.1).
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{
-		"token":      plain,
-		"expires_at": expires,
-		"expires_in": int64(expires.Sub(now).Seconds()),
+		"token":      got.Token,
+		"expires_at": got.Expires,
+		"expires_in": int64(got.Expires.Sub(now).Seconds()),
 	})
 }

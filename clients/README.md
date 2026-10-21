@@ -1,29 +1,48 @@
 # Usage in the coding agent
 
-For the people who use the models: `aigw-token`, which signs Claude Code in
-to the gateway with a personal key, and two small add-ons that show a
-tenant's budget inside the coding agent and warn before it is spent.
+For the people who use the models: `aigw-token`, which signs Claude Code and
+Oh My Pi in to the gateway with a personal key, and two small add-ons that
+show a tenant's budget inside the coding agent and warn before it is spent;
+the Oh My Pi one also adds the tenant's models.
 
 ## From the hub
 
 Every file here is also in the hub's binary and served at
 `<hub>/clients/` with no sign-in, so a machine with no internet installs
-from the hub (since 0.33.0). Sign in on `<hub>/my-usage` with your personal
-key; **Set up Claude Code** there shows the one line to run:
+from the hub (since 0.33.0). The admin gives you a personal key with the
+line to run, which `<hub>/my-usage` shows again once you sign in with the
+key:
 
 ```sh
-curl -fsSL https://aigw.example.com/clients/install.sh | sh -s -- https://aigw.example.com https://<the gateway>
+curl -fsSL https://aigw.example.com/clients/install.sh | sh -s -- https://aigw.example.com
 ```
 
-[`install/install.sh`](install/install.sh) installs `aigw-token` in
-`~/.local/bin` and signs it in (it asks for the personal key on the terminal,
-or reads `AIGW_PERSONAL_KEY`), sets `apiKeyHelper`, `ANTHROPIC_BASE_URL` and
-the status line in `~/.claude/settings.json` with `node` (everything else is
-kept; the old file is kept as `settings.json.aigw-backup`), and installs the
-`aigw-usage` plugin from `<hub>/clients/claude-code.tar.gz` with `claude
-plugin marketplace add` and `claude plugin install`. Without `node` or
-`claude` it says what to do by hand. Run it again after a hub upgrade to get
-the new files; it keeps the sign-in.
+[`install/install.sh`](install/install.sh):
+
+1. installs `aigw-token` in `~/.local/bin` and signs it in (it asks for the
+   personal key on the terminal, or reads `AIGW_PERSONAL_KEY`);
+2. asks the hub for the gateway's address and your models (`GET
+   /api/v1/my/models`, 0.34.0). An address given after the hub's is used
+   instead, without a trailing `/anthropic` or `/v1`;
+3. with Claude Code installed (`claude`, or `~/.claude`), sets in
+   `~/.claude/settings.json`, with `node`: `apiKeyHelper`,
+   `ANTHROPIC_BASE_URL` (the gateway with `/anthropic`), the models
+   (`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `_SONNET_`,
+   `_FABLE_`, `_HAIKU_` and `ANTHROPIC_SMALL_FAST_MODEL`; one you set that
+   you may call is kept), `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and
+   `CLAUDE_CODE_MAX_OUTPUT_TOKENS` when the hub knows the model's length,
+   and the status line. Everything else is kept; the old file is kept as
+   `settings.json.aigw-backup`. Then it installs the `aigw-usage` plugin
+   from `<hub>/clients/claude-code.tar.gz` with `claude plugin marketplace
+   add` and `claude plugin install`;
+4. with Oh My Pi installed (`omp`, or `~/.omp/agent`), puts the extension in
+   `~/.omp/agent/extensions/aigw-usage.ts`;
+5. checks that the gateway takes the token (`GET /v1/models`), waiting up to
+   60 s (`AIGW_CHECK_SECONDS`) while the gateways list a new token.
+
+Without `node`, `claude` or `omp` it says what to do by hand. Run it again
+after a hub upgrade, or when your models change, to get the new files and
+settings; it keeps the sign-in.
 
 | `<hub>/clients/` | Is |
 |---|---|
@@ -122,12 +141,33 @@ How it works:
 
 ## Oh My Pi
 
-Point `omp` at the gateway in `~/.omp/agent/models.yml`, with `aigw-token`
-giving it its tokens (the `!` runs the command):
+The extension [`omp/aigw-usage.ts`](omp/aigw-usage.ts) adds your models to
+omp: when omp starts it asks the hub for them (`GET /api/v1/my/models`,
+with the personal key `aigw-token` keeps) and registers them as the
+provider `aigw` on the gateway's `/v1`, with their lengths and prices, and
+`!aigw-token` as the command for a token. `omp models aigw` lists them; `omp
+--model aigw/<model>` uses one. Nothing is written to
+`~/.omp/agent/models.yml`. If the hub cannot be reached, it adds the list
+it kept last (`~/.config/aigw/models.json`). The installer puts it in
+place; by hand:
+
+```sh
+mkdir -p ~/.omp/agent/extensions
+curl -fsSLo ~/.omp/agent/extensions/aigw-usage.ts https://<the hub>/clients/aigw-usage.ts
+```
+
+A model's length is the `aigw-ui.io/max-model-len` of its deployments, or
+else the market's figure for it; the longest answer is a quarter of it, at
+most 16,384 tokens. Without either, omp takes 128,000 and 16,384.
+
+A provider `aigw` of your own in `models.yml` is left as it is, and the
+extension adds no model; omp says so when a session starts. To set a model
+by hand, for example with `reasoning: true` for omp's thinking levels, name
+your provider otherwise:
 
 ```yaml
 providers:
-  aigw:
+  gateway:
     baseUrl: https://<the gateway>/v1
     api: openai-completions
     apiKey: "!aigw-token"          # the full path if it is not on omp's PATH
@@ -136,8 +176,7 @@ providers:
         reasoning: true            # offers omp's thinking levels
         contextWindow: 200000
         maxTokens: 16384
-        cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 }
-  aigw-anthropic:                  # the gateway's Anthropic path, if wanted
+  gateway-anthropic:               # the gateway's Anthropic path, if wanted
     baseUrl: https://<the gateway>/anthropic
     api: anthropic-messages
     apiKey: "!aigw-token"
@@ -146,23 +185,14 @@ providers:
         reasoning: true
 ```
 
-`omp models find aigw` lists them. `omp` runs `aigw-token` once per session
-and keeps the token, and runs it again after a 401, so a change of budget,
-quota or models reaches you in your next session (in Claude Code, within
-minutes).
+`omp` runs `aigw-token` once per session and keeps the token, and runs it
+again after a 401, so a change of budget, quota or models reaches you in
+your next session (in Claude Code, within minutes).
 
-The extension shows the budgets in the status area and `/aigw-usage` lists
-them all:
-
-```sh
-mkdir -p ~/.omp/agent/extensions
-curl -fsSLo ~/.omp/agent/extensions/aigw-usage.ts \
-  https://raw.githubusercontent.com/roiblum1/aigw-ui/main/clients/omp/aigw-usage.ts
-```
-
-With `aigw-token` signed in there is nothing to set: it asks the hub with
-the personal key `aigw-token` keeps. Without it, set `AIGW_HUB_URL` and
-`AIGW_API_KEY`. `AIGW_WARN_AT` changes the warning percent.
+The extension also shows the budgets in the status area, and `/aigw-usage`
+lists them all. With `aigw-token` signed in there is nothing to set.
+Without it, set `AIGW_HUB_URL` and `AIGW_API_KEY`. `AIGW_WARN_AT` changes
+the warning percent.
 
 **Thinking.** With `reasoning: true`, omp's thinking level goes to the model
 as `reasoning_effort` on `/v1` (`--thinking off` sends `minimal`), and as
@@ -190,13 +220,24 @@ as thinking on both paths, and reasoning tokens are charged as output.
 
 - aigw-token: against a stand-in for the hub: sign-in, a new token, the
   token kept, a hub that fails, a revoked key, no hub.
-- install.sh: against a stand-in for the hub and for `claude`: everything
-  installed and the settings merged, a second run that keeps the sign-in
-  and updates the marketplace, no `node` and no `claude`, a wrong key. On
-  2026-10-18 against a local 0.33.0 hub with Claude Code 2.1.292 in an
-  empty config directory: the plugin installed and enabled from the hub's
-  archive, `aigw-token` signed in and printing a token.
+- install.sh: against a stand-in for the hub and for `claude` and `omp`:
+  everything installed and the settings merged with the hub's models and
+  length, a model the person may call kept, the wait while the gateway
+  refuses the token, a second run that keeps the sign-in, takes an address
+  ending in `/anthropic` and updates the marketplace, a hub without
+  `/my/models`, no `node`, a wrong key. On 2026-10-18 against a local
+  0.33.0 hub with Claude Code 2.1.292 in an empty config directory: the
+  plugin installed and enabled from the hub's archive, `aigw-token` signed
+  in and printing a token. On 2026-10-21 against a local 0.34.0 hub and a
+  stand-in gateway, piped from the hub into an empty home: Claude Code
+  2.1.292 asked the gateway's `/anthropic/v1/messages` for the hub's model
+  with the token and printed the answer; omp 18.11.2 listed the hub's
+  models under `aigw` and `omp -p --model aigw/big` streamed from `/v1`
+  with the token.
+- The Oh My Pi extension's models: `node --test clients/omp/`, against a
+  stand-in hub (registered, the kept list with the hub down, a person's own
+  provider `aigw`).
 
 ```sh
-node --test clients/claude-code/scripts/ clients/aigw-token/ clients/install/
+node --test clients/claude-code/scripts/ clients/aigw-token/ clients/install/ clients/omp/
 ```

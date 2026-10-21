@@ -781,7 +781,7 @@ export interface MyUsage {
   display_name: string;
   at: string;
   usage_enabled: boolean;
-  /** The gateway's address for the setup the page shows; "" when the hub is not told it. */
+  /** The gateway's address, without an API's path; "" when the hub is not told it. */
   gateway_url: string;
   budgets: MyBudget[];
   budget: MyTenantBudget | null;
@@ -797,6 +797,23 @@ export interface MyUsage {
   token_counts: boolean;
   token_days: TokenPoint[];
   token_hours: TokenPoint[];
+}
+
+/** What a tenant's clients are set up with (GET /my/models). */
+export interface MyModels {
+  /** The gateway's address and its two APIs; "" when the hub is not told it. */
+  gateway_url: string;
+  anthropic_base_url: string;
+  openai_base_url: string;
+  /** The models Claude Code is set up to ask for; null when the tenant may call none. */
+  claude_code: { model: string; small_model: string } | null;
+  models: {
+    name: string;
+    /** Tokens a request and its answer may hold; 0 when not known. */
+    context_window: number;
+    /** Dollars per million tokens. */
+    prices: { input: number; cached: number; output: number } | null;
+  }[];
 }
 
 /** What a tenant sent to a model in one hour or day: numbers only, nothing of a prompt. */
@@ -975,6 +992,8 @@ export const api = {
   usageHistory: (step: Step, days: number) => request<UsageHistory>("GET", `/usage/history?step=${step}&days=${days}`),
   /** A tenant's own usage, by one of its API keys. */
   myUsage: (key: string) => request<MyUsage>("GET", "/my/usage", undefined, key),
+  /** What a tenant's clients are set up with, by one of its keys. */
+  myModels: (key: string) => request<MyModels>("GET", "/my/models", undefined, key),
 
   clusters: () => request<Cluster[]>("GET", "/clusters"),
   createCluster: (c: ClusterInput) => request<Cluster>("POST", "/clusters", c),

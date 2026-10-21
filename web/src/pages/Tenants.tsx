@@ -458,22 +458,16 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
             )}
             {newKey.key.kind === "personal" && (
               <>
-                The person signs in with this key on <span className="mono">{window.location.origin}/my-usage</span>,
-                where <strong>Set up</strong> installs <span className="mono">aigw-token</span> and the Claude Code
-                plugin from this hub.
+                Give it to the person, with this line to run in a terminal. It asks for the key, then sets up{" "}
+                <span className="mono">aigw-token</span>, Claude Code and Oh My Pi from this hub, with the gateway's
+                address and the person's models. The person's page,{" "}
+                <span className="mono">{window.location.origin}/my-usage</span>, shows the same line.
               </>
             )}
           </p>
           <pre className="code">{newKey.secret}</pre>
           {newKey.key.kind === "personal" && (
-            <pre className="code">{`aigw-token login ${window.location.origin}
-(paste the key when it asks: not on the command line, where the shell keeps it)
-
-~/.claude/settings.json:
-{
-  "apiKeyHelper": "aigw-token",
-  "env": { "ANTHROPIC_BASE_URL": "<the gateway's address>" }
-}`}</pre>
+            <pre className="code">{`curl -fsSL ${window.location.origin}/clients/install.sh | sh -s -- ${window.location.origin}`}</pre>
           )}
           <footer>
             <button className="primary" onClick={() => navigator.clipboard?.writeText(newKey.secret)}>

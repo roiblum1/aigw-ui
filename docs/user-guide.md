@@ -364,10 +364,16 @@ it. The helper `aigw-token` (`clients/aigw-token`, served by the hub at
 `/clients/aigw-token`; it needs `sh` and `curl`) trades it at the hub (`POST /api/v1/token`) for a
 token that lives 7 days (`tokens.renewedLifetimeHours`), carrying the
 tenant's budget and models as they are then, and asks for a new one every
-10 minutes. Claude Code runs it as its `apiKeyHelper`. The person signs in
-on `/my-usage` with the personal key, and **Set up Claude Code** there gives
-one line that does all of it from the hub, with no internet needed (see
-[the tenants' own page](#the-tenants-own-page)). By hand:
+10 minutes. Claude Code and Oh My Pi run it for their tokens. When the
+personal key is made, the Tenants page shows the line that sets up both
+from the hub, with no internet needed; the person's page `/my-usage` shows
+it too (see [the tenants' own page](#the-tenants-own-page)):
+
+```sh
+curl -fsSL https://<the hub>/clients/install.sh | sh -s -- https://<the hub>
+```
+
+By hand, for Claude Code:
 
 ```sh
 aigw-token login https://<the hub>     # paste the personal key when asked
@@ -376,11 +382,17 @@ aigw-token login https://<the hub>     # paste the personal key when asked
 ```json
 {
   "apiKeyHelper": "aigw-token",
-  "env": { "ANTHROPIC_BASE_URL": "https://<the gateway>" }
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://<the gateway>/anthropic",
+    "ANTHROPIC_MODEL": "<a model>",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "<a small model>"
+  }
 }
 ```
 
-in `~/.claude/settings.json`. Prompts go to the gateway, never to the hub;
+in `~/.claude/settings.json`. While the gateways take API keys too, a
+personal key works from 0.34.0 on; up to 0.33.0 its tokens were refused
+until the last API key was revoked. Prompts go to the gateway, never to the hub;
 the hub only signs tokens. If it cannot be reached, `aigw-token` goes on
 printing the token it has until that expires, so a hub that is down for
 less than a week stops nobody. The status-line plugin (`clients/claude-code`)
@@ -563,7 +575,7 @@ any of its API keys or tokens. The sign-in page of the hub links to it.
 
 | Section | Shows |
 |---|---|
-| Set up Claude Code | One line to paste in a terminal: `curl -fsSL <hub>/clients/install.sh \| sh -s -- <hub> <gateway>`. It installs `aigw-token` in `~/.local/bin` and signs it in (it asks for the personal key on the terminal), sets `apiKeyHelper`, `ANTHROPIC_BASE_URL` and the status line in `~/.claude/settings.json` (everything else is kept, the old file is kept as `settings.json.aigw-backup`), and installs the `aigw-usage` plugin with `claude plugin`. Every file comes from the hub (`/clients/`), so it works with no internet. Below it, the same step by step, and the Oh My Pi extension. Open by default after a sign-in with a personal key; with a token or API key it says a personal key is needed. The gateway's address comes from `config.gatewayURL`; without it the line has none and the page says to set it |
+| Set up Claude Code and Oh My Pi | One line to paste in a terminal: `curl -fsSL <hub>/clients/install.sh \| sh -s -- <hub>`. It installs `aigw-token` in `~/.local/bin` and signs it in (it asks for the personal key on the terminal), then asks the hub for the gateway's address and the person's models (`GET /api/v1/my/models`) and sets up what is installed. Claude Code: `apiKeyHelper`, `ANTHROPIC_BASE_URL` (the gateway with `/anthropic`), the models (`ANTHROPIC_MODEL` and the alias models, from `config.claudeCode` or by price; a model the person set that they may call is kept), the model's length and longest answer when the hub knows it, and the status line in `~/.claude/settings.json` (everything else is kept, the old file is kept as `settings.json.aigw-backup`), and the `aigw-usage` plugin with `claude plugin`. Oh My Pi: the extension in `~/.omp/agent/extensions`, which adds the person's models as `aigw/<model>` when omp starts and shows the budget. Last, it checks that the gateway takes the token, and waits up to a minute while the gateways list it. Every file comes from the hub (`/clients/`), so it works with no internet. The panel names the models each tool gets; below it, the same step by step. Open by default after a sign-in with a personal key; with a token or API key it says a personal key is needed. Without `config.gatewayURL` the page says the hub was not told the gateway's address |
 | Your budget across models | The tenant's budget across every priced model, when it has one: what is used and left, when the next period starts, and whether a gateway holds the tenant to it |
 | Your models | The models the tenant may call, when it is held to some; the budgets and prices below are of those only |
 | Your budgets | For each model the tenant has a budget on: what is used and left in the running period, when the next period starts, and whether its requests are served as best-effort or refused |
