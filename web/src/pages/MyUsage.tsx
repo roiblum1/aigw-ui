@@ -241,7 +241,7 @@ function Command({ text }: { text: string }) {
     });
   return (
     <div className="relative">
-      <pre className="code pr-24">{text}</pre>
+      <pre className="code wrap pr-24">{text}</pre>
       <button className="absolute right-2 top-2" onClick={copy}>
         {copied ? <Check /> : <Copy />}
         {copied ? "Copied" : "Copy"}

@@ -246,6 +246,8 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   const action = useAction();
   // A key just created, or one shown again (again: true).
   const [newKey, setNewKey] = useState<{ secret: string; key: ApiKey; again?: boolean } | null>(null);
+  // The line a person runs to set up their tools with a new personal key.
+  const installLine = `curl -fsSL ${window.location.origin}/clients/install.sh | sh -s -- ${window.location.origin}`;
   const [keyName, setKeyName] = useState("");
   // Every hook comes before the return below: the first render, without
   // data, must call the same hooks as the next one.
@@ -467,13 +469,19 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
           </p>
           <pre className="code">{newKey.secret}</pre>
           {newKey.key.kind === "personal" && (
-            <pre className="code">{`curl -fsSL ${window.location.origin}/clients/install.sh | sh -s -- ${window.location.origin}`}</pre>
+            <pre className="code wrap">{installLine}</pre>
           )}
           <footer>
             <button className="primary" onClick={() => navigator.clipboard?.writeText(newKey.secret)}>
               <Copy />
-              Copy
+              {newKey.key.kind === "personal" ? "Copy key" : "Copy"}
             </button>
+            {newKey.key.kind === "personal" && (
+              <button onClick={() => navigator.clipboard?.writeText(installLine)}>
+                <Copy />
+                Copy line
+              </button>
+            )}
             <button onClick={() => setNewKey(null)}>Done</button>
           </footer>
         </Modal>

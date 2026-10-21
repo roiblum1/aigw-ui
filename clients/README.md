@@ -36,7 +36,11 @@ curl -fsSL https://aigw.example.com/clients/install.sh | sh -s -- https://aigw.e
    from `<hub>/clients/claude-code.tar.gz` with `claude plugin marketplace
    add` and `claude plugin install`;
 4. with Oh My Pi installed (`omp`, or `~/.omp/agent`), puts the extension in
-   `~/.omp/agent/extensions/aigw-usage.ts`;
+   `~/.omp/agent/extensions/aigw-usage.ts`, and sets omp's model roles
+   (`omp config set modelRoles`): `default` to the hub's model for Claude
+   Code and `smol`, omp's quick tasks, to its small one. A role you set to
+   another provider is kept; one on a gateway model you may no longer call
+   is replaced;
 5. checks that the gateway takes the token (`GET /v1/models`), waiting up to
    60 s (`AIGW_CHECK_SECONDS`) while the gateways list a new token.
 

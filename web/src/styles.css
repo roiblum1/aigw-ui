@@ -660,6 +660,11 @@
     line-height: 1.55;
     white-space: pre;
   }
+  /* A command to copy, read whole: a long address wraps. */
+  .code.wrap {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
 
   @media (max-width: 640px) {
     .grid-2,

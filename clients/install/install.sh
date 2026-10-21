@@ -164,6 +164,36 @@ if command -v omp >/dev/null || [ -d "$omp_dir" ]; then
 	curl -fsS --max-time 30 -o "$omp_dir/extensions/aigw-usage.ts.tmp" "$hub/clients/aigw-usage.ts" || fail "could not download the Oh My Pi extension from $hub"
 	mv "$omp_dir/extensions/aigw-usage.ts.tmp" "$omp_dir/extensions/aigw-usage.ts"
 	say "the Oh My Pi extension is in $omp_dir/extensions: omp --model aigw/<model> (omp models aigw lists them)"
+	# Its roles: the hub's model as the default, and its small model as
+	# smol, for omp's quick tasks. A role the person set to another
+	# provider is theirs; one on a gateway model they may no longer call
+	# is replaced.
+	if command -v omp >/dev/null && command -v node >/dev/null; then
+		roles=$(omp config get modelRoles --json 2>/dev/null) || roles='{}'
+		if new=$(AIGW_SETUP="$setup" AIGW_ROLES="$roles" node -e '
+const fs = require("fs");
+let setup = {};
+try { setup = JSON.parse(fs.readFileSync(process.env.AIGW_SETUP, "utf8")); } catch {}
+const cc = setup.claude_code;
+if (!cc) process.exit(0);
+let roles = {};
+try { roles = JSON.parse(process.env.AIGW_ROLES).value || {}; } catch {}
+const mine = new Set((setup.models || []).map((m) => "aigw/" + m.name));
+const want = { default: "aigw/" + cc.model, smol: "aigw/" + cc.small_model };
+let changed = false;
+for (const [role, model] of Object.entries(want)) {
+  // A role may carry a thinking level after a colon.
+  const now = (roles[role] || "").replace(/:[^/]*$/, "");
+  if (!now || (now.startsWith("aigw/") && !mine.has(now))) {
+    roles[role] = model;
+    changed = true;
+  }
+}
+if (changed) console.log(JSON.stringify(roles));
+') && [ -n "$new" ]; then
+			omp config set modelRoles "$new" >/dev/null && say "Oh My Pi's model roles: $new"
+		fi
+	fi
 	if grep -Eq '^[[:space:]]+aigw:[[:space:]]*(#.*)?$' "$omp_dir/models.yml" 2>/dev/null; then
 		say "$omp_dir/models.yml defines the provider aigw itself, so the hub's models are not added: remove it there to get them"
 	fi

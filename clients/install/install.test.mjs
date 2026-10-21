@@ -90,7 +90,18 @@ exit 0
 `,
 		{ mode: 0o755 },
 	);
-	writeFileSync(join(bin, "omp"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+	// omp keeps its roles in a file, as omp config does, and logs each set.
+	writeFileSync(
+		join(bin, "omp"),
+		`#!/bin/sh
+case "$1 $2 $3" in
+"config get modelRoles") printf '{"key":"modelRoles","value":%s}\\n' "$(cat "${dir}/roles" 2>/dev/null || echo '{}')" ;;
+"config set modelRoles") printf '%s' "$4" > "${dir}/roles"; echo "$4" >> "${dir}/omp.log" ;;
+esac
+exit 0
+`,
+		{ mode: 0o755 },
+	);
 	return { dir, bin };
 }
 
@@ -107,6 +118,7 @@ test("signs in, sets up Claude Code and Oh My Pi from the hub, waits for the gat
 	const s = await hub(archive(h.dir), { refuse: 1 });
 	const env = { HOME: h.dir, PATH: path(h.bin), AIGW_PERSONAL_KEY: key };
 	mkdirSync(join(h.dir, ".claude"));
+	writeFileSync(join(h.dir, "roles"), JSON.stringify({ default: "google/gemini:high", smol: "aigw/gone", slow: "aigw/big" }));
 	// A model the person may call is theirs to keep; one they may not is replaced.
 	writeFileSync(
 		join(h.dir, ".claude", "settings.json"),
@@ -151,6 +163,13 @@ test("signs in, sets up Claude Code and Oh My Pi from the hub, waits for the gat
 			`plugin install aigw-usage@aigw --config hub_url=${s.url} --config warn_at=90`,
 		]);
 		assert.equal(readFileSync(join(h.dir, ".omp", "agent", "extensions", "aigw-usage.ts"), "utf8"), extension);
+		// omp's roles: the person's own provider kept, a gateway model they
+		// may no longer call replaced, an empty role set.
+		assert.deepEqual(JSON.parse(readFileSync(join(h.dir, "roles"), "utf8")), {
+			default: "google/gemini:high",
+			smol: "aigw/small",
+			slow: "aigw/big",
+		});
 		assert.match(r.stderr, /waiting for the gateway to take your token/);
 		assert.match(r.stderr, /the gateway at .* takes your token/);
 
@@ -162,6 +181,8 @@ test("signs in, sets up Claude Code and Oh My Pi from the hub, waits for the gat
 		assert.equal(r.code, 0, r.stderr);
 		assert.match(r.stderr, /already signed in/);
 		assert.equal(JSON.parse(readFileSync(join(h.dir, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_BASE_URL, `${s.url}/anthropic`);
+		// Nothing to change in omp's roles the second time.
+		assert.equal(readFileSync(join(h.dir, "omp.log"), "utf8").trim().split("\n").length, 1);
 		assert.deepEqual(readFileSync(join(h.dir, "claude.log"), "utf8").trim().split("\n").slice(3), [
 			"plugin marketplace list",
 			"plugin marketplace update aigw",
