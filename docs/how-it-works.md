@@ -509,6 +509,24 @@ listener gets none.
 - *Removed on the peer side.* The gateway that took the request has charged
   it already. Charging again at the serving site would count it twice.
 
+## Deployments
+
+Each action on the page is one commit to the platform's repository, and
+Argo CD does the rest. Nothing goes to a cluster from the hub.
+
+| Action | Commit | Then |
+|---|---|---|
+| **Deploy a model** (model, cluster, values) | `sites/…/<cluster>/<model>/values.yaml`: what differs from the recipe and the site's layers; the directory registers the model | The platform makes the Application `popai-<cluster>-<model>-deploy` and syncs it: weights (pull jobs or the PVC download) first, then the LLMInferenceService; discovery finds the model on its peer route a minute after it is ready |
+| **Edit** on a deployment | the cluster's file, rewritten as what differs; comments kept | Argo CD's next refresh applies it; a changed spec rolls the pods (on GPUs without a surge pod) |
+| **Remove** | the cluster's directory of the model | The Application and what it deployed are deleted; the recipe stays |
+| **Edit recipe** | `operators/<model>/values.yaml`, only the changed values | Every cluster that runs the model follows, except where its own file sets the value |
+| **New model** | `operators/<name>/<name>.yaml` (a copy of another model's app config) and its recipe, and optionally its deployment on a cluster | As Deploy |
+
+Each deployment shows Argo CD's sync and health, the commit Argo CD
+compared, and how many replicas KServe reports ready. The model's entry
+route, prices and quotas are the Models page's, as for any discovered
+model.
+
 ## Tenants
 
 ### Create a tenant

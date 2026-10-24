@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   Network,
   LogOut,
+  Rocket,
   Moon,
   Server,
   Sun,
@@ -16,6 +17,7 @@ import {
 import { getToken, setToken } from "./api";
 import Clusters from "./pages/Clusters";
 import Models from "./pages/Models";
+import Deployments from "./pages/Deployments";
 import Tenants from "./pages/Tenants";
 import Usage from "./pages/Usage";
 import Capacity from "./pages/Capacity";
@@ -33,6 +35,7 @@ const pages = [
   { name: "Overview", icon: LayoutDashboard },
   { name: "Clusters", icon: Server },
   { name: "Models", icon: Boxes },
+  { name: "Deployments", icon: Rocket },
   { name: "Tenants", icon: Users },
   { name: "Usage", icon: ActivityIcon },
   { name: "Capacity", icon: Gauge },
@@ -149,6 +152,7 @@ function Admin() {
         {page === "Overview" && <Overview />}
         {page === "Clusters" && <Clusters />}
         {page === "Models" && <Models />}
+        {page === "Deployments" && <Deployments />}
         {page === "Tenants" && <Tenants />}
         {page === "Usage" && <Usage />}
         {page === "Capacity" && <Capacity />}

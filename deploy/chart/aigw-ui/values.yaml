@@ -102,6 +102,34 @@ fleet:
   # One name per kind of client, separated by commas.
   sessionHeader: x-claude-code-session-id,x-openwebui-chat-id
 
+# Deployments: the models the hub deploys with Argo CD. The hub commits one
+# values file of the model-deployer chart per model and cluster to this git
+# repository, and Argo CD's ApplicationSet deploys them (see the
+# doomsday-stack repository, gitops/aigw-ui). Empty repo turns the
+# Deployments page off.
+gitops:
+  # https://..., ssh://... or git@host:path.
+  repo: ""
+  # The branch Argo CD reads. The hub commits onto it.
+  branch: main
+  # The directory with operators/ and sites/ (the platform's layout).
+  dir: gitops/app-of-apps
+  # A Secret that lets the hub push:
+  #   auth: token  keys "token" and, if the server wants one, "username"
+  #                (GitLab project access token, GitHub fine-grained token)
+  #   auth: ssh    keys "ssh-privatekey" and "known_hosts" (a deploy key with
+  #                write access; ssh-keyscan <host> for known_hosts)
+  existingSecret: ""
+  auth: token
+  authorName: aigw-ui
+  authorEmail: aigw-ui@localhost
+  # Argo CD's namespace (openshift-gitops). The hub then reads the
+  # Applications there, read-only, to show each deployment's sync and
+  # health. It needs get and list on applications.argoproj.io in that
+  # namespace for its ServiceAccount (gitops/aigw-ui/bootstrap/
+  # hub-status-role.yaml). Empty shows no Argo CD status.
+  argocdNamespace: ""
+
 # The admin token and the encryption key.
 auth:
   # Name of a Secret you created with the keys "admin-token" and

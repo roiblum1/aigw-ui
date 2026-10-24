@@ -343,6 +343,30 @@ such model on. An amount says nothing about who sent the request. An entry
 route's backend keeps them all, since the site it forwards to may count the
 request by its tenant.
 
+## Deployments
+
+- **What the hub can do.** With `gitops.*` set, push commits to the branch
+  Argo CD reads, as one author. Argo CD applies what it renders, so the
+  hub's key can deploy any model the chart can express, and the chart runs
+  privileged node preparation when a recipe turns it on. Limit the key to
+  the one repository (a project access token or a deploy key), protect the
+  branch from force pushes, and review the commit log (`aigw-ui: …`).
+  On the lab, the AppProject `aigw-ui-models` allows only the chart's kinds,
+  only on clusters registered for it, never in the platform's or the
+  gateway's namespaces.
+- **The key** is in a Secret the hub's pod reads: as an environment
+  variable (HTTPS token, sent as an HTTP header from the environment, not on
+  the command line), or as a file copied to the pod's own volume with mode
+  0600 (SSH). With `known_hosts` in the Secret the server's key is checked;
+  without it, it is not.
+- **Argo CD status** is read-only: get and list on
+  `applications.argoproj.io` in one namespace. The pod mounts its account's
+  token only when `gitops.argocdNamespace` is set.
+- **Flags.** KServe's launcher runs vLLM's arguments through `bash eval`.
+  The hub and the chart refuse anything but one plain token or
+  `--option='value'` with no single quote inside, and refuse
+  `VLLM_ADDITIONAL_ARGS`, which the launcher also evaluates.
+
 ## The tenants' own page
 
 At `/my-usage` a tenant signs in with one of its API keys or tokens and sees

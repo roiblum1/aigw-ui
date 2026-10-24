@@ -519,6 +519,33 @@ with one versioned benchmark profile, drained or live; what the model can
 be given; and what is left to give under its overcommit limit
 (`GET /budgets`). See [capacity](capacity.md#api) for the paths.
 
+## Deployments
+
+The models the hub deploys through the Argo CD platform: values files in
+its git repository (`gitops.*`), read back on every request (the clone is
+fetched at most every 10 s). Every change is one commit, by the hub's
+author, with the action as its message; the task log records it. 404 when
+the hub has no repository.
+
+| Method | Path | Body | Result |
+|---|---|---|---|
+| GET | `/gitops` | | `enabled`, `repo`, `branch`, `dir`, `commit`; `models` (operator, `model_name`, `namespace`, `chart`, the recipe `values`, `revision`); `clusters` (cluster directories, `cluster_id` when the hub knows the cluster); `deployments` (each model on each cluster: merged `values`, the cluster's own `override`, `layers`, `revision`, `problem`, `app` from Argo CD by `app_name`, `live` from discovery). `error` when the repository cannot be read |
+| GET | `/gitops/base?cluster=&model=` | | `values` before the cluster's own layer: where a new deployment's form starts |
+| POST | `/gitops/deployments` | `{"cluster", "model", "values"}` | `{"commit"}`. Writes `<cluster directory>/<model>/values.yaml` as what differs from the layers below |
+| PUT | `/gitops/deployments/{cluster}/{model}` | `{"values", "revision"}` | `{"commit"}` |
+| DELETE | `/gitops/deployments/{cluster}/{model}?revision=` | | `{"commit"}`. Removes the model's directory under the cluster's |
+| POST | `/gitops/models` | `{"name", "namespace", "from", "values", "cluster"?}` | `{"commit"}`. Adds `operators/<name>/`: `from`'s app config with its name and namespace, the recipe `values` (object names starting with `from` renamed), and with `cluster` its deployment there |
+| PUT | `/gitops/models/{model}` | `{"values", "revision"}` | `{"commit"}`. Rewrites the recipe |
+
+`values` are the chart's values in full; `revision` is the git blob of the
+file the change was made on (409 when the file changed since). 400 for a
+cluster or model the repository does not have, a `namespace` other than
+the app's `projectNamespace`, a flag that is not one plain token or
+`--option='value'`, `--kv-transfer-config`, `--max-model-len` beside
+`model.maxModelLen`, `VLLM_ADDITIONAL_ARGS`, or a name that does not fit
+the Application's (63 characters). 502 when git refuses (the message says
+why).
+
 ## Tenants, keys and quotas
 
 | Method | Path | Body | Result |

@@ -18,6 +18,8 @@ func valid(t *testing.T) {
 		"FLEET_PEER_SNI", "FLEET_DOMAIN", "FLEET_PEER_CA_CONFIGMAP", "FLEET_PEER_CLIENT_SECRET", "FLEET_SESSION_HEADER",
 		"CAPACITY_PEER_MEASUREMENTS", "TOKEN_ISSUER", "TOKEN_AUDIENCE", "TOKEN_LIFETIME_DAYS", "TOKEN_RENEWED_LIFETIME_HOURS",
 		"MEMORY_LIMIT", "GATEWAY_URL", "CLAUDE_CODE_MODEL", "CLAUDE_CODE_SMALL_MODEL",
+		"GITOPS_REPO", "GITOPS_BRANCH", "GITOPS_DIR", "GITOPS_USERNAME", "GITOPS_TOKEN", "GITOPS_SSH_KEY_FILE",
+		"GITOPS_SSH_KNOWN_HOSTS_FILE", "GITOPS_AUTHOR_NAME", "GITOPS_AUTHOR_EMAIL", "GITOPS_WORK_DIR", "ARGOCD_NAMESPACE", "ARGOCD_KUBECONFIG", "ARGOCD_APP_NAME",
 	} {
 		t.Setenv(name, "")
 	}
@@ -61,6 +63,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if got := strings.Join(c.Fleet.SessionHeaders, ","); got != "x-claude-code-session-id,x-openwebui-chat-id" {
 		t.Errorf("session headers = %q", got)
+	}
+	if c.GitOps.Repo != "" || c.GitOps.Branch != "main" || c.GitOps.Dir != "gitops/app-of-apps" || c.ArgoCDNamespace != "" || c.ArgoCDAppName != "popai-{cluster}-{model}-deploy" {
+		t.Errorf("deployments = %+v, Argo CD namespace %q", c.GitOps, c.ArgoCDNamespace)
 	}
 }
 
@@ -140,6 +145,9 @@ func TestLoadRefuses(t *testing.T) {
 		{"MEMORY_LIMIT", "-1", "MEMORY_LIMIT"},
 		{"GATEWAY_URL", "llm.example.com", "GATEWAY_URL"},
 		{"GATEWAY_URL", "ftp://llm.example.com", "GATEWAY_URL"},
+		// A credential without the repository it is for is a mistake.
+		{"GITOPS_TOKEN", "t", "GITOPS_REPO"},
+		{"ARGOCD_APP_NAME", "aigw-{cluster}", "ARGOCD_APP_NAME"},
 	} {
 		t.Run(tc.name+"="+tc.value, func(t *testing.T) {
 			valid(t)

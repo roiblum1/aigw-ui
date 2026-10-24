@@ -939,6 +939,80 @@ async function upstream<T>(path: string, as: "json" | "text"): Promise<T | null>
   return (as === "json" ? res.json() : res.text()) as Promise<T>;
 }
 
+/** A model's operator in the platform's repository: app config and recipe. */
+export interface GitModel {
+  name: string;
+  namespace: string;
+  chart: string;
+  /** What tenants call: the recipe's model.name. */
+  model_name: string;
+  /** operators/<model>/values.yaml */
+  values: Record<string, unknown>;
+  revision: string;
+  config_revision: string;
+  path: string;
+}
+
+/** A cluster's directory: sites/<site>/<env>/mces/<mce>/<cluster>. */
+export interface GitCluster {
+  name: string;
+  site: string;
+  env: string;
+  mce: string;
+  path: string;
+  /** The cluster in the hub, "" when the hub does not know it. */
+  cluster_id: string;
+}
+
+/** One model on one cluster. */
+export interface GitDeployment {
+  cluster: string;
+  /** The operator. */
+  model: string;
+  /** What tenants call. */
+  model_name: string;
+  /** The LLMInferenceService's name. */
+  object: string;
+  namespace: string;
+  /** Every layer merged: what Argo CD renders the chart with. */
+  values: Record<string, unknown>;
+  /** The cluster's own layer. */
+  override: Record<string, unknown>;
+  layers: string[];
+  /** The cluster's own file's git blob; a change names the version it was made on. */
+  revision: string;
+  path: string;
+  /** Why Argo CD cannot deploy it as it is (a file written by hand). */
+  problem?: string;
+  cluster_id: string;
+  app_name: string;
+  /** Argo CD's view of its Application; null when not read or not made yet. */
+  app: {
+    name: string;
+    sync: string;
+    health: string;
+    revision: string;
+    operation: string;
+    message: string;
+  } | null;
+  /** What discovery last saw of it on the cluster; null until it does. */
+  live: { model_id: string; instances: number | null; desired: number; observed_at: string } | null;
+}
+
+export interface GitOps {
+  enabled: boolean;
+  repo?: string;
+  branch?: string;
+  dir?: string;
+  commit?: string;
+  argocd: boolean;
+  models: GitModel[];
+  clusters: GitCluster[];
+  deployments: GitDeployment[];
+  error?: string;
+  argocd_error?: string;
+}
+
 async function request<T>(method: string, path: string, body?: unknown, token = getToken()): Promise<T> {
   const res = await fetch("/api/v1" + path, {
     method,
@@ -1044,6 +1118,30 @@ export const api = {
   deleteGPUPrice: (gpu: string) => request<void>("DELETE", `/gpu-prices/${encodeURIComponent(gpu)}`),
   drainSite: (modelId: string, clusterId: string, drained: boolean) =>
     request<void>("PUT", `/models/${modelId}/sites/${clusterId}/drain`, { drained }),
+
+  gitops: () => request<GitOps>("GET", "/gitops"),
+  /** A model's values on a cluster before the cluster's own layer. */
+  gitopsBase: (cluster: string, model: string) =>
+    request<{ values: Record<string, unknown>; layers: string[] }>(
+      "GET",
+      `/gitops/base?cluster=${encodeURIComponent(cluster)}&model=${encodeURIComponent(model)}`,
+    ),
+  createDeployment: (cluster: string, model: string, values: Record<string, unknown>) =>
+    request<{ commit: string }>("POST", "/gitops/deployments", { cluster, model, values }),
+  updateDeployment: (cluster: string, model: string, values: Record<string, unknown>, revision: string) =>
+    request<{ commit: string }>("PUT", `/gitops/deployments/${encodeURIComponent(cluster)}/${encodeURIComponent(model)}`, {
+      values,
+      revision,
+    }),
+  deleteDeployment: (cluster: string, model: string, revision: string) =>
+    request<{ commit: string }>(
+      "DELETE",
+      `/gitops/deployments/${encodeURIComponent(cluster)}/${encodeURIComponent(model)}?revision=${encodeURIComponent(revision)}`,
+    ),
+  createGitModel: (b: { name: string; namespace: string; from: string; values: Record<string, unknown>; cluster?: string }) =>
+    request<{ commit: string }>("POST", "/gitops/models", b),
+  updateGitModel: (name: string, values: Record<string, unknown>, revision: string) =>
+    request<{ commit: string }>("PUT", `/gitops/models/${encodeURIComponent(name)}`, { values, revision }),
 
   tenants: () => request<Tenant[]>("GET", "/tenants"),
   tenant: (id: string) => request<TenantDetail>("GET", `/tenants/${id}`),

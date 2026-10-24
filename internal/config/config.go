@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"aigw-ui/internal/capacity"
+	"aigw-ui/internal/gitops"
 	"aigw-ui/internal/render"
 )
 
@@ -96,6 +97,16 @@ type Config struct {
 	// empty when neither FLEET_PEER_SNI nor FLEET_DOMAIN is set, and no
 	// entry route can be turned on then.
 	Fleet render.FleetConfig
+
+	// GitOps is the git repository of the models the hub deploys, which
+	// Argo CD reads. An empty Repo turns the Deployments page off.
+	GitOps gitops.Config
+	// ArgoCDNamespace is where Argo CD keeps the deployments' Applications,
+	// read for their sync and health; "" shows none. ArgoCDKubeconfig is a
+	// kubeconfig file for that cluster; "" uses the pod's own account.
+	// ArgoCDAppName is how the platform names a model's Application on a
+	// cluster, with {cluster} and {model}.
+	ArgoCDNamespace, ArgoCDKubeconfig, ArgoCDAppName string
 }
 
 func Load() (*Config, error) {
@@ -192,6 +203,26 @@ func Load() (*Config, error) {
 		if c.MemoryLimit, err = strconv.ParseInt(v, 10, 64); err != nil || c.MemoryLimit < 0 {
 			return nil, errors.New("MEMORY_LIMIT must be a number of bytes such as 1073741824")
 		}
+	}
+	c.GitOps = gitops.Config{
+		Repo:           strings.TrimSpace(os.Getenv("GITOPS_REPO")),
+		Branch:         envOr("GITOPS_BRANCH", "main"),
+		Dir:            envOr("GITOPS_DIR", "gitops/app-of-apps"),
+		Username:       os.Getenv("GITOPS_USERNAME"),
+		Token:          os.Getenv("GITOPS_TOKEN"),
+		SSHKeyFile:     os.Getenv("GITOPS_SSH_KEY_FILE"),
+		KnownHostsFile: os.Getenv("GITOPS_SSH_KNOWN_HOSTS_FILE"),
+		AuthorName:     os.Getenv("GITOPS_AUTHOR_NAME"),
+		AuthorEmail:    os.Getenv("GITOPS_AUTHOR_EMAIL"),
+		WorkDir:        os.Getenv("GITOPS_WORK_DIR"),
+	}
+	if c.GitOps.Repo == "" && (c.GitOps.Token != "" || c.GitOps.SSHKeyFile != "") {
+		return nil, errors.New("GITOPS_TOKEN or GITOPS_SSH_KEY_FILE is set without GITOPS_REPO")
+	}
+	c.ArgoCDNamespace, c.ArgoCDKubeconfig = os.Getenv("ARGOCD_NAMESPACE"), os.Getenv("ARGOCD_KUBECONFIG")
+	c.ArgoCDAppName = envOr("ARGOCD_APP_NAME", gitops.DefaultAppName)
+	if !strings.Contains(c.ArgoCDAppName, "{cluster}") || !strings.Contains(c.ArgoCDAppName, "{model}") {
+		return nil, errors.New("ARGOCD_APP_NAME must hold {cluster} and {model}, such as popai-{cluster}-{model}-deploy")
 	}
 	c.Fleet.BestEffortPriority, err = strconv.ParseInt(envOr("BEST_EFFORT_PRIORITY", strconv.Itoa(render.DefaultBestEffortPriority)), 10, 32)
 	if err != nil || c.Fleet.BestEffortPriority >= 0 {

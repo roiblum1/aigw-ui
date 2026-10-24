@@ -38,6 +38,9 @@ COPY docs/upstream/projects.json docs/upstream/projects.json
 RUN go run ./cmd/upstream-docs fetch -projects docs/upstream/projects.json -out /upstream-docs
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+# git (and ssh for an SSH remote): the Deployments page commits the models'
+# values files to a git repository, which Argo CD deploys.
+RUN microdnf install -y --nodocs git-core openssh-clients && microdnf clean all
 LABEL name="aigw-ui" \
       summary="UI and API that manage Envoy AI Gateway on several clusters from one hub" \
       io.k8s.display-name="AI Gateway Control" \
@@ -49,6 +52,8 @@ ENV UI_DIR=/opt/aigw-ui/web \
     UPSTREAM_DOCS_DIR=/opt/aigw-ui/upstream-docs \
     LISTEN_ADDR=:8080
 EXPOSE 8080
-# OpenShift replaces this with a random UID; the image writes nothing to disk.
+# OpenShift replaces this with a random UID. The image writes nothing to its
+# own disk; the clone of the deployments repository is on a volume
+# (GITOPS_WORK_DIR).
 USER 1001
 ENTRYPOINT ["/usr/local/bin/aigw-ui"]

@@ -42,6 +42,12 @@ type Server struct {
 	claudeModel, claudeSmallModel string
 	// history records the use since its last look; nil without it.
 	history recorder
+	// gitops is the repository of the models the hub deploys, nil when
+	// deployments are off; argocd reads their Applications, nil without it.
+	gitops deployer
+	argocd appStatus
+	// appName is how the platform names a model's Application on a cluster.
+	appName string
 }
 
 // recorder records what was used since the last look (history.Service).
@@ -144,6 +150,14 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("PUT /api/v1/tenants/{id}/budget", s.setTenantBudget)
 	api.HandleFunc("PUT /api/v1/tenants/{id}/models", s.setTenantModels)
 	api.HandleFunc("PUT /api/v1/tenants/{id}/quotas", s.upsertQuota)
+
+	api.HandleFunc("GET /api/v1/gitops", s.getGitOps)
+	api.HandleFunc("GET /api/v1/gitops/base", s.getGitOpsBase)
+	api.HandleFunc("POST /api/v1/gitops/deployments", s.createDeployment)
+	api.HandleFunc("PUT /api/v1/gitops/deployments/{cluster}/{model}", s.updateDeployment)
+	api.HandleFunc("DELETE /api/v1/gitops/deployments/{cluster}/{model}", s.deleteDeployment)
+	api.HandleFunc("POST /api/v1/gitops/models", s.createRecipe)
+	api.HandleFunc("PUT /api/v1/gitops/models/{model}", s.updateRecipe)
 	api.HandleFunc("DELETE /api/v1/quotas/{id}", s.deleteQuota)
 
 	root := http.NewServeMux()

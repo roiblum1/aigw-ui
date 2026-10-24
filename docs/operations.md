@@ -298,6 +298,38 @@ oc get backends,aiservicebackends,aigatewayroutes,securitypolicies,secrets \
 oc get quotapolicies -A -l app.kubernetes.io/managed-by=aigw-ui
 ```
 
+## Deployments
+
+The page writes git; Argo CD applies. When a model does not change on its
+cluster after a save, follow it down:
+
+1. **The commit.** The task log has `deployment.*` or `model.*` with the
+   commit, or why git refused (wrong token, protected branch, an old
+   version: open the page again).
+2. **The Application.** With `gitops.argocdNamespace`, the page shows its
+   sync and health and Argo CD's message; "no Application yet" means the
+   platform has not made `popai-<cluster>-<model>-deploy` (the cluster's
+   directory name must be the cluster's name in Argo CD; a new directory
+   needs the ApplicationSet's next pass). "at <commit>, git is at <commit>"
+   means Argo CD has not refreshed yet (3 minutes, at once with a webhook
+   from the git server).
+3. **The render.** `ComparisonError` with the values: render it as Argo CD
+   does, the layers in order:
+
+   ```sh
+   helm template x charts/model-deployer -f operators/<model>/values.yaml \
+     -f sites/<site>/<env>/mces/<mce>/<cluster>/<model>/values.yaml
+   ```
+
+4. **The cluster.** "On the cluster" is discovery's last look (every
+   minute); `starting` until KServe reports ready replicas.
+
+A file edited by hand shows on the page as it is; a file Argo CD cannot
+deploy (wrong namespace, not YAML) shows what is wrong in red. Removing a
+model from a cluster removes its directory; the platform deletes the
+Application and, through its finalizer, what it deployed (a weights PVC of
+`modelCache` stays).
+
 ## Removing everything from a cluster by hand
 
 ```sh

@@ -21,4 +21,6 @@ render "defaults"
 render "usage monitoring" --set redis.url=rediss://redis.example:6379 --set redis.allowReset=true --set redis.caConfigMap=redis-ca
 render "entry routes" --set fleet.domain=example.com
 render "external database and secret" --set postgresql.enabled=false --set externalDatabase.existingSecret=aigw-db --set auth.existingSecret=aigw-ui-auth
+render "deployments over HTTPS with Argo CD status" --set gitops.repo=https://git.example/models.git --set gitops.existingSecret=aigw-gitops --set gitops.argocdNamespace=openshift-gitops --set redis.caSecret=redis-ca
+render "deployments over SSH" --set gitops.repo=git@git.example:models.git --set gitops.existingSecret=aigw-gitops --set gitops.auth=ssh
 render "disconnected install" --set global.imageRegistry=registry.example:5000 --set 'global.imagePullSecrets[0]=pull-secret'

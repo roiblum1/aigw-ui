@@ -120,6 +120,13 @@ Back up the encryption key straight away. See
 | `fleet.peerCAConfigMap` | `llm-peer-ca` | ConfigMap in each gateway namespace with the CA of the sites' peer certificates |
 | `fleet.peerClientSecret` | `llm-peer-client` | Secret in each gateway namespace with the certificate a gateway presents to another site |
 | `fleet.sessionHeader` | `x-claude-code-session-id,x-openwebui-chat-id` | Requests with the same value in one of these headers go to the same site. One name per kind of client, separated by commas |
+| `gitops.repo` | empty | The git repository of the Argo CD platform's values (`https://…`, `ssh://…`, `git@host:path`). The Deployments page reads and writes it. Empty turns the page off. See [before the first model deployment](#before-the-first-model-deployment) |
+| `gitops.branch` | `main` | The branch Argo CD reads; the hub commits onto it |
+| `gitops.dir` | `gitops/app-of-apps` | The directory with `operators/` and `sites/` (the platform's layout) |
+| `gitops.existingSecret` | empty | Secret that lets the hub push: `token` (and `username` if the server wants one) with `gitops.auth: token`, or `ssh-privatekey` and `known_hosts` with `gitops.auth: ssh` |
+| `gitops.auth` | `token` | `token` (HTTPS) or `ssh` |
+| `gitops.authorName`, `gitops.authorEmail` | `aigw-ui`, `aigw-ui@localhost` | The author of the hub's commits |
+| `gitops.argocdNamespace` | empty | Argo CD's namespace (`openshift-gitops`). The hub then reads the Applications there, to show each deployment's sync and health; the pod mounts its account's token. Empty shows no Argo CD status |
 | `auth.existingSecret` | empty | Your own Secret with `admin-token` and `encryption-key` |
 | `postgresql.enabled` | `true` | `false` to use your own Postgres |
 | `postgresql.image.repository` / `.tag` | sclorg Postgres 16 | Postgres image |
@@ -335,6 +342,55 @@ Not checked by the self-test: a model served with prefill and decode on
 separate instances. Some vLLM versions then report nearly the whole prompt
 as cached. Look at one cold request by hand before giving such a model a
 lower price for cached tokens.
+
+## Before the first model deployment
+
+The Deployments page deploys models through the Argo CD platform: the hub
+writes values files to git, Argo CD deploys them with the `model-deployer`
+chart. The hub never applies a model itself.
+
+1. **The values repository**, in the platform's layout (doomsday-stack
+   `gitops/app-of-apps`): `operators/<model>/<model>.yaml` (app config:
+   chart repository and revision, `projectNamespace`, sync options),
+   `operators/<model>/values.yaml` (the model's recipe), and
+   `sites/<site>/<env>/mces/<mce>/<cluster>/<model>/values.yaml` (the
+   directory registers the model on the cluster). A model is an operator
+   whose values have `model.name`. The cluster's directory name is its name
+   in aigw-ui and in Argo CD.
+2. **The chart**: `model-deployer` (doomsday-stack `charts/model-deployer`),
+   in a repository the model apps point at.
+3. **Argo CD**: the platform's ApplicationSets (argocd-day2-platform), or
+   on a lab the stand-in in doomsday-stack `gitops/aigw-ui/bootstrap`
+   (an AppProject that allows only the chart's kinds outside the platform's
+   and the gateway's namespaces, and an ApplicationSet that makes
+   `popai-<cluster>-<model>-deploy` per registered model). Each serving
+   cluster registered in Argo CD under its aigw-ui name.
+4. **A key that may push**, in a Secret in the hub's namespace:
+
+   ```sh
+   # HTTPS: a GitLab project access token (write_repository) or a GitHub
+   # fine-grained token (contents: write) for the one repository
+   oc create secret generic aigw-ui-gitops -n aigw-ui --from-literal=token=<token>
+   # SSH: a deploy key with write access
+   ssh-keyscan git.example.internal > known_hosts
+   oc create secret generic aigw-ui-gitops -n aigw-ui --from-file=ssh-privatekey=<key> --from-file=known_hosts
+   ```
+
+5. **The hub's values**:
+
+   ```sh
+   helm upgrade aigw-ui deploy/chart/aigw-ui -n aigw-ui --reuse-values \
+     --set gitops.repo=https://git.example.internal/popai/values.git \
+     --set gitops.dir=gitops/app-of-apps \
+     --set gitops.existingSecret=aigw-ui-gitops \
+     --set gitops.argocdNamespace=openshift-gitops
+   ```
+
+6. **Optional, the status column**: get and list on
+   `applications.argoproj.io` in Argo CD's namespace for the hub's
+   ServiceAccount (doomsday-stack `gitops/aigw-ui/bootstrap/hub-status-role.yaml`).
+   The hub finds a deployment's Application by `ARGOCD_APP_NAME`
+   (`popai-{cluster}-{model}-deploy`).
 
 ## Upgrade
 

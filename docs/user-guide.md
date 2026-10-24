@@ -218,6 +218,42 @@ site with capacity cannot be drained.
 **Warnings.** A yellow line under the clusters says when the sites serve
 different revisions of the model, or take different request lengths.
 
+## Deployments
+
+The models on the clusters, deployed by Argo CD from git. Two tables:
+
+- **On the clusters**: each model on each cluster, what it runs on
+  (replicas × GPUs, data/tensor/expert parallel, RoCE, LMCache), what this
+  cluster sets itself, Argo CD's sync and health, and its ready replicas.
+- **Models**: each model's recipe, its chart, and the clusters it runs on.
+
+**Run a model on another cluster in another shape.** Deploy a model,
+choose the model and the cluster. The form starts from the recipe and the
+site's layers; change only the shape: GPU product, GPUs per pod, and one of
+
+- data-parallel ranks, one port each (B300 with DP8: 8, plus
+  `--enable-expert-parallel` in this shape's flags);
+- tensor parallel (H200 with TP8: 8);
+- over several nodes: data-parallel ranks in all and per pod, expert
+  parallel, RoCE and its RDMA network (2 × H200, DP8 TP2 EP16: 8, 4,
+  tensor 2, expert on).
+
+Commit and deploy writes only what you changed, into that cluster's file.
+
+**Change a model everywhere.** Edit recipe: images (vLLM and LMCache, the
+same build), the model's vLLM flags, LMCache, the S3 path of the weights. A
+cluster whose own file sets a value keeps it.
+
+**A new model.** New model, start from the closest model; give it an
+operator name (its directory and Application) and a namespace; its object
+names (SCC, storage, LMCache engine) are renamed after it. Plan its disks
+with the site: two models on the same nodes need their own volume names.
+
+Flags are one per line, one token each (`--speculative-config.method=mtp`),
+or `--option='value'` for JSON. Each save is a commit; if someone changed
+the same file meanwhile, open it again. Remove asks you to type the model's
+operator name.
+
 ## Tenants
 
 A tenant is a team.

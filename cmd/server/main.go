@@ -14,6 +14,7 @@ import (
 	"aigw-ui/internal/api"
 	"aigw-ui/internal/benchmark"
 	"aigw-ui/internal/config"
+	"aigw-ui/internal/gitops"
 	"aigw-ui/internal/history"
 	"aigw-ui/internal/overage"
 	"aigw-ui/internal/secretbox"
@@ -106,9 +107,14 @@ func run() error {
 		Peer: benchmark.Peer{SNI: cfg.Fleet.PeerSNI, ClientSecret: cfg.Fleet.ClientSecret, CAConfigMap: cfg.Fleet.CAConfigMap}})
 	go bench.Run(ctx)
 
+	repo, apps, err := deployments(cfg)
+	if err != nil {
+		return err
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService, overageService), bench, cfg.AdminToken, cfg.UIDir, cfg.TenantPage).WithUpstreamDocs(cfg.UpstreamDocsDir).WithGatewayURL(cfg.GatewayURL).WithClaudeCode(cfg.ClaudeCodeModel, cfg.ClaudeCodeSmallModel).WithHistory(historyOf(hist)).Handler(),
+		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService, overageService), bench, cfg.AdminToken, cfg.UIDir, cfg.TenantPage).WithUpstreamDocs(cfg.UpstreamDocsDir).WithGatewayURL(cfg.GatewayURL).WithClaudeCode(cfg.ClaudeCodeModel, cfg.ClaudeCodeSmallModel).WithHistory(historyOf(hist)).WithGitOps(deployerOf(repo), appsOf(apps), cfg.ArgoCDAppName).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -134,4 +140,46 @@ func historyOf(h *history.Service) interface {
 		return nil
 	}
 	return h
+}
+
+// deployerOf and appsOf keep a nil pointer from becoming an interface that
+// is not nil.
+func deployerOf(r *gitops.Repo) interface {
+	Read(ctx context.Context) (gitops.Snapshot, error)
+	Commit(ctx context.Context, changes []gitops.Change, message string) (string, error)
+	Where() (repo, branch, dir string)
+} {
+	if r == nil {
+		return nil
+	}
+	return r
+}
+
+func appsOf(a *gitops.ArgoCD) interface {
+	Apps(ctx context.Context) (map[string]gitops.App, error)
+} {
+	if a == nil {
+		return nil
+	}
+	return a
+}
+
+// deployments opens the git repository of the models the hub deploys, and
+// Argo CD's Applications for their status. Both nil when GITOPS_REPO is not
+// set. Argo CD's status is optional: without access to it the page shows
+// what git and discovery say.
+func deployments(cfg *config.Config) (repo *gitops.Repo, apps *gitops.ArgoCD, err error) {
+	if cfg.GitOps.Repo == "" {
+		return nil, nil, nil
+	}
+	if repo, err = gitops.New(cfg.GitOps); err != nil {
+		return nil, nil, err
+	}
+	if cfg.ArgoCDNamespace != "" {
+		if apps, err = gitops.NewArgoCD(cfg.ArgoCDNamespace, cfg.ArgoCDKubeconfig); err != nil {
+			slog.Warn("deployments show no Argo CD status", "err", err)
+			apps, err = nil, nil
+		}
+	}
+	return repo, apps, nil
 }

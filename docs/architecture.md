@@ -928,7 +928,73 @@ the length is known). The Omp extension asks for them when omp starts and
 registers them as the provider `aigw` (`pi.registerProvider`), with
 `!aigw-token` as the key command, so nothing is written to `models.yml`.
 
+## Deployments
+
+The hub deploys models through the Argo CD platform; it never applies a
+model to a cluster itself. Git is the source of truth: the hub keeps none of
+it in Postgres, reads the files back on every request (`internal/gitops`,
+the clone fetched at most every 10 s) and writes a file only when someone
+saves on the page.
+
+**Layout** (argocd-day2-platform's, `gitops.dir`):
+
+| File | Holds |
+|---|---|
+| `operators/<model>/<model>.yaml` | the model app's config: chart repository and revision, `projectNamespace`, sync options |
+| `operators/<model>/values.yaml` | the recipe: weights, images, the model's vLLM and LMCache flags |
+| the site's layers | `sites/<site>/values.yaml`, `…/<env>/values.yaml`, `defaults/hosted-clusters/<model>/values{,-<env>,-<cluster>}.yaml`, `…/mces/<mce>/values.yaml`, `…/<cluster>/values.yaml` |
+| `sites/<site>/<env>/mces/<mce>/<cluster>/<model>/values.yaml` | the cluster's own layer; the directory registers the model there |
+
+A model is an operator whose merged values have `model.name`; the others
+are the platform's and stay out of the page. The hub merges the layers as
+Helm does (maps merge, lists replace, null removes a key) in the order the
+platform's deploy chart uses (`gitops.Layers`; `ocp-versions/` is left out:
+the hub does not know a cluster's OpenShift version).
+
+**Writing.** A save of a deployment writes the cluster's own file as what
+differs from the layers below (`gitops.Override`: changed values, null for
+a value taken away), so a recipe change still reaches every cluster. The
+file is patched, not rewritten (`gitops.Patch`): a change of plain values
+is made in the text itself (blank lines, flow maps and comment columns
+stay); anything else re-encodes the tree, which keeps comments and the
+order of the keys that stay. Every save names the git blob of the file it
+was made on; git refuses an old one (409) and the push is retried three
+times when someone pushed in between. A new model copies an existing
+model's app config (name and namespace changed) and renames the recipe's
+object names that start with the source's name (SCC, StorageClass, PVCs,
+LMCache engine, peer routes), since a cluster that runs both would have two
+apps fight over them.
+
+**Checks before a commit** (`gitops.CheckValues`): `model.name`,
+`namespace` equal to the app's `projectNamespace`, `model.subPath` or a
+`model.uri`, an LLMInferenceService name of at most 42 characters, every
+flag in `llmisvc.args` and `llmisvc.extraArgs` one plain token or
+`--option='value'` (KServe's launcher runs them through `bash eval`), no
+`--kv-transfer-config`, `--max-model-len` in one place, no
+`VLLM_ADDITIONAL_ARGS`. The chart checks the same at render.
+
+**Status.** Two sources, each optional: Argo CD's Application of the
+deployment (`ARGOCD_APP_NAME`, read with get/list in `ARGOCD_NAMESPACE`,
+cached 10 s), and what discovery last saw of its LLMInferenceService
+(`model_deployments` by cluster, namespace and name).
+
+**The chart** (`model-deployer`, doomsday-stack): `generic-model`'s stack
+(node preparation, local PVs, per-node S3 pull jobs, LMCache, SCC, the
+LLMInferenceService) with the fleet side (peer route with an Exact match,
+`/healthz/<model>`, the classes `interactive`/`standard`/`batch`, flow
+control merged into the model's scheduler config, keep-alive 75) and
+nothing on the client listener. A cluster's shape: data parallel over ports
+(`llmisvc.dataParallelExternalLB`: the flags, a pool of one port per rank,
+supervisor probes), KServe's `parallelism` (tensor, data, dataLocal,
+expert), a replica over several nodes (`llmisvc.multiNode`: KServe's
+LeaderWorkerSet) with RoCE (`llmisvc.roce`), and its own flags
+(`llmisvc.extraArgs`, rendered before the recipe's `args`).
+
 ## Not verified on a real gateway
+
+- Deployments (0.35.0): the GPU shapes of `model-deployer` (data parallel
+  over ports, tensor parallel, multi-node over RoCE, LMCache) were rendered
+  and compared with the old charts, not run on GPUs.
 
 **Run on a gateway.** On OpenShift 4.22 with Envoy Gateway 1.9.1 and Envoy
 AI Gateway 1.1.0, one site, a model added by hand:
