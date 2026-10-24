@@ -10,6 +10,7 @@ import {
   gpusOf,
   numberOrEmpty,
   overridden,
+  recipeShape,
   setGpus,
   setIn,
   shape,
@@ -172,7 +173,7 @@ export default function Deployments() {
                         </div>
                       </td>
                       <td>
-                        {shape(m.values)}
+                        {recipeShape(m.values)}
                         <div className="detail mono clamp" title={weights(m.values)}>
                           {weights(m.values)}
                         </div>

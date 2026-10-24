@@ -180,6 +180,16 @@ export function shape(values: Values): string {
   return `${replicas} × (${where}${parts.length ? ", " + parts.join(" ") : ""})`;
 }
 
+/**
+ * A recipe's shape: shape() when it sets one, else what it leaves to each
+ * cluster (a recipe without GPUs, product or CPU request).
+ */
+export function recipeShape(values: Values): string {
+  const set = gpusOf(values) > 0 || getIn(values, "nodes.gpuProduct") || getIn(values, "llmisvc.resources.requests.cpu");
+  if (set) return shape(values);
+  return getIn(values, "lmcache.enabled") === true ? "shape per cluster, LMCache" : "shape per cluster";
+}
+
 /** Where the weights come from, in a few words. */
 export function weights(values: Values): string {
   const sub = String(getIn(values, "model.subPath") ?? "");

@@ -327,9 +327,11 @@
     color: var(--muted-foreground);
     font-size: 12.5px;
   }
-  td.narrow {
+  .table-wrap td.narrow {
     max-width: 260px;
-    overflow-wrap: anywhere;
+    min-width: 160px;
+    white-space: normal;
+    word-break: break-all;
   }
   .section-title {
     margin: 24px 0 10px;

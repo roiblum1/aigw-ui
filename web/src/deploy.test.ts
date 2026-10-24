@@ -1,7 +1,7 @@
 // Run with "npm test".
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { argProblem, argsToText, envToText, fromPreset, getIn, gpusOf, numberOrEmpty, overridden, ranksOf, setGpus, setIn, shape, slug, textToArgs, textToEnv, weights } from "./deploy.ts";
+import { argProblem, argsToText, recipeShape, envToText, fromPreset, getIn, gpusOf, numberOrEmpty, overridden, ranksOf, setGpus, setIn, shape, slug, textToArgs, textToEnv, weights } from "./deploy.ts";
 
 test("a value is read and set by its dotted path, without changing the original", () => {
   const v = { model: { name: "qwen" }, serving: { replicas: 1 } };
@@ -60,6 +60,11 @@ test("a deployment's shape and weights in a few words, from the chart's own keys
   assert.equal(shape(roce), "1 × (2 nodes × 8 × NVIDIA-H200, DP8 TP2 EP16 RoCE)");
   assert.equal(weights({ model: { subPath: "GLM-5.3", s3: { path: "llms/zai-org/GLM-5.3" } } }), "s3://llms/zai-org/GLM-5.3 → node disks");
   assert.equal(weights({ model: { uri: "hf://Qwen/Q" }, modelCache: { enabled: true } }), "hf://Qwen/Q → PVC");
+});
+
+test("a recipe that leaves the shape to each cluster says so", () => {
+  assert.equal(recipeShape({ lmcache: { enabled: true }, llmisvc: { args: ["--x"] } }), "shape per cluster, LMCache");
+  assert.equal(recipeShape({ llmisvc: { resources: { requests: { cpu: "4" } } } }), "1 × (CPU)");
 });
 
 test("GPUs per replica are set in requests and limits at once, and 0 removes them", () => {
