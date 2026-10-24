@@ -249,6 +249,17 @@ operator name (its directory and Application) and a namespace; its object
 names (SCC, storage, LMCache engine) are renamed after it. Plan its disks
 with the site: two models on the same nodes need their own volume names.
 
+**The scheduler (llm-d).** In the form's Scheduler section: the weight of
+each scorer of the endpoint picker's default profile, flow control (requests
+in flight per endpoint, the longest wait, tenants in turn, how many
+best-effort requests may wait), and the whole EndpointPickerConfig as JSON
+(plugins and their parameters, such as `active-request-scorer`
+`maxBusyScore`). An empty config is KServe's default; flow control needs a
+config to be merged into. The picker's own pod (image, resources) is
+`llmisvc.scheduler.template`, in the JSON of all values. Usually set in the
+recipe; a cluster that changes it holds the whole profile list in its own
+file (lists are replaced).
+
 Flags are one per line, one token each (`--speculative-config.method=mtp`),
 or `--option='value'` for JSON. Each save is a commit; if someone changed
 the same file meanwhile, open it again. Remove asks you to type the model's

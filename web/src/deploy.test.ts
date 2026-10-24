@@ -1,7 +1,7 @@
 // Run with "npm test".
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { argProblem, argsToText, recipeShape, envToText, fromPreset, getIn, gpusOf, numberOrEmpty, overridden, ranksOf, setGpus, setIn, shape, slug, textToArgs, textToEnv, weights } from "./deploy.ts";
+import { argProblem, argsToText, recipeShape, schedulerProblem, scorers, setScorerWeight, envToText, fromPreset, getIn, gpusOf, numberOrEmpty, overridden, ranksOf, setGpus, setIn, shape, slug, textToArgs, textToEnv, weights } from "./deploy.ts";
 
 test("a value is read and set by its dotted path, without changing the original", () => {
   const v = { model: { name: "qwen" }, serving: { replicas: 1 } };
@@ -60,6 +60,19 @@ test("a deployment's shape and weights in a few words, from the chart's own keys
   assert.equal(shape(roce), "1 × (2 nodes × 8 × NVIDIA-H200, DP8 TP2 EP16 RoCE)");
   assert.equal(weights({ model: { subPath: "GLM-5.3", s3: { path: "llms/zai-org/GLM-5.3" } } }), "s3://llms/zai-org/GLM-5.3 → node disks");
   assert.equal(weights({ model: { uri: "hf://Qwen/Q" }, modelCache: { enabled: true } }), "hf://Qwen/Q → PVC");
+});
+
+test("the scheduler's scorers and their weights are read and set in its first profile", () => {
+  const v = { llmisvc: { scheduler: { config: { inline: { schedulingProfiles: [{ name: "default", plugins: [
+    { pluginRef: "active-request-scorer", weight: 3 }, { pluginRef: "prefix-cache-scorer", weight: 1 }, { pluginRef: "max-score-picker" }] }] } } } } };
+  assert.deepEqual(scorers(v), [
+    { plugin: "active-request-scorer", weight: 3 }, { plugin: "prefix-cache-scorer", weight: 1 }, { plugin: "max-score-picker", weight: undefined }]);
+  const w = setScorerWeight(v, "prefix-cache-scorer", 2);
+  assert.deepEqual(scorers(w)[1], { plugin: "prefix-cache-scorer", weight: 2 });
+  assert.equal(scorers(v)[1].weight, 1);
+  assert.equal(schedulerProblem(v), "");
+  assert.match(schedulerProblem({ llmisvc: { flowControl: { enabled: true, maxConcurrency: 2 } } }), /give it one/);
+  assert.match(schedulerProblem(setIn(v, "llmisvc.flowControl.enabled", true)), /in flight/);
 });
 
 test("a recipe that leaves the shape to each cluster says so", () => {

@@ -11,7 +11,10 @@ import {
   numberOrEmpty,
   overridden,
   recipeShape,
+  schedulerProblem,
+  scorers,
   setGpus,
+  setScorerWeight,
   setIn,
   shape,
   textToArgs,
@@ -445,6 +448,8 @@ function FormDialog(props: {
   const [envText, setEnvText] = useState(() => envToText(getIn(values, "llmisvc.env")));
   const [lmArgsText, setLmArgsText] = useState(() => argsToText(getIn(values, "lmcache.extraArgs")));
   const [extraText, setExtraText] = useState(() => argsToText(getIn(values, "llmisvc.extraArgs")));
+  // The scheduler's config box shows the values, except while someone edits it.
+  const [eppJson, setEppJson] = useState<string | null>(null);
   // The JSON box shows the values, except while someone edits it.
   const [json, setJson] = useState<string | null>(null);
   const set = (path: string, value: unknown) => setValues((v) => setIn(v, path, value));
@@ -480,6 +485,7 @@ function FormDialog(props: {
         if (!props.start) throw new Error("The values are still loading.");
         if (argProblems.length > 0) throw new Error(argProblems[0]);
         if (envProblem) throw new Error(envProblem);
+        if (schedulerProblem(values)) throw new Error(schedulerProblem(values));
         await props.onSubmit(values);
       }}
       wide
@@ -611,13 +617,68 @@ function FormDialog(props: {
             {check("modelCache.enabled", "Keep on a PVC", "Downloaded once from the weights URI into the cluster's storage class.")}
             {getIn(values, "modelCache.enabled") === true && field("modelCache.size", "PVC size", undefined, "20Gi")}
           </div>
-          <h3>Scheduler</h3>
+          <h3>Scheduler (llm-d)</h3>
+          <p className="hint">
+            The endpoint picker in front of the replicas: its scorers pick the replica (or data-parallel rank) for each request.
+            Empty config: KServe's default. Flow control is merged into the config by the chart.
+          </p>
+          {scorers(values).some((x) => x.weight !== undefined) && (
+            <div className="grid-3">
+              {scorers(values)
+                .filter((x) => x.weight !== undefined)
+                .map((x) => (
+                  <Field key={x.plugin} label={x.plugin} hint="Weight in the default profile.">
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={x.weight ?? ""}
+                      onChange={(e) => setValues((v) => setScorerWeight(v, x.plugin, numberOrEmpty(e.target.value)))}
+                    />
+                  </Field>
+                ))}
+            </div>
+          )}
           <div className="grid-3">
-            {check("llmisvc.flowControl.enabled", "Flow control", "Best-effort waits behind everyone; tenants in turn.")}
-            {getIn(values, "llmisvc.flowControl.enabled") === true &&
-              number("llmisvc.flowControl.maxConcurrency", "In flight per endpoint", "Per rank; never above --max-num-seqs.")}
+            {check("llmisvc.flowControl.enabled", "Flow control", "Requests wait in the scheduler; best-effort behind everyone, tenants in turn.")}
+            {getIn(values, "llmisvc.flowControl.enabled") === true && (
+              <>
+                {number("llmisvc.flowControl.maxConcurrency", "In flight per endpoint", "Per rank port; never above --max-num-seqs.")}
+                {field("llmisvc.flowControl.requestTTL", "Longest wait", "Then 429. Below the peer timeout.", "300s")}
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={(getIn(values, "llmisvc.flowControl.fairnessPolicy") ?? "round-robin-fairness-policy") === "round-robin-fairness-policy"}
+                    onChange={(e) => set("llmisvc.flowControl.fairnessPolicy", e.target.checked ? "round-robin-fairness-policy" : "")}
+                  />
+                  Tenants in turn
+                  <small>round-robin-fairness-policy; off: oldest first, and aigw-ui warns.</small>
+                </label>
+                {number("llmisvc.flowControl.negativeBandMaxRequests", "Best-effort waiting at most", "Then 429 at once. 0: the scheduler's default.")}
+              </>
+            )}
             {number("peer.maxParallelRequests", "Site limit", "Requests at once before 503 and the next site. 0: none.")}
           </div>
+          {schedulerProblem(values) && <div className="warn-text">{schedulerProblem(values)}</div>}
+          <Field label="EndpointPickerConfig (JSON)" hint="llmisvc.scheduler.config.inline: plugins, their parameters, the scheduling profiles. Leave the box to apply it.">
+            <textarea
+              className="mono"
+              rows={10}
+              value={eppJson ?? JSON.stringify(getIn(values, "llmisvc.scheduler.config.inline") ?? {}, null, 2)}
+              onChange={(e) => setEppJson(e.target.value)}
+              onBlur={() => {
+                if (eppJson === null) return;
+                try {
+                  const parsed = eppJson.trim() === "" ? {} : (JSON.parse(eppJson) as Values);
+                  set("llmisvc.scheduler.config.inline", Object.keys(parsed).length ? parsed : undefined);
+                  setEppJson(null);
+                } catch {
+                  // Kept as typed until it parses.
+                }
+              }}
+            />
+          </Field>
+          {eppJson !== null && <div className="warn-text">Not applied yet: leave the box to apply it.</div>}
           <details>
             <summary>All values (JSON)</summary>
             <p className="hint">Every key of the chart's values. Leave the box to apply what you typed.</p>

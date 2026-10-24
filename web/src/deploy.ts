@@ -190,6 +190,42 @@ export function recipeShape(values: Values): string {
   return getIn(values, "lmcache.enabled") === true ? "shape per cluster, LMCache" : "shape per cluster";
 }
 
+const EPP = "llmisvc.scheduler.config.inline";
+
+/** The scorers of the scheduler's first profile, with their weights. */
+export function scorers(values: Values): { plugin: string; weight: number | undefined }[] {
+  const profiles = getIn(values, EPP + ".schedulingProfiles");
+  if (!Array.isArray(profiles) || !isMap(profiles[0])) return [];
+  const plugins = (profiles[0] as Values).plugins;
+  if (!Array.isArray(plugins)) return [];
+  return plugins
+    .filter((p): p is Values => isMap(p) && typeof p.pluginRef === "string")
+    .map((p) => ({ plugin: String(p.pluginRef), weight: typeof p.weight === "number" ? p.weight : undefined }));
+}
+
+/** Sets one scorer's weight in the first profile (the lists are copied). */
+export function setScorerWeight(values: Values, plugin: string, weight: number | undefined): Values {
+  const profiles = getIn(values, EPP + ".schedulingProfiles");
+  if (!Array.isArray(profiles) || !isMap(profiles[0])) return values;
+  const first = { ...(profiles[0] as Values) };
+  first.plugins = (Array.isArray(first.plugins) ? first.plugins : []).map((p) => {
+    if (!isMap(p) || p.pluginRef !== plugin) return p;
+    const next: Values = { ...p };
+    if (weight === undefined) delete next.weight;
+    else next.weight = weight;
+    return next;
+  });
+  return setIn(values, EPP + ".schedulingProfiles", [first, ...profiles.slice(1)]);
+}
+
+/** Why the scheduler settings would not render, or "". */
+export function schedulerProblem(values: Values): string {
+  const fc = getIn(values, "llmisvc.flowControl.enabled") === true;
+  if (fc && !isMap(getIn(values, EPP))) return "Flow control is merged into the scheduler's config: give it one (the EndpointPickerConfig below).";
+  if (fc && !(Number(getIn(values, "llmisvc.flowControl.maxConcurrency")) > 0)) return "Flow control needs requests in flight per endpoint.";
+  return "";
+}
+
 /** Where the weights come from, in a few words. */
 export function weights(values: Values): string {
   const sub = String(getIn(values, "model.subPath") ?? "");
