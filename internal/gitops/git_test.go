@@ -383,3 +383,21 @@ func TestANewModelRenamesItsObjects(t *testing.T) {
 		t.Fatalf("one line: %q %v", out, err)
 	}
 }
+
+// A quoted value is changed in place too, and a file the hub created is
+// patched without re-indenting it: one value, one changed line.
+func TestPatchQuotedAndHubWrittenFiles(t *testing.T) {
+	values := map[string]any{"llmisvc": map[string]any{"args": []any{"--a", "--b"}, "env": map[string]any{"X": "4"}}}
+	created, err := encode("# header\n", values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values["llmisvc"].(map[string]any)["env"] = map[string]any{"X": "3"}
+	out, err := Patch(created, "", values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Replace(string(created), `X: "4"`, `X: "3"`, 1); string(out) != want {
+		t.Fatalf("got\n%s\nwant\n%s", out, want)
+	}
+}

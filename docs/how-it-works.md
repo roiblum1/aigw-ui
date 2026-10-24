@@ -518,7 +518,7 @@ Argo CD does the rest. Nothing goes to a cluster from the hub.
 |---|---|---|
 | **Deploy a model** (model, cluster, values) | `sites/…/<cluster>/<model>/values.yaml`: what differs from the recipe and the site's layers; the directory registers the model | The platform makes the Application `popai-<cluster>-<model>-deploy` and syncs it: weights (pull jobs or the PVC download) first, then the LLMInferenceService; discovery finds the model on its peer route a minute after it is ready |
 | **Edit** on a deployment | the cluster's file, rewritten as what differs; comments kept | Argo CD's next refresh applies it; a changed spec rolls the pods (on GPUs without a surge pod) |
-| **Remove** | the cluster's directory of the model | The Application and what it deployed are deleted; the recipe stays |
+| **Remove** | the cluster's directory of the model | The Application and what it deployed are deleted, its namespace too when the app made it (`namespaceCreate`); the recipe stays |
 | **Edit recipe** | `operators/<model>/values.yaml`, only the changed values | Every cluster that runs the model follows, except where its own file sets the value |
 | **New model** | `operators/<name>/<name>.yaml` (a copy of another model's app config) and its recipe, and optionally its deployment on a cluster | As Deploy |
 

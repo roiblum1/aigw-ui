@@ -87,12 +87,12 @@ func (p *patcher) patchMap(n *yamlv3.Node, want map[string]any) error {
 			if err != nil {
 				return err
 			}
-			if v.Kind == yamlv3.ScalarNode && v.Style == 0 && nv.Kind == yamlv3.ScalarNode && !strings.Contains(nv.Value, "\n") {
+			if old, ok := sourceText(v); ok && nv.Kind == yamlv3.ScalarNode && !strings.Contains(nv.Value, "\n") {
 				text, err := yamlv3.Marshal(w)
 				if err != nil {
 					return err
 				}
-				p.edits = append(p.edits, edit{line: v.Line, column: v.Column, old: v.Value, new: strings.TrimSuffix(string(text), "\n")})
+				p.edits = append(p.edits, edit{line: v.Line, column: v.Column, old: old, new: strings.TrimSuffix(string(text), "\n")})
 			} else {
 				p.structural = true
 			}
@@ -149,6 +149,22 @@ func (p *patcher) inPlace(original []byte) ([]byte, bool) {
 		lines[e.line-1] = line[:start] + e.new + line[start+len(e.old):]
 	}
 	return []byte(strings.Join(lines, "\n")), true
+}
+
+// sourceText is a scalar as it is written in the file, when that can be
+// told from the node: plain, or quoted with nothing escaped.
+func sourceText(n *yamlv3.Node) (string, bool) {
+	switch {
+	case n.Kind != yamlv3.ScalarNode:
+		return "", false
+	case n.Style == 0:
+		return n.Value, true
+	case n.Style == yamlv3.DoubleQuotedStyle && !strings.ContainsAny(n.Value, "\"\\\n"):
+		return `"` + n.Value + `"`, true
+	case n.Style == yamlv3.SingleQuotedStyle && !strings.ContainsAny(n.Value, "'\n"):
+		return "'" + n.Value + "'", true
+	}
+	return "", false
 }
 
 // valueNode is v as a YAML node, maps with their keys in order.

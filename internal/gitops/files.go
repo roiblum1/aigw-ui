@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	yamlv3 "go.yaml.in/yaml/v3"
 	"sigs.k8s.io/yaml"
 )
 
@@ -390,11 +392,19 @@ func encode(header string, values map[string]any) ([]byte, error) {
 	if len(values) == 0 {
 		return []byte(header), nil
 	}
-	out, err := yaml.Marshal(values)
-	if err != nil {
+	// The same style as Patch writes (lists indented under their key), so
+	// the first patch of a file the hub made does not re-indent it.
+	var out bytes.Buffer
+	out.WriteString(header)
+	enc := yamlv3.NewEncoder(&out)
+	enc.SetIndent(2)
+	if err := enc.Encode(values); err != nil {
 		return nil, err
 	}
-	return append([]byte(header), out...), nil
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
 
 // DeploymentChange is the change that makes a model's values on a cluster
@@ -467,11 +477,11 @@ func NewModelChanges(name, namespace string, from Model, values map[string]any) 
 		config[k] = v
 	}
 	config["name"], config["projectNamespace"] = name, namespace
-	raw, err := yaml.Marshal(config)
+	header := fmt.Sprintf("# Written by aigw-ui (Deployments): the app config of %s, from %s's.\n", name, from.Name)
+	raw, err := encode("", config)
 	if err != nil {
 		return nil, err
 	}
-	header := fmt.Sprintf("# Written by aigw-ui (Deployments): the app config of %s, from %s's.\n", name, from.Name)
 	recipe, err := Snapshot{}.RecipeChange(Model{Name: name, Path: "operators/" + name + "/values.yaml"}, values, "")
 	if err != nil {
 		return nil, err

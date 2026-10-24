@@ -328,8 +328,10 @@ cluster after a save, follow it down:
 A file edited by hand shows on the page as it is; a file Argo CD cannot
 deploy (wrong namespace, not YAML) shows what is wrong in red. Removing a
 model from a cluster removes its directory; the platform deletes the
-Application and, through its finalizer, what it deployed (a weights PVC of
-`modelCache` stays).
+Application and, through its finalizer, what it deployed. A model whose
+app owns its namespace (`namespaceCreate`, the chart's default) loses the
+namespace too, and a `modelCache` PVC in it; one in a shared namespace
+(`namespaceCreate: false`) keeps its PVC (`Delete=false`), to delete by hand.
 
 ## Removing everything from a cluster by hand
 

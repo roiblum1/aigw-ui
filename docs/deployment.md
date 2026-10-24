@@ -364,7 +364,11 @@ chart. The hub never applies a model itself.
    (an AppProject that allows only the chart's kinds outside the platform's
    and the gateway's namespaces, and an ApplicationSet that makes
    `popai-<cluster>-<model>-deploy` per registered model). Each serving
-   cluster registered in Argo CD under its aigw-ui name.
+   cluster registered in Argo CD under its aigw-ui name. Argo CD caches
+   every object of a cluster it manages: on the lab, one busy cluster took
+   OpenShift GitOps' application controller over its default 2 GiB (killed
+   every 18 s until raised to 4 GiB in the ArgoCD resource,
+   `spec.controller.resources`).
 4. **A key that may push**, in a Secret in the hub's namespace:
 
    ```sh
