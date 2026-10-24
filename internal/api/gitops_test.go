@@ -282,7 +282,7 @@ func TestFlagsAreCheckedBeforeASave(t *testing.T) {
 	}
 
 	code, a = call(s.updateDeployment, http.MethodPut, "/api/v1/gitops/deployments/lab/qwen-tiny", body, "cluster", "lab", "model", "qwen-tiny")
-	if code != 400 || !strings.HasPrefix(a.Error, "the vLLM command would not start: --enable-prefix-cache is not a flag") || len(a.Checks) != 1 || len(repo.messages) != 0 {
+	if code != 400 || !strings.HasPrefix(a.Error, "the vLLM command would not start on lab: --enable-prefix-cache is not a flag") || len(a.Checks) != 1 || len(repo.messages) != 0 {
 		t.Fatalf("save: %d %+v, commits %v", code, a, repo.messages)
 	}
 
@@ -292,7 +292,7 @@ func TestFlagsAreCheckedBeforeASave(t *testing.T) {
 	recipe["llmisvc"] = map[string]any{"args": []any{"--enable-prompt-tokens-details", "--enable-force-include-usage", "--max-num-seqs=64"}}
 	rbody, _ := json.Marshal(map[string]any{"values": recipe, "revision": snap.Models[0].Revision})
 	code, a = call(s.updateRecipe, http.MethodPut, "/api/v1/gitops/models/qwen-tiny", rbody, "model", "qwen-tiny")
-	if code != 400 || !strings.Contains(a.Error, "--max-num-seqs is set twice") || !strings.Contains(a.Error, "on lab") || len(repo.messages) != 0 {
+	if code != 400 || !strings.HasPrefix(a.Error, "the vLLM command would not start on lab: --max-num-seqs is set twice") || len(repo.messages) != 0 {
 		t.Fatalf("recipe: %d %+v", code, a)
 	}
 	cbody, _ := json.Marshal(map[string]any{"model": "qwen-tiny", "recipe": true, "values": recipe})

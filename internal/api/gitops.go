@@ -450,13 +450,13 @@ func refuseFlags(w http.ResponseWriter, checks []gitops.ClusterCheck) bool {
 			if c.Cluster != "" {
 				where = " on " + c.Cluster
 			}
-			lines = append(lines, p.Message+where)
+			lines = append(lines, where+": "+p.Message)
 		}
 	}
 	if len(lines) == 0 {
 		return false
 	}
-	msg := "the vLLM command would not start: " + lines[0]
+	msg := "the vLLM command would not start" + lines[0]
 	if len(lines) > 1 {
 		msg += fmt.Sprintf(" (and %d more)", len(lines)-1)
 	}
