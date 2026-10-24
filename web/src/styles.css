@@ -327,6 +327,10 @@
     color: var(--muted-foreground);
     font-size: 12.5px;
   }
+  td.narrow {
+    max-width: 260px;
+    overflow-wrap: anywhere;
+  }
   .section-title {
     margin: 24px 0 10px;
     font-size: 15px;

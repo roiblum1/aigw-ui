@@ -310,9 +310,10 @@ cluster after a save, follow it down:
    sync and health and Argo CD's message; "no Application yet" means the
    platform has not made `popai-<cluster>-<model>-deploy` (the cluster's
    directory name must be the cluster's name in Argo CD; a new directory
-   needs the ApplicationSet's next pass). "at <commit>, git is at <commit>"
-   means Argo CD has not refreshed yet (3 minutes, at once with a webhook
-   from the git server).
+   needs the ApplicationSet's next pass); "not in this Argo CD" is a cluster
+   the hub does not know, whose Applications another Argo CD keeps.
+   "compared at <commit>" older than the save means Argo CD has not
+   refreshed yet (3 minutes, at once with a webhook from the git server).
 3. **The render.** `ComparisonError` with the values: render it as Argo CD
    does, the layers in order:
 

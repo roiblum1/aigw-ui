@@ -125,10 +125,10 @@ export default function Deployments() {
                           {weights(d.values)}
                         </div>
                       </td>
-                      <td>
+                      <td className="narrow">
                         <OwnValues layer={d.override} />
                       </td>
-                      <td>
+                      <td className="narrow">
                         <ArgoStatus gitops={data} d={d} />
                       </td>
                       <td>
@@ -177,7 +177,7 @@ export default function Deployments() {
                           {weights(m.values)}
                         </div>
                       </td>
-                      <td className="mono detail">{m.chart}</td>
+                      <td className="mono detail narrow">{m.chart}</td>
                       <td>
                         {data.deployments
                           .filter((d) => d.model === m.name)
@@ -258,22 +258,23 @@ function ArgoStatus({ gitops, d }: { gitops: GitOps; d: GitDeployment }) {
         not read
       </span>
     );
+  if (!d.app && !d.cluster_id)
+    return (
+      <span className="muted" title={`No Application named ${d.app_name} in this Argo CD: the cluster is another Argo CD's, or not registered here.`}>
+        not in this Argo CD
+      </span>
+    );
   if (!d.app)
     return (
       <span className="tag warn" title={`No Application named ${d.app_name} yet: the platform makes it within a minute of the commit.`}>
         no Application yet
       </span>
     );
-  const behind = gitops.commit && d.app.revision && d.app.revision !== gitops.commit;
   return (
     <>
       <span className={`badge ${badgeOf(d.app.sync)}`}>{d.app.sync || "Unknown"}</span>{" "}
       <span className={`badge ${badgeOf(d.app.health)}`}>{d.app.health || "Unknown"}</span>
-      {behind && (
-        <div className="detail">
-          at {d.app.revision.slice(0, 7)}, git is at {gitops.commit?.slice(0, 7)}
-        </div>
-      )}
+      {d.app.revision && <div className="detail">compared at {d.app.revision.slice(0, 7)}</div>}
       {d.app.message && (
         <div className="detail clamp" title={d.app.message}>
           {d.app.operation && `${d.app.operation}: `}
