@@ -522,8 +522,16 @@ Argo CD does the rest. Nothing goes to a cluster from the hub.
 | **Edit recipe** | `operators/<model>/values.yaml`, only the changed values | Every cluster that runs the model follows, except where its own file sets the value |
 | **New model** | `operators/<name>/<name>.yaml` (a copy of another model's app config) and its recipe, and optionally its deployment on a cluster | As Deploy |
 
-Each deployment shows Argo CD's sync and health, the commit Argo CD
-compared, and how many replicas KServe reports ready. The model's entry
+Before each commit the hub checks the vLLM command the values make (since
+0.36.0): the command KServe and the chart build, read as vLLM reads it, with
+the flags of the image's vLLM version and the checks vLLM runs before it
+loads a model, plus a flag set twice and the GPUs a pod asks for. An error
+refuses the save; the form shows the findings and the command as it
+changes. vLLM itself says nothing before the pod starts, and takes a flag
+set twice from the last place.
+
+Each deployment shows its check in short, Argo CD's sync and health, the
+commit Argo CD compared, and how many replicas KServe reports ready. The model's entry
 route, prices and quotas are the Models page's, as for any discovered
 model.
 

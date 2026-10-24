@@ -997,6 +997,48 @@ export interface GitDeployment {
   } | null;
   /** What discovery last saw of it on the cluster; null until it does. */
   live: { model_id: string; instances: number | null; desired: number; observed_at: string } | null;
+  /** The check of its vLLM command as git holds it. */
+  flags: FlagSummary;
+}
+
+/** One word of the vLLM command, and who wrote it (KServe, the chart, llmisvc.args...). */
+export interface FlagArg {
+  text: string;
+  source: string;
+  /** Written by KServe or the chart, not by the values' flags. */
+  fixed?: boolean;
+  soft?: boolean;
+}
+
+export interface FlagProblem {
+  /** error refuses a save. */
+  level: "error" | "warning";
+  /** vllm: vLLM refuses it when the pod starts; hub: the hub's own rule. */
+  origin: "vllm" | "hub";
+  flag?: string;
+  source?: string;
+  message: string;
+}
+
+/** The hub's check of a model's vLLM command on a cluster ("" for a recipe no cluster runs). */
+export interface FlagCheck {
+  cluster: string;
+  model: string;
+  image: string;
+  /** The flag list checked against; exact when it is the image's own version. */
+  vllm: string;
+  exact: boolean;
+  note?: string;
+  command: FlagArg[];
+  worker?: FlagArg[];
+  problems: FlagProblem[];
+}
+
+export interface FlagSummary {
+  vllm: string;
+  exact: boolean;
+  errors: number;
+  warnings: number;
 }
 
 export interface GitOps {
@@ -1126,6 +1168,9 @@ export const api = {
       "GET",
       `/gitops/base?cluster=${encodeURIComponent(cluster)}&model=${encodeURIComponent(model)}`,
     ),
+  /** The vLLM command values make, checked as a save would check it. */
+  checkFlags: (b: { model: string; cluster?: string; values: Record<string, unknown>; recipe?: boolean }) =>
+    request<{ checks: FlagCheck[] }>("POST", "/gitops/check", b),
   createDeployment: (cluster: string, model: string, values: Record<string, unknown>) =>
     request<{ commit: string }>("POST", "/gitops/deployments", { cluster, model, values }),
   updateDeployment: (cluster: string, model: string, values: Record<string, unknown>, revision: string) =>

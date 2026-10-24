@@ -529,13 +529,18 @@ the hub has no repository.
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| GET | `/gitops` | | `enabled`, `repo`, `branch`, `dir`, `commit`; `models` (operator, `model_name`, `namespace`, `chart`, the recipe `values`, `revision`); `clusters` (cluster directories, `cluster_id` when the hub knows the cluster); `deployments` (each model on each cluster: merged `values`, the cluster's own `override`, `layers`, `revision`, `problem`, `app` from Argo CD by `app_name`, `live` from discovery). `error` when the repository cannot be read |
+| GET | `/gitops` | | `enabled`, `repo`, `branch`, `dir`, `commit`; `models` (operator, `model_name`, `namespace`, `chart`, the recipe `values`, `revision`); `clusters` (cluster directories, `cluster_id` when the hub knows the cluster); `deployments` (each model on each cluster: merged `values`, the cluster's own `override`, `layers`, `revision`, `problem`, `app` from Argo CD by `app_name`, `live` from discovery, `flags`: its vLLM check in short, `vllm`, `exact`, `errors`, `warnings`). `error` when the repository cannot be read |
 | GET | `/gitops/base?cluster=&model=` | | `values` before the cluster's own layer: where a new deployment's form starts |
+| POST | `/gitops/check` | `{"model", "cluster"?, "values", "recipe"?}` | `{"checks": [...]}`, one per cluster: `cluster`, `model`, `image`, `vllm` (the flag list checked against), `exact` (the image's own version; otherwise `note` says why not, and every finding is a warning), `command` and on multi-node `worker` (each word with its `source`: KServe, the chart, `llmisvc.extraArgs`, `llmisvc.args`), `problems` (`level` error or warning, `origin` vllm or hub, `flag`, `source`, `message`). `values` are a deployment's whole values; with `recipe`, a recipe, checked on every cluster that runs the model (a new model: alone, or on `cluster`). Commits nothing |
 | POST | `/gitops/deployments` | `{"cluster", "model", "values"}` | `{"commit"}`. Writes `<cluster directory>/<model>/values.yaml` as what differs from the layers below |
 | PUT | `/gitops/deployments/{cluster}/{model}` | `{"values", "revision"}` | `{"commit"}` |
 | DELETE | `/gitops/deployments/{cluster}/{model}?revision=` | | `{"commit"}`. Removes the model's directory under the cluster's |
 | POST | `/gitops/models` | `{"name", "namespace", "from", "values", "cluster"?}` | `{"commit"}`. Adds `operators/<name>/`: `from`'s app config with its name and namespace, the recipe `values` (object names starting with `from` renamed), and with `cluster` its deployment there |
 | PUT | `/gitops/models/{model}` | `{"values", "revision"}` | `{"commit"}`. Rewrites the recipe |
+
+Every save checks the vLLM command first (as `/gitops/check` does): an
+error answers 400 with `error` (the first problem, and how many more) and
+`checks`, and nothing is committed.
 
 `values` are the chart's values in full; `revision` is the git blob of the
 file the change was made on (409 when the file changed since). 400 for a

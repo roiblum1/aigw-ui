@@ -62,6 +62,29 @@ type deploymentView struct {
 	App     *gitops.App `json:"app"`
 	// Live is nil while discovery has not seen it on the cluster.
 	Live *liveDeployment `json:"live"`
+	// Flags is the check of its vLLM command as git holds it (a file
+	// written by hand is checked too).
+	Flags flagSummary `json:"flags"`
+}
+
+// flagSummary is a flag check in short.
+type flagSummary struct {
+	Version  string `json:"vllm"`
+	Exact    bool   `json:"exact"`
+	Errors   int    `json:"errors"`
+	Warnings int    `json:"warnings"`
+}
+
+func summarize(fc gitops.FlagCheck) flagSummary {
+	s := flagSummary{Version: fc.Version, Exact: fc.Exact}
+	for _, p := range fc.Problems {
+		if p.Level == "error" {
+			s.Errors++
+		} else {
+			s.Warnings++
+		}
+	}
+	return s
 }
 
 type clusterView struct {
@@ -132,7 +155,7 @@ func (s *Server) getGitOps(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, d := range snap.Deployments {
-		dv := deploymentView{Deployment: d, ClusterID: ids[d.Cluster], AppName: gitops.AppName(s.appName, d.Cluster, d.Model)}
+		dv := deploymentView{Deployment: d, ClusterID: ids[d.Cluster], AppName: gitops.AppName(s.appName, d.Cluster, d.Model), Flags: summarize(gitops.CheckFlags(d.Values))}
 		if a, ok := apps[dv.AppName]; ok {
 			dv.App = &a
 		}
@@ -208,6 +231,10 @@ func (s *Server) saveDeployment(w http.ResponseWriter, r *http.Request, b deploy
 	}
 	if err := checkModelValues(b.Values, model.Namespace); err != nil {
 		fail(w, err)
+		return
+	}
+	check := gitops.ClusterCheck{Cluster: cluster.Name, Model: model.Name, FlagCheck: gitops.CheckFlags(b.Values)}
+	if refuseFlags(w, []gitops.ClusterCheck{check}) {
 		return
 	}
 	change, err := snap.DeploymentChange(cluster, model.Name, b.Values, base)
@@ -293,9 +320,8 @@ func (s *Server) createRecipe(w http.ResponseWriter, r *http.Request) {
 		fail(w, invalid("values: %v", err))
 		return
 	}
-	message := "aigw-ui: add the model " + b.Name
+	var cluster *gitops.Cluster
 	if b.Cluster != "" {
-		var cluster *gitops.Cluster
 		for i := range snap.Clusters {
 			if snap.Clusters[i].Name == b.Cluster {
 				cluster = &snap.Clusters[i]
@@ -305,6 +331,12 @@ func (s *Server) createRecipe(w http.ResponseWriter, r *http.Request) {
 			fail(w, invalid("no directory for cluster %q under sites/: add the cluster to the platform first", b.Cluster))
 			return
 		}
+	}
+	if refuseFlags(w, snap.RecipeChecks(b.Name, changes[1].Path, b.Values, clustersOf(cluster)...)) {
+		return
+	}
+	message := "aigw-ui: add the model " + b.Name
+	if cluster != nil {
 		with := snap.With(changes[1].Path, b.Values)
 		deploy, err := with.DeploymentChange(*cluster, b.Name, with.Base(*cluster, b.Name), "")
 		if err != nil {
@@ -341,6 +373,9 @@ func (s *Server) updateRecipe(w http.ResponseWriter, r *http.Request) {
 			fail(w, err)
 			return
 		}
+		if refuseFlags(w, snap.RecipeChecks(m.Name, m.Path, b.Values)) {
+			return
+		}
 		change, err := snap.RecipeChange(m, b.Values, b.Revision)
 		if err != nil {
 			fail(w, invalid("values: %v", err))
@@ -350,6 +385,90 @@ func (s *Server) updateRecipe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fail(w, store.ErrNotFound)
+}
+
+type checkBody struct {
+	Model string `json:"model"`
+	// Cluster and Values: a deployment's whole values on a cluster.
+	Cluster string         `json:"cluster"`
+	Values  map[string]any `json:"values"`
+	// Recipe: Values is the model's recipe (an existing model's, or a new
+	// one's with Cluster where it is to be deployed), checked on every
+	// cluster that runs it.
+	Recipe bool `json:"recipe"`
+}
+
+// checkGitOps checks the vLLM command that values make, before a save: what
+// vLLM would refuse when the pod starts, and the hub's own rules. A save
+// runs the same check and is refused on an error.
+func (s *Server) checkGitOps(w http.ResponseWriter, r *http.Request) {
+	var b checkBody
+	if err := decode(r, &b); err != nil {
+		fail(w, err)
+		return
+	}
+	if b.Values == nil {
+		fail(w, invalid("values are required"))
+		return
+	}
+	snap, ok := s.readGitOps(w, r)
+	if !ok {
+		return
+	}
+	var checks []gitops.ClusterCheck
+	switch {
+	case !b.Recipe:
+		checks = []gitops.ClusterCheck{{Cluster: b.Cluster, Model: b.Model, FlagCheck: gitops.CheckFlags(b.Values)}}
+	default:
+		path := "operators/" + b.Model + "/values.yaml"
+		var also []gitops.Cluster
+		known := false
+		for _, m := range snap.Models {
+			if m.Name == b.Model {
+				path, known = m.Path, true
+			}
+		}
+		if !known && b.Cluster != "" {
+			for _, c := range snap.Clusters {
+				if c.Name == b.Cluster {
+					also = append(also, c)
+				}
+			}
+		}
+		checks = snap.RecipeChecks(b.Model, path, b.Values, also...)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"checks": checks})
+}
+
+// refuseFlags answers 400 with the checks when one of them has an error,
+// and says whether it did.
+func refuseFlags(w http.ResponseWriter, checks []gitops.ClusterCheck) bool {
+	var lines []string
+	for _, c := range checks {
+		for _, p := range c.Errors() {
+			where := ""
+			if c.Cluster != "" {
+				where = " on " + c.Cluster
+			}
+			lines = append(lines, p.Message+where)
+		}
+	}
+	if len(lines) == 0 {
+		return false
+	}
+	msg := "the vLLM command would not start: " + lines[0]
+	if len(lines) > 1 {
+		msg += fmt.Sprintf(" (and %d more)", len(lines)-1)
+	}
+	writeJSON(w, http.StatusBadRequest, map[string]any{"error": msg, "checks": checks})
+	return true
+}
+
+func clustersOf(c *gitops.Cluster) []gitops.Cluster {
+	if c == nil {
+		return nil
+	}
+	return []gitops.Cluster{*c}
 }
 
 // readGitOps reads the repository, or answers why it cannot.

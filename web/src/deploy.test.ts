@@ -1,7 +1,7 @@
 // Run with "npm test".
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { argProblem, argsToText, recipeShape, schedulerProblem, scorers, setScorerWeight, envToText, fromPreset, getIn, gpusOf, numberOrEmpty, overridden, ranksOf, setGpus, setIn, shape, slug, textToArgs, textToEnv, weights } from "./deploy.ts";
+import { argProblem, argsToText, commandLines, flagBadge, recipeShape, schedulerProblem, scorers, setScorerWeight, envToText, fromPreset, getIn, gpusOf, numberOrEmpty, overridden, ranksOf, setGpus, setIn, shape, slug, textToArgs, textToEnv, weights } from "./deploy.ts";
 
 test("a value is read and set by its dotted path, without changing the original", () => {
   const v = { model: { name: "qwen" }, serving: { replicas: 1 } };
@@ -96,4 +96,30 @@ test("what a cluster sets itself is listed by its dotted keys", () => {
 test("a preset starts a deployment without its title or place", () => {
   assert.deepEqual(fromPreset({ preset: { title: "t" }, deployment: { cluster: "x" }, model: { name: "m" } }), { model: { name: "m" } });
   assert.deepEqual(fromPreset(undefined), {});
+});
+
+test("the command reads one flag per line with its values, and says who wrote each", () => {
+  const lines = commandLines([
+    { text: "/mnt/models", source: "KServe", fixed: true },
+    { text: "--served-model-name", source: "KServe", fixed: true },
+    { text: "m", source: "KServe", fixed: true },
+    { text: "publishers/ns/models/m", source: "KServe", fixed: true },
+    { text: "--max-model-len", source: "llmisvc.args" },
+    { text: "-1", source: "llmisvc.args" },
+    { text: '--default-chat-template-kwargs={"enable_thinking": false}', source: "llmisvc.args" },
+  ]);
+  assert.deepEqual(lines, [
+    { text: "vllm serve /mnt/models", source: "KServe", fixed: true },
+    { text: "--served-model-name m publishers/ns/models/m", source: "KServe", fixed: true },
+    { text: "--max-model-len -1", source: "llmisvc.args", fixed: false },
+    { text: `'--default-chat-template-kwargs={"enable_thinking": false}'`, source: "llmisvc.args", fixed: false },
+  ]);
+});
+
+test("a deployment's flag badge says what the check found, and an unknown version is not a pass", () => {
+  assert.equal(flagBadge({ vllm: "0.32.0", exact: true, errors: 0, warnings: 0 }).className, "synced");
+  assert.equal(flagBadge({ vllm: "0.32.0", exact: true, errors: 2, warnings: 1 }).label, "vLLM 0.32.0: 2 to fix");
+  assert.equal(flagBadge({ vllm: "0.32.0", exact: true, errors: 0, warnings: 1 }).label, "vLLM 0.32.0: 1 warning");
+  assert.equal(flagBadge({ vllm: "0.32.0", exact: false, errors: 0, warnings: 3 }).label, "vLLM version unknown");
+  assert.equal(flagBadge(undefined).className, "idle");
 });

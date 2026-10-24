@@ -325,6 +325,29 @@ cluster after a save, follow it down:
 4. **The cluster.** "On the cluster" is discovery's last look (every
    minute); `starting` until KServe reports ready replicas.
 
+**A save is refused: "the vLLM command would not start".** The form's vLLM
+check says which flag and where it came from (`llmisvc.args` is the
+recipe's list, `llmisvc.extraArgs` the cluster's). A flag "set twice"
+between them: the recipe's comes later and wins, so set it in one place. A
+flag "KServe sets already" (`--port`, `--served-model-name`, the parallel
+flags of `parallelism`, the chart's data-parallel flags): remove it from
+the values. "vLLM needs N GPUs per pod": the pod's `nvidia.com/gpu` against
+tensor × data-parallel ranks in the pod.
+
+**"vLLM version unknown".** The image does not say its vLLM version (an
+LMCache build, a digest, an empty `images.vllm`), or the hub has no list for
+it: the check runs against the newest list and only warns. To check an
+image fully, write its list where the hub is built and release it:
+
+```sh
+hack/vllm-flags.sh registry-internal/vllm/vllm-openai:v0.33.0   # podman, no network for the image
+go test ./internal/vllmflags/                                    # the hub against vLLM's verdicts
+```
+
+The script writes `internal/vllmflags/catalogs/vllm-<version>.json` and
+`testdata/verdicts-<version>.json`. A disagreement in the test is a rule to
+fix before the list ships.
+
 A file edited by hand shows on the page as it is; a file Argo CD cannot
 deploy (wrong namespace, not YAML) shows what is wrong in red. Removing a
 model from a cluster removes its directory; the platform deletes the

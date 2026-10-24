@@ -543,6 +543,57 @@
     color: var(--warning);
   }
 
+  /* ---- vLLM check (Deployments) ---- */
+  .flag-checks {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .flag-check {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .flag-check-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+  }
+  .flag-problems {
+    margin: 8px 0 4px;
+    padding-left: 18px;
+    overflow-wrap: anywhere;
+  }
+  .flag-problems li {
+    margin: 3px 0;
+  }
+  .flag-problems li.error {
+    color: var(--danger);
+  }
+  .flag-problems li.warning {
+    color: var(--warning);
+  }
+  .flag-problems small,
+  .flag-command small {
+    margin-left: 8px;
+    color: var(--muted-foreground);
+  }
+  .flag-command {
+    max-height: 320px;
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    overflow: auto;
+    border-radius: 8px;
+    background: var(--muted);
+    font-size: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .flag-command .set-by-platform span {
+    color: var(--muted-foreground);
+  }
+
   .banner {
     padding: 10px 14px;
     margin-bottom: 16px;

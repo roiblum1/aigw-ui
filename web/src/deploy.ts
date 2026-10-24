@@ -254,3 +254,50 @@ export function fromPreset(values: Values | undefined): Values {
   delete out.deployment;
   return out;
 }
+
+/** A line of the vLLM command: a flag with its values, and who wrote it. */
+export interface CommandLine {
+  text: string;
+  source: string;
+  fixed: boolean;
+}
+
+/** A word as a shell would need it to stay one word. */
+function shellWord(word: string): string {
+  return /[\s"'{}$`\\]/.test(word) ? `'${word.replaceAll("'", `'\\''`)}'` : word;
+}
+
+/** The command vLLM gets, one line per flag with its values, the model first. */
+export function commandLines(args: { text: string; source: string; fixed?: boolean }[]): CommandLine[] {
+  const out: CommandLine[] = [];
+  for (const a of args) {
+    const flag = a.text.startsWith("-") && !/^-\d/.test(a.text);
+    const last = out[out.length - 1];
+    if (!flag && last && last.text.startsWith("-") && last.source === a.source) {
+      last.text += " " + shellWord(a.text);
+    } else {
+      out.push({ text: (out.length === 0 ? "vllm serve " : "") + shellWord(a.text), source: a.source, fixed: !!a.fixed });
+    }
+  }
+  return out;
+}
+
+/** A deployment's flag check as a badge: its words, its colour and why. */
+export function flagBadge(f: { vllm: string; exact: boolean; errors: number; warnings: number } | undefined): {
+  label: string;
+  className: string;
+  title: string;
+} {
+  if (!f || !f.vllm) return { label: "flags not checked", className: "idle", title: "The hub has no vLLM flag list." };
+  const warned = f.warnings === 1 ? "1 warning" : `${f.warnings} warnings`;
+  if (f.errors > 0)
+    return { label: `vLLM ${f.vllm}: ${f.errors} to fix`, className: "error", title: "Its vLLM command would not start as git holds it: Edit shows why." };
+  if (!f.exact)
+    return {
+      label: "vLLM version unknown",
+      className: "idle",
+      title: `The image does not say its vLLM version: checked against vLLM ${f.vllm}'s flags, as warnings (${warned}).`,
+    };
+  if (f.warnings > 0) return { label: `vLLM ${f.vllm}: ${warned}`, className: "pending", title: "Edit shows them." };
+  return { label: `vLLM ${f.vllm}`, className: "synced", title: "Its flags are vLLM's, and their values and combinations pass vLLM's checks." };
+}

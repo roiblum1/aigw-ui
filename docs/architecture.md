@@ -973,6 +973,62 @@ flag in `llmisvc.args` and `llmisvc.extraArgs` one plain token or
 `--kv-transfer-config`, `--max-model-len` in one place, no
 `VLLM_ADDITIONAL_ARGS`. The chart checks the same at render.
 
+**The vLLM check** (0.36.0; `internal/vllmflags`, `gitops.CheckFlags`).
+KServe hands the arguments to vLLM unread: a flag vLLM does not have stops
+the pod only when it starts, minutes after Argo CD synced, and a flag set
+twice is taken from the last place without a word (vLLM only warns of
+dotted keys). Before every save, and on the page as the form changes, the
+hub:
+
+1. builds the pods' command word by word as vLLM gets it
+   (`gitops.LaunchOf`): KServe's launcher (`kserve-config-llm-template`;
+   multi-node, `kserve-config-llm-worker-data-parallel` for the leader and
+   the workers), then the chart's arguments (data parallel over ports,
+   `llmisvc.extraArgs`, `llmisvc.args` with bash's quotes removed,
+   `--max-model-len` from `model.maxModelLen`, LMCache's connector);
+2. reads it as `vllm serve` does against the flag list of the image's vLLM
+   version: vLLM's own rewriting (underscores, `-O3`, dotted keys merged
+   into one JSON value) and argparse's rules (exact flags, `--flag=value`,
+   a unique abbreviation, how many values each flag takes, each value's
+   type and choices, the keys of a JSON config);
+3. applies the checks vLLM runs before it loads a model: the serve checks
+   (`validate_parsed_serve_args`, with the data-parallel-over-ports rules),
+   the data-parallel launch checks, `ParallelConfig` and `SchedulerConfig`,
+   and the configs built when the engine starts (`--speculative-config`);
+4. adds the hub's own rules: a flag set twice (refused; KServe's
+   `--shutdown-timeout` and access-log flags may be changed, with a
+   warning), the GPUs a pod asks for against tensor × pipeline ×
+   prefill-context parallel × the data-parallel ranks in the pod (fewer is
+   refused, more a warning), `parallelism.data` a multiple of `dataLocal`,
+   and warnings when `--enable-prompt-tokens-details` or
+   `--enable-force-include-usage` is off (the prices count on them).
+
+An error refuses the save (400 with the checks); a recipe edit is checked on
+every cluster that runs the model, with each cluster's own layer. The
+deployments list carries each deployment's check in short, so a file
+edited by hand in git shows its problems too.
+
+**The flag lists** (`internal/vllmflags/catalogs/vllm-<version>.json`; in
+0.36.0 vLLM 0.32.0) are written by vLLM's own parser inside an image of the
+version (`hack/vllm-flags.sh <image>` runs `hack/vllm-flags.py` there,
+without network): every option, its value type, choices, default and
+deprecation, and the keys of the JSON configs. The flags are the Python
+package's, the same in the CUDA and the CPU builds. An image uses the list
+of its own version when a list was written from it, or when it is a
+`vllm*` repository (not under `lmcache/`) tagged `vX.Y.Z` with a list for
+X.Y.Z. Any other image (an LMCache build, whose tag is LMCache's version; a
+digest; KServe's default image when `images.vllm` is empty) is checked
+against the newest list, and every finding is then a warning.
+`TestVerdictsMatchVLLM` holds the hub to vLLM's own verdicts (written by the
+same script in the image) on 72 argument lists: production's commands, the
+three shapes, and each kind of mistake.
+
+**What the check does not know**: KServe's TLS flags (its global
+`EnableTLS`); what the model rules out (a dense model with external data
+parallel, a length above the model's, a tensor parallel that does not
+divide its heads); values vLLM picks per GPU when a flag is left out (only
+values given are compared).
+
 **Status.** Two sources, each optional: Argo CD's Application of the
 deployment (`ARGOCD_APP_NAME`, read with get/list in `ARGOCD_NAMESPACE`,
 cached 10 s), and what discovery last saw of its LLMInferenceService
@@ -995,6 +1051,9 @@ LeaderWorkerSet) with RoCE (`llmisvc.roce`), and its own flags
 - Deployments (0.35.0): the GPU shapes of `model-deployer` (data parallel
   over ports, tensor parallel, multi-node over RoCE, LMCache) were rendered
   and compared with the old charts, not run on GPUs.
+- The vLLM check (0.36.0): its verdicts match vLLM 0.32.0's in the CPU image;
+  the GPU shapes' commands were compared with KServe's render on the
+  exported site, not started on GPUs.
 
 **Run on a gateway.** On OpenShift 4.22 with Envoy Gateway 1.9.1 and Envoy
 AI Gateway 1.1.0, one site, a model added by hand:

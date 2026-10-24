@@ -223,8 +223,10 @@ different revisions of the model, or take different request lengths.
 The models on the clusters, deployed by Argo CD from git. Two tables:
 
 - **On the clusters**: each model on each cluster, what it runs on
-  (replicas × GPUs, data/tensor/expert parallel, RoCE, LMCache), what this
-  cluster sets itself, Argo CD's sync and health, and its ready replicas.
+  (replicas × GPUs, data/tensor/expert parallel, RoCE, LMCache) and its vLLM
+  check (`vLLM 0.32.0`, problems to fix, or `vLLM version unknown`), what
+  this cluster sets itself, Argo CD's sync and health, and its ready
+  replicas.
 - **Models**: each model's recipe, its chart, and the clusters it runs on.
 
 **Run a model on another cluster in another shape.** Deploy a model,
@@ -248,6 +250,18 @@ cluster whose own file sets a value keeps it.
 operator name (its directory and Application) and a namespace; its object
 names (SCC, storage, LMCache engine) are renamed after it. Plan its disks
 with the site: two models on the same nodes need their own volume names.
+
+**The vLLM check.** Under the flags, the form shows what vLLM would make of
+the command the pods will run, about half a second after each change:
+"vLLM takes it", or each problem with where it came from. A misspelt flag
+names the nearest one; a value vLLM refuses, a combination it stops on
+(data-parallel sizes, EPLB without expert parallel, batched tokens below
+the length with chunked prefill off), a flag set twice (the recipe's
+`llmisvc.args` win over this shape's flags), fewer GPUs than tensor × ranks.
+"The command vLLM gets" lists every word, KServe's and the chart's in grey.
+A recipe edit is checked on each cluster that runs the model. A save with an
+error is refused. "vLLM version unknown": the image does not say its
+version, and the findings are only warnings.
 
 **The scheduler (llm-d).** In the form's Scheduler section: the weight of
 each scorer of the endpoint picker's default profile, flow control (requests

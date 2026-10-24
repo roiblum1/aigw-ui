@@ -228,3 +228,75 @@ func TestDeploymentsInGit(t *testing.T) {
 		t.Fatalf("off create: %d", w.Code)
 	}
 }
+
+// The vLLM command is checked before anything is committed: the check
+// route answers what a save would find, a save with an error is refused
+// with the checks (nothing committed), and a recipe edit is checked on each
+// cluster that runs the model, with the cluster's own layer.
+func TestFlagsAreCheckedBeforeASave(t *testing.T) {
+	root := t.TempDir()
+	for path, content := range map[string]string{
+		"operators/qwen-tiny/qwen-tiny.yaml": "name: qwen-tiny\nprojectNamespace: vllm-lab\n",
+		"operators/qwen-tiny/values.yaml": "namespace: vllm-lab\nimages:\n  vllm: docker.io/vllm/vllm-openai-cpu:v0.32.0\n" +
+			"model:\n  name: qwen-tiny\n  uri: hf://Qwen/Qwen2.5-0.5B-Instruct\nllmisvc:\n  args: [--enable-prompt-tokens-details, --enable-force-include-usage]\n",
+		"sites/site-lab/lab/mces/mce-lab/lab/qwen-tiny/values.yaml": "llmisvc:\n  extraArgs: [--max-num-seqs=8]\n",
+	} {
+		os.MkdirAll(filepath.Join(root, filepath.Dir(path)), 0o755)
+		os.WriteFile(filepath.Join(root, path), []byte(content), 0o644)
+	}
+	repo := &dirRepo{root: root}
+	s := (&Server{}).WithGitOps(repo, nil, "")
+	snap, err := repo.Read(context.Background())
+	if err != nil || len(snap.Deployments) != 1 {
+		t.Fatalf("snapshot: %v %+v", err, snap.Deployments)
+	}
+	values := snap.Deployments[0].Values
+	llmisvc := values["llmisvc"].(map[string]any)
+	llmisvc["extraArgs"] = []any{"--max-num-seqs=8", "--enable-prefix-cache"}
+	body, _ := json.Marshal(map[string]any{"cluster": "lab", "model": "qwen-tiny", "values": values, "revision": snap.Deployments[0].Revision})
+
+	type answer struct {
+		Error  string                `json:"error"`
+		Checks []gitops.ClusterCheck `json:"checks"`
+	}
+	call := func(h http.HandlerFunc, method, path string, body []byte, pathValues ...string) (int, answer) {
+		t.Helper()
+		r := httptest.NewRequest(method, path, strings.NewReader(string(body)))
+		for i := 0; i+1 < len(pathValues); i += 2 {
+			r.SetPathValue(pathValues[i], pathValues[i+1])
+		}
+		w := httptest.NewRecorder()
+		h(w, r)
+		var a answer
+		json.Unmarshal(w.Body.Bytes(), &a)
+		return w.Code, a
+	}
+
+	check, _ := json.Marshal(map[string]any{"cluster": "lab", "model": "qwen-tiny", "values": values})
+	code, a := call(s.checkGitOps, http.MethodPost, "/api/v1/gitops/check", check)
+	if code != 200 || len(a.Checks) != 1 || len(a.Checks[0].Errors()) != 1 || !a.Checks[0].Exact || a.Checks[0].Command[0].Text != "/mnt/models" {
+		t.Fatalf("check: %d %+v", code, a)
+	}
+	if p := a.Checks[0].Errors()[0]; p.Source != "llmisvc.extraArgs" || !strings.Contains(p.Message, "did you mean --enable-prefix-caching?") {
+		t.Fatalf("problem: %+v", p)
+	}
+
+	code, a = call(s.updateDeployment, http.MethodPut, "/api/v1/gitops/deployments/lab/qwen-tiny", body, "cluster", "lab", "model", "qwen-tiny")
+	if code != 400 || !strings.HasPrefix(a.Error, "the vLLM command would not start: --enable-prefix-cache is not a flag") || len(a.Checks) != 1 || len(repo.messages) != 0 {
+		t.Fatalf("save: %d %+v, commits %v", code, a, repo.messages)
+	}
+
+	// The recipe sets --max-num-seqs too: on the lab its value wins over the
+	// cluster's (llmisvc.args comes after llmisvc.extraArgs).
+	recipe := snap.Models[0].Values
+	recipe["llmisvc"] = map[string]any{"args": []any{"--enable-prompt-tokens-details", "--enable-force-include-usage", "--max-num-seqs=64"}}
+	rbody, _ := json.Marshal(map[string]any{"values": recipe, "revision": snap.Models[0].Revision})
+	code, a = call(s.updateRecipe, http.MethodPut, "/api/v1/gitops/models/qwen-tiny", rbody, "model", "qwen-tiny")
+	if code != 400 || !strings.Contains(a.Error, "--max-num-seqs is set twice") || !strings.Contains(a.Error, "on lab") || len(repo.messages) != 0 {
+		t.Fatalf("recipe: %d %+v", code, a)
+	}
+	cbody, _ := json.Marshal(map[string]any{"model": "qwen-tiny", "recipe": true, "values": recipe})
+	if code, a = call(s.checkGitOps, http.MethodPost, "/api/v1/gitops/check", cbody); code != 200 || len(a.Checks) != 1 || a.Checks[0].Cluster != "lab" || len(a.Checks[0].Errors()) != 1 {
+		t.Fatalf("recipe check: %d %+v", code, a)
+	}
+}

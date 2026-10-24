@@ -153,6 +153,7 @@ func (s *Server) Handler() http.Handler {
 
 	api.HandleFunc("GET /api/v1/gitops", s.getGitOps)
 	api.HandleFunc("GET /api/v1/gitops/base", s.getGitOpsBase)
+	api.HandleFunc("POST /api/v1/gitops/check", s.checkGitOps)
 	api.HandleFunc("POST /api/v1/gitops/deployments", s.createDeployment)
 	api.HandleFunc("PUT /api/v1/gitops/deployments/{cluster}/{model}", s.updateDeployment)
 	api.HandleFunc("DELETE /api/v1/gitops/deployments/{cluster}/{model}", s.deleteDeployment)

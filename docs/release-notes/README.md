@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.36.0](v0.36.0.md) | not released yet | The Deployments page checks the vLLM command before it commits: the command KServe and the chart build, read as vLLM 0.32.0 reads it (its flags, values and combinations), a flag set twice and the GPUs a pod asks for; a save with an error is refused |
 | [0.35.0](v0.35.0.md) | 2026-10-24 | The hub deploys the models: a Deployments page writes the Argo CD platform's values files, a recipe per model and a shape per cluster, and one chart, `model-deployer`, deploys every model |
 | [0.34.0](v0.34.0.md) | 2026-10-21 | A personal key works while the gateways still take API keys; one line from the hub sets up Claude Code with the person's models and Oh My Pi, whose extension adds them; the hub reads each model server's own length; `config.gatewayURL` is the gateway's root, and an address ending in `/anthropic` or `/v1` is taken |
 | [0.33.0](v0.33.0.md) | 2026-10-19 | People set up Claude Code from the tenants' page with files the hub serves, so it works with no internet; an admin can show a token again; a capacity measurement of a model with no declared length is scaled to it instead of refused; the market search finds "Qwen 3.8" |

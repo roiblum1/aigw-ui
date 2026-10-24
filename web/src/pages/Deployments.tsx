@@ -1,11 +1,13 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Boxes, Plus, Rocket } from "lucide-react";
-import { api, type GitDeployment, type GitModel, type GitOps } from "../api";
+import { api, type FlagCheck, type GitDeployment, type GitModel, type GitOps } from "../api";
 import { Empty, ErrorBanner, Field, FormModal, PageHeader, formatTime, useAction, useLoad, usePolling } from "../components";
 import {
   argProblem,
   argsToText,
+  commandLines,
   envToText,
+  flagBadge,
   getIn,
   gpusOf,
   numberOrEmpty,
@@ -128,6 +130,7 @@ export default function Deployments() {
                         <div className="detail mono clamp" title={weights(d.values)}>
                           {weights(d.values)}
                         </div>
+                        <FlagBadge d={d} />
                       </td>
                       <td className="narrow">
                         <OwnValues layer={d.override} />
@@ -206,6 +209,7 @@ export default function Deployments() {
           title={`${dialog.d.model_name} on ${dialog.d.cluster}`}
           submitLabel="Commit the change"
           start={dialog.d.values}
+          check={(values) => checkFlags({ model: dialog.d.model, cluster: dialog.d.cluster, values })}
           note={`Saved into ${dialog.d.path} as what differs from the layers below (${dialog.d.layers.slice(0, -1).join(", ") || "none"}). The recipe stays as it is.`}
           onClose={() => setDialog(null)}
           onSubmit={async (values) => {
@@ -219,6 +223,7 @@ export default function Deployments() {
           title={`Recipe of ${dialog.m.model_name}`}
           submitLabel="Commit the recipe"
           start={dialog.m.values}
+          check={(values) => checkFlags({ model: dialog.m.name, values, recipe: true })}
           note={`operators/${dialog.m.name}/values.yaml: the first layer on every cluster that runs it (${
             data.deployments
               .filter((d) => d.model === dialog.m.name)
@@ -246,6 +251,88 @@ function OwnValues({ layer }: { layer: Record<string, unknown> }) {
       {keys.length > 4 && ` and ${keys.length - 4} more`}
     </div>
   );
+}
+
+function FlagBadge({ d }: { d: GitDeployment }) {
+  const b = flagBadge(d.flags);
+  return (
+    <div>
+      <span className={`badge ${b.className}`} title={b.title}>
+        {b.label}
+      </span>
+    </div>
+  );
+}
+
+/** Each check's findings, then the command it read. */
+function FlagChecks({ state }: { state: { list: FlagCheck[]; error: string } | null }) {
+  if (!state) return <p className="muted">Checking the vLLM command…</p>;
+  if (state.error) return <div className="warn-text">The check could not run: {state.error}</div>;
+  return (
+    <div className="flag-checks">
+      {state.list.map((c) => (
+        <FlagCheckView key={c.cluster || "alone"} c={c} many={state.list.length > 1 || !!c.cluster} />
+      ))}
+    </div>
+  );
+}
+
+function FlagCheckView({ c, many }: { c: FlagCheck; many: boolean }) {
+  const errors = c.problems.filter((p) => p.level === "error");
+  const warnings = c.problems.filter((p) => p.level === "warning");
+  const command = (args: FlagCheck["command"]) => (
+    <pre className="flag-command">
+      {commandLines(args).map((l, i) => (
+        <div key={i} className={l.fixed ? "set-by-platform" : ""}>
+          <span>{l.text}</span>
+          <small>{l.source}</small>
+        </div>
+      ))}
+    </pre>
+  );
+  return (
+    <div className="flag-check">
+      <div className="flag-check-head">
+        {many && <span className="strong">{c.cluster ? `On ${c.cluster}` : "The recipe alone"}</span>}
+        {errors.length > 0 ? (
+          <span className="badge error">{errors.length === 1 ? "1 to fix" : `${errors.length} to fix`}</span>
+        ) : (
+          <span className="badge synced">{c.exact ? "vLLM takes it" : "no error known"}</span>
+        )}
+        {warnings.length > 0 && <span className="badge pending">{warnings.length === 1 ? "1 warning" : `${warnings.length} warnings`}</span>}
+        <span className="detail">
+          {c.exact ? `vLLM ${c.vllm}'s own flags` : `vLLM ${c.vllm}'s flags, as warnings: ${c.note}`}
+        </span>
+      </div>
+      {c.problems.length > 0 && (
+        <ul className="flag-problems">
+          {[...errors, ...warnings].map((p, i) => (
+            <li key={i} className={p.level}>
+              {p.message}
+              <small>
+                {p.origin === "vllm" ? "vLLM would stop" : "aigw-ui"}
+                {p.source ? ` · ${p.source}` : ""}
+              </small>
+            </li>
+          ))}
+        </ul>
+      )}
+      <details>
+        <summary>{c.worker ? "The leader's command" : "The command vLLM gets"}</summary>
+        {command(c.command)}
+      </details>
+      {c.worker && (
+        <details>
+          <summary>The workers' command</summary>
+          {command(c.worker)}
+        </details>
+      )}
+    </div>
+  );
+}
+
+function checkFlags(b: Parameters<typeof api.checkFlags>[0]): Promise<FlagCheck[]> {
+  return api.checkFlags(b).then((r) => r.checks);
 }
 
 function badgeOf(state: string): string {
@@ -340,6 +427,7 @@ function DeployDialog(props: { gitops: GitOps; onClose: () => void; onSaved: (m:
       title="Deploy a model"
       submitLabel="Commit and deploy"
       start={start?.key === key ? start.values : null}
+      check={(values) => checkFlags({ model, cluster: chosen, values })}
       note={`Registers ${model || "the model"} on ${chosen || "the cluster"}: the directory ${
         gitops.clusters.find((c) => c.name === chosen)?.path ?? "sites/…"
       }/${model}/ with what you change below as the cluster's own values. The form starts from the recipe and the site's layers.`}
@@ -391,6 +479,7 @@ function NewModelDialog(props: { gitops: GitOps; onClose: () => void; onSaved: (
       title="New model"
       submitLabel={cluster ? "Commit and deploy" : "Commit the model"}
       start={source ? setIn(source.values, "namespace", undefined) : null}
+      check={(values) => checkFlags({ model: name || "(new)", cluster: cluster || undefined, values: setIn(values, "namespace", ns), recipe: true })}
       note={`Adds operators/${name || "<name>"}/: an app config copied from ${from}'s (chart, sync options) and the recipe below. Object names that start with ${from} (SCC, StorageClass, PVCs, LMCache engine) start with ${name || "the new name"} instead, so the two models never share them.`}
       onClose={props.onClose}
       onSubmit={async (values) => {
@@ -440,10 +529,32 @@ function FormDialog(props: {
   start: Values | null;
   note: string;
   head?: ReactNode;
+  /** How the hub checks the vLLM command these values make. */
+  check?: (values: Values) => Promise<FlagCheck[]>;
   onClose: () => void;
   onSubmit: (values: Values) => Promise<void>;
 }) {
   const [values, setValues] = useState<Values>(props.start ?? {});
+  const [checks, setChecks] = useState<{ list: FlagCheck[]; error: string } | null>(null);
+  // The latest check function: the parent makes a new one on every render
+  // (it polls), and a new one alone is no reason to check again.
+  const checkRef = useRef(props.check);
+  checkRef.current = props.check;
+  const loaded = !!props.start;
+  useEffect(() => {
+    const check = checkRef.current;
+    if (!loaded || !check) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      check(values)
+        .then((list) => live && setChecks({ list, error: "" }))
+        .catch((e: unknown) => live && setChecks({ list: [], error: e instanceof Error ? e.message : String(e) }));
+    }, 400);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [values, loaded]);
   const [argsText, setArgsText] = useState(() => argsToText(getIn(values, "llmisvc.args")));
   const [envText, setEnvText] = useState(() => envToText(getIn(values, "llmisvc.env")));
   const [lmArgsText, setLmArgsText] = useState(() => argsToText(getIn(values, "lmcache.extraArgs")));
@@ -578,6 +689,16 @@ function FormDialog(props: {
             />
           </Field>
           {argProblems.length > 0 && <div className="warn-text">{argProblems.join("; ")}</div>}
+          {props.check && (
+            <>
+              <h3>vLLM check</h3>
+              <p className="hint">
+                The command the pods will run, read the way vLLM reads it: flags this vLLM does not have, values it refuses,
+                combinations it stops on, and a flag set twice. A save with an error is refused.
+              </p>
+              <FlagChecks state={checks} />
+            </>
+          )}
           <Field label="vLLM environment" hint="NAME=value, one per line.">
             <textarea
               className="mono"
