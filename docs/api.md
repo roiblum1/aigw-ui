@@ -137,7 +137,12 @@ Request bodies are never stored.
 | GET | `/usage/history?step=day&days=30` | What every tenant used of every model per day or hour |
 | GET | `/my/usage` | A tenant's own budgets, usage, prices, requests and tokens, and `gateway_url` (`config.gatewayURL` without an API's path, `""` when not set). Takes one of the tenant's API keys as the bearer token, not the admin token |
 | GET | `/my/models` | What the tenant's clients are set up with (0.34.0): the gateway's addresses, the models it may call and Claude Code's two models; see [A tenant's clients](#a-tenants-clients). Takes one of the tenant's keys, as `/my/usage` |
-| POST | `/token` | | A token for a personal key, which a user's helper asks for: `{"token": "eyJ...", "expires_at", "expires_in"}` (seconds), signed with the tenant's budget and models as they are now; `Cache-Control: no-store`. While the gateways take API keys too, it is the key's stored token, the same until a new one is signed at half its life and has had two minutes to reach the gateways (see [security](security.md)); a renewal that stores one queues a sync (`key.renew` in the task log). Takes the personal key as the bearer token, not the admin token. 401 for a key that is unknown, revoked or of a disabled tenant; 429 after ten wrong keys from one address in a minute |
+| POST | `/token` | | A token for a personal key, which a user's helper asks for: `{"token": "eyJ...", "expires_at", "expires_in", "clients_version"}` (`expires_in` in seconds; `clients_version` from 0.36.1, see [Client files](#client-files)), signed with the tenant's budget and models as they are now; `Cache-Control: no-store`. While the gateways take API keys too, it is the key's stored token, the same until a new one is signed at half its life and has had two minutes to reach the gateways (see [security](security.md)); a renewal that stores one queues a sync (`key.renew` in the task log). Takes the personal key as the bearer token, not the admin token. 401 for a key that is unknown, revoked or of a disabled tenant; 429 after ten wrong keys from one address in a minute |
+| GET | `/my/key` | A person who signed in with OpenShift (0.37.0): `{"key": {...} \| null, "user"}`, their live personal key in the team, without its secret. 403 for a key sign-in |
+| POST | `/my/key` | Makes the person a personal key in the team (`owner` = their user name), revoking the one they had there; `{"key", "secret"}`, shown once, `Cache-Control: no-store`. Needs `X-Aigw-Team` |
+| GET | `/my/people?days=7` | What every key of the team used over the last 1 to 90 days: `{"from", "days", "keys": [{"key_id", "name", "owner", "kind", "revoked_at", "me", "models": [...], "totals": {"requests", "input_tokens", "cached_tokens", "output_tokens"}}]}`: every live key, and each revoked one that used something. Only for a person who signed in with OpenShift |
+| GET | `/sso` | Outside the admin routes: `{"enabled", "user", "teams": [{"id", "slug", "display_name"}], "error"?}`: whether the sign-in with OpenShift is on, and who is signed in with the tenants of their groups |
+| POST | `/sso/logout` | Ends the session (204) |
 | POST | `/tenants/{id}/quotas/{model_id}/reset` | `{"counters": 1, "deleted": 1}`. The tenant's usage on that model is back to zero |
 | POST | `/tenants/{id}/budget/reset` | `{"counters": 1, "deleted": 1}`. The tenant's use of its budget across models is back to zero for the running period; 404 without a budget applied to a cluster |
 
@@ -216,10 +221,22 @@ any other name.
 
 | Name | Is |
 |---|---|
-| `install.sh` | The installer `/my-usage` shows: `curl -fsSL <hub>/clients/install.sh \| sh -s -- <hub>`. It takes the gateway's address and the models from `GET /my/models`; an address given after the hub's is used instead |
-| `aigw-token` | Claude Code's `apiKeyHelper` for personal keys |
+| `install.sh` | The installer `/my-usage` shows for macOS, Linux and WSL: `curl -fsSL <hub>/clients/install.sh \| sh -s -- <hub>`. It takes the gateway's address and the models from `GET /my/models`; an address given after the hub's is used instead. In Git Bash, MSYS2 or Cygwin it stops and gives the PowerShell line; in WSL it leaves out Windows' own programs under `/mnt/<drive>/` |
+| `install.ps1` | The same for Windows, in PowerShell (0.36.1): `iex "& { $(irm <hub>/clients/install.ps1) } <hub>"`. Windows PowerShell 5.1 or PowerShell 7 |
+| `aigw-token` | Claude Code's `apiKeyHelper` for personal keys (`sh` and `curl`) |
+| `aigw-token.ps1` | The same in PowerShell, for Windows (0.36.1): `install.ps1` puts it in `%USERPROFILE%\.local\share\aigw` and gives Claude Code and omp `powershell.exe -File` for it |
 | `claude-code.tar.gz` | The `aigw-usage` plugin as a marketplace: `.claude-plugin/marketplace.json` (marketplace `aigw`) and `aigw-usage/`; unpack it and `claude plugin marketplace add <dir>` |
 | `aigw-usage.ts` | The Oh My Pi extension: it adds the tenant's models from `GET /my/models` as the provider `aigw`, and shows the budget |
+
+**Updates (0.36.1).** `clients_version`, in the answers of `POST /token`
+and `GET /my/models`, is the first 12 hex digits of a SHA-256 over these
+files and the plugin's archive (`clients.Version`). The installer keeps the
+version it installed in `~/.config/aigw/clients`; when a token's answer
+names another, or a week after the last setup, `aigw-token` runs the
+installer again from the hub in the background (`AIGW_UPDATE=1`), so a hub
+upgrade reaches every machine set up by the installer within about 10
+minutes of its next use of Claude Code or omp. A hub upgrade that changes
+no client file changes no version and moves nobody.
 
 ### A tenant's clients
 
@@ -237,7 +254,8 @@ person's personal key.
     {"name": "GLM5.3", "context_window": 131072,
      "prices": {"input": 0.6, "cached": 0.11, "output": 2.2}},
     {"name": "Qwen3.8-27B", "context_window": 0, "prices": null}
-  ]
+  ],
+  "clients_version": "3f9c2a71b0de"
 }
 ```
 
@@ -255,6 +273,23 @@ person's personal key.
   tenant may call them. Otherwise it is the tenant's priciest model (by
   output price, then input price) and its cheapest; models without prices
   come last, then by name. `null` when the tenant may call no model.
+- `clients_version` (0.36.1) names the client files this hub serves; see
+  [Client files](#client-files).
+
+### Signing in with OpenShift
+
+With `sso.enabled` (0.37.0) the tenants' page offers **Sign in with
+OpenShift**. `GET /sso/login` sends the browser to the hub cluster's OAuth
+server for the scope `user:info` (with PKCE where offered); `GET
+/sso/callback` takes the code back, finds the user (`users/~`) and sets the
+session cookie `aigw-session` (12 hours). Both are outside `/api/v1`. A
+failed sign-in comes back to `/my-usage?sso_error=<reason>`.
+
+With the session and no `Authorization` header, `GET /my/usage`, `/my/models`,
+`/my/key` and `/my/people` answer for one of the enabled tenants linked to
+the person's Groups: the one `X-Aigw-Team: <slug>` names, or their only
+one. 401 without a session; 403 for a tenant not among theirs (or none);
+503 while the hub has not read the Groups yet.
 
 ### A tenant's own usage
 
@@ -556,9 +591,11 @@ why).
 | Method | Path | Body | Result |
 |---|---|---|---|
 | GET | `/tenants` | | List with key and quota counts; `api_key_count` is how many of the keys are API keys rather than tokens; `budget` is the tenant's budget across models (`{"credits", "window"}`) or `null`; `models` the IDs of the models it may call, or `null` for every model; `limits_changed_at` when either last changed, or `null`: a token created before carries the ones from before |
-| POST | `/tenants` | `{"slug", "display_name"}` | Created tenant |
-| GET | `/tenants/{id}` | | `{"tenant", "keys", "quotas"}` |
-| PUT | `/tenants/{id}` | `{"display_name", "enabled"}` | Updated tenant |
+| POST | `/tenants` | `{"slug", "display_name", "sso_group"?}` | Created tenant. `sso_group` (0.37.0) links it to an OpenShift Group, synced from LDAP, whose members sign in for it; optional, unique (409 for one linked to another tenant) |
+| GET | `/tenants/{id}` | | `{"tenant", "keys", "quotas"}`. A tenant has `sso_group` (`""` for none); a key has `owner`, the OpenShift user who made it by signing in (`""` for an admin's) |
+| PUT | `/tenants/{id}` | `{"display_name", "enabled", "sso_group"?}` | Updated tenant. `sso_group` left out keeps the link; `""` removes it |
+| GET | `/tenants/{id}/key-usage?days=7` | | What each key of the tenant used, as `/my/people` answers (0.37.0) |
+| GET | `/sso/groups` | | `{"enabled", "groups", "read_at", "error"?}`: the hub cluster's Groups as last read, for linking a tenant |
 | PUT | `/tenants/{id}/budget` | `{"credits", "window"}`, or `{"credits": null}` to remove it | The tenant. One budget in credits across every model with prices, enforced by the gateways for the tokens signed from now on: a token carries the budget of its time. 409 while the gateways take API keys too, and while the tenant has quotas of its own on any model; the message names those models |
 | PUT | `/tenants/{id}/models` | `{"models": ["<model id>", ...]}`, or `{"models": null}` for every model | The tenant. Any other model is refused (403) for the tokens signed from now on, which carry the list; an empty list refuses every model. 409 while the gateways take API keys too, and when the list leaves out a model the tenant has a quota on; the message names those models |
 | DELETE | `/tenants/{id}` | | 204 |

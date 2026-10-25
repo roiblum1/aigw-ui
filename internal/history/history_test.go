@@ -22,7 +22,9 @@ type fake struct {
 	legacy   map[store.UsageKey]store.UsageCursor
 	hours    map[time.Time][2]int64
 	tokens   map[time.Time]store.TokenDelta
-	down     error
+	// byKey is what was recorded for each key, by "<key>@<hour>".
+	byKey map[string]store.TokenDelta
+	down  error
 }
 
 var key = store.UsageKey{TenantID: "team-a", ModelID: "glm"}
@@ -61,6 +63,16 @@ func (f *fake) RecordUsage(_ context.Context, look func(store.Before) (store.Loo
 		f.hours[d.Hour] = [2]int64{h[0] + d.Used, h[1] + d.BestEffort}
 	}
 	for _, d := range found.Tokens {
+		if d.KeyID != "" {
+			if f.byKey == nil {
+				f.byKey = map[string]store.TokenDelta{}
+			}
+			k := d.KeyID + "@" + d.Hour.Format("15:04")
+			h := f.byKey[k]
+			h.Requests, h.Input, h.Cached, h.Output = h.Requests+d.Requests, h.Input+d.Input, h.Cached+d.Cached, h.Output+d.Output
+			f.byKey[k] = h
+			continue
+		}
 		h := f.tokens[d.Hour]
 		h.Requests, h.Input, h.Cached, h.Output = h.Requests+d.Requests, h.Input+d.Input, h.Cached+d.Cached, h.Output+d.Output
 		f.tokens[d.Hour] = h
@@ -261,6 +273,39 @@ func TestTickRecordsTokens(t *testing.T) {
 	}
 	if len(f.hours) != 0 {
 		t.Errorf("tokens in the usage history: %v", f.hours)
+	}
+}
+
+// A key's counters are followed beside its tenant's, each by its own key,
+// and what they counted is recorded for the key (key_token_hours), not
+// added to the tenant's.
+func TestTickRecordsEachKey(t *testing.T) {
+	f, s := setup("1h")
+	alice := store.UsageKey{TenantID: key.TenantID, ModelID: key.ModelID, KeyID: "alice"}
+	f.counters = func(now time.Time) []usage.HistoryCounter {
+		start := render.WindowStart("1h", now).Unix()
+		return []usage.HistoryCounter{
+			{Key: fmt.Sprintf("tenant-requests-%d", start), UsageKey: key, Kind: string(render.TokenRequests), Window: "1h"},
+			{Key: fmt.Sprintf("alice-requests-%d", start), UsageKey: alice, Kind: string(render.TokenRequests), Window: "1h"},
+			{Key: fmt.Sprintf("alice-output-%d", start), UsageKey: alice, Kind: string(render.TokenOutput), Window: "1h"},
+		}
+	}
+	nine := at("09:00").Unix()
+	f.redis[fmt.Sprintf("tenant-requests-%d", nine)] = 5
+	f.redis[fmt.Sprintf("alice-requests-%d", nine)] = 2
+	f.redis[fmt.Sprintf("alice-output-%d", nine)] = 30
+	tick(t, s, "09:20")
+	f.redis[fmt.Sprintf("alice-requests-%d", nine)] = 3
+	f.redis[fmt.Sprintf("alice-output-%d", nine)] = 45
+	tick(t, s, "09:40")
+	if got := f.tokens[at("09:00")]; got.Requests != 5 || got.Output != 0 {
+		t.Errorf("the tenant's hour = %+v", got)
+	}
+	if got := f.byKey["alice@09:00"]; got.Requests != 3 || got.Output != 45 {
+		t.Errorf("alice's hour = %+v", got)
+	}
+	if c := f.cursors[fmt.Sprintf("alice-output-%d", nine)]; c.KeyID != "alice" || c.Value != 45 {
+		t.Errorf("alice's cursor = %+v", c)
 	}
 }
 

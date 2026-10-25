@@ -37,6 +37,50 @@ func personalKeyHash(secret string) []byte {
 // too, the key gets its first token now, for the sync of this change to
 // list, so that the gateways take it by the time its owner signs in.
 func (s *Store) CreatePersonalKey(ctx context.Context, tenantID, name string) (APIKey, string, error) {
+	return s.createPersonalKey(ctx, tenantID, name, "")
+}
+
+// CreateOwnedPersonalKey makes the personal key a person makes for
+// themselves after signing in with OpenShift; owner is their user name, and
+// names the key too. Their live key in the tenant, if any, is revoked in the
+// same transaction: each person has one, and a new one replaces it.
+func (s *Store) CreateOwnedPersonalKey(ctx context.Context, tenantID, owner string) (APIKey, string, error) {
+	if owner == "" {
+		return APIKey{}, "", ErrNotFound
+	}
+	return s.createPersonalKey(ctx, tenantID, owner, owner)
+}
+
+// OwnedKey returns a person's live personal key in a tenant, or ErrNotFound.
+func (s *Store) OwnedKey(ctx context.Context, tenantID, owner string) (APIKey, error) {
+	k, err := scanKey(s.db.QueryRow(ctx, `SELECT `+keyColumns+` FROM api_keys WHERE tenant_id = $1 AND owner = $2 AND revoked_at IS NULL`, tenantID, owner))
+	return k, mapErr(err)
+}
+
+// OwnedKeyInGroup is a live personal key a person made for themselves, with
+// the group of its tenant.
+type OwnedKeyInGroup struct {
+	Key        APIKey
+	TenantSlug string
+	Group      string
+}
+
+// OwnedKeysInGroups returns the live personal keys people made for
+// themselves in tenants linked to a group, for the look that revokes those
+// of people who left the group.
+func (s *Store) OwnedKeysInGroups(ctx context.Context) ([]OwnedKeyInGroup, error) {
+	return list(ctx, s, func(r scanner) (OwnedKeyInGroup, error) {
+		var o OwnedKeyInGroup
+		k := &o.Key
+		err := r.Scan(&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt, &k.Kind, &k.ExpiresAt, &k.RenewedAt, &k.Owner,
+			&o.TenantSlug, &o.Group)
+		return o, err
+	}, `SELECT k.id, k.tenant_id, k.name, k.client_id, k.key_prefix, k.revoked_at, k.created_at, k.kind, k.expires_at, k.renewed_at, k.owner,
+		       t.slug, t.sso_group FROM api_keys k JOIN tenants t ON t.id = k.tenant_id
+		WHERE k.owner IS NOT NULL AND k.revoked_at IS NULL AND t.sso_group IS NOT NULL ORDER BY t.slug, k.owner`)
+}
+
+func (s *Store) createPersonalKey(ctx context.Context, tenantID, name, owner string) (APIKey, string, error) {
 	t, err := s.GetTenant(ctx, tenantID)
 	if err != nil {
 		return APIKey{}, "", err
@@ -54,10 +98,18 @@ func (s *Store) CreatePersonalKey(ctx context.Context, tenantID, name string) (A
 	var k APIKey
 	err = pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
 		var err error
+		if owner != "" {
+			// The owner's key before this one: revoked, so its tokens are
+			// refused from now on (token_denials, by trigger).
+			if _, err := tx.Exec(ctx, `UPDATE api_keys SET revoked_at = now() WHERE tenant_id = $1 AND owner = $2 AND revoked_at IS NULL`,
+				tenantID, owner); err != nil {
+				return err
+			}
+		}
 		k, err = scanKey(tx.QueryRow(ctx,
-			`INSERT INTO api_keys (tenant_id, name, client_id, key_prefix, key_hash, kind, jti)
-			 VALUES ($1, $2, $3, $4, $5, 'personal', $6) RETURNING `+keyColumns,
-			tenantID, name, t.Slug+"."+jti, secret[len(secret)-keyPrefixLen:], personalKeyHash(secret), jti))
+			`INSERT INTO api_keys (tenant_id, name, client_id, key_prefix, key_hash, kind, jti, owner)
+			 VALUES ($1, $2, $3, $4, $5, 'personal', $6, nullif($7, '')) RETURNING `+keyColumns,
+			tenantID, name, t.Slug+"."+jti, secret[len(secret)-keyPrefixLen:], personalKeyHash(secret), jti, owner))
 		if err != nil {
 			return err
 		}

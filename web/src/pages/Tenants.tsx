@@ -15,6 +15,8 @@ import {
   usePolling,
   windowLabel,
 } from "../components";
+import { unixInstallLine, windowsInstallLine } from "../install";
+import { KeyUsageCard } from "../KeyUsage";
 import { TenantModelsCard } from "./TenantBudget";
 import TenantQuotas from "./TenantQuotas";
 import { REFRESH_MS } from "./Usage";
@@ -209,15 +211,28 @@ function expired(k: ApiKey): boolean {
   return k.kind === "token" && k.expires_at != null && new Date(k.expires_at).getTime() <= Date.now();
 }
 
+/** The cluster's Groups, offered when a tenant is linked to one. */
+function GroupOptions({ groups }: { groups: string[] }) {
+  return (
+    <datalist id="sso-groups">
+      {groups.map((g) => (
+        <option key={g} value={g} />
+      ))}
+    </datalist>
+  );
+}
+
 function TenantForm(props: { onClose: () => void; onCreated: (t: Tenant) => void }) {
   const [slug, setSlug] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [group, setGroup] = useState("");
+  const sso = useLoad(() => api.ssoGroups(), "sso-groups");
   return (
     <FormModal
       title="Add tenant"
       submitLabel="Add tenant"
       onClose={props.onClose}
-      onSubmit={async () => props.onCreated(await api.createTenant(slug, displayName))}
+      onSubmit={async () => props.onCreated(await api.createTenant(slug, displayName, group.trim()))}
     >
       <Field label="ID" hint="Lowercase letters, digits and dashes. It cannot be changed later.">
         <input
@@ -231,6 +246,15 @@ function TenantForm(props: { onClose: () => void; onCreated: (t: Tenant) => void
       <Field label="Display name">
         <input value={displayName} placeholder="Search team" onChange={(e) => setDisplayName(e.target.value)} />
       </Field>
+      {sso.data?.enabled && (
+        <Field
+          label="LDAP group (optional)"
+          hint="Its members sign in on /my-usage with OpenShift, make a personal key of their own and see each other's usage. Leave empty for a tenant that works by its keys alone."
+        >
+          <input list="sso-groups" value={group} placeholder="the OpenShift Group, e.g. data-science" onChange={(e) => setGroup(e.target.value)} />
+          <GroupOptions groups={sso.data.groups} />
+        </Field>
+      )}
     </FormModal>
   );
 }
@@ -246,12 +270,16 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
   const action = useAction();
   // A key just created, or one shown again (again: true).
   const [newKey, setNewKey] = useState<{ secret: string; key: ApiKey; again?: boolean } | null>(null);
-  // The line a person runs to set up their tools with a new personal key.
-  const installLine = `curl -fsSL ${window.location.origin}/clients/install.sh | sh -s -- ${window.location.origin}`;
+  // The lines a person runs to set up their tools with a new personal key:
+  // a Unix shell's, and PowerShell's for Windows.
+  const installLine = unixInstallLine(window.location.origin);
+  const windowsLine = windowsInstallLine(window.location.origin);
   const [keyName, setKeyName] = useState("");
   // Every hook comes before the return below: the first render, without
   // data, must call the same hooks as the next one.
   const [keyKind, setKeyKind] = useState<"personal" | "token">("personal");
+  const sso = useLoad(() => api.ssoGroups(), "sso-groups");
+  const [group, setGroup] = useState<string | null>(null);
 
   if (!data) {
     return (
@@ -307,6 +335,37 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
         </div>
       )}
 
+      {(sso.data?.enabled || tenant.sso_group) && (
+        <section className="card">
+          <h2>LDAP group</h2>
+          <p className="hint">
+            {tenant.sso_group
+              ? `The members of the OpenShift Group ${tenant.sso_group} (synced from LDAP) sign in for this tenant on /my-usage, make a personal key of their own and see each other's usage. Someone who leaves the group loses their key within a minute.`
+              : "None: the tenant works by its keys alone. Link it to an OpenShift Group (synced from LDAP) to let its members sign in on /my-usage, make a personal key of their own and see each other's usage."}
+          </p>
+          {sso.data?.enabled && tenant.sso_group && !sso.data.groups.includes(tenant.sso_group) && sso.data.read_at && (
+            <p className="banner warn">The cluster has no Group {tenant.sso_group}: nobody can sign in for this tenant, and no key is revoked.</p>
+          )}
+          {sso.data?.error && <p className="banner warn">{sso.data.error}</p>}
+          <form
+            className="inline-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              act(async () => {
+                await api.updateTenant(tenant.id, tenant.display_name, tenant.enabled, (group ?? tenant.sso_group).trim());
+                setGroup(null);
+              });
+            }}
+          >
+            <input list="sso-groups" value={group ?? tenant.sso_group} placeholder="no group" onChange={(e) => setGroup(e.target.value)} />
+            <GroupOptions groups={sso.data?.groups ?? []} />
+            <button type="submit" disabled={action.busy || group === null || group.trim() === tenant.sso_group}>
+              Save
+            </button>
+          </form>
+        </section>
+      )}
+
       <section className="card">
         <h2>Keys</h2>
         <p className="hint">
@@ -344,7 +403,10 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
             <tbody>
               {keys.map((k) => (
                 <tr key={k.id} className={k.revoked_at || expired(k) ? "muted" : ""}>
-                  <td>{k.name || "—"}</td>
+                  <td>
+                    {k.name || "—"}
+                    {k.owner && <div className="detail">made by {k.owner}, signed in with OpenShift</div>}
+                  </td>
                   <td>
                     {k.kind === "personal" ? (
                       <>
@@ -411,6 +473,14 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
         )}
       </section>
 
+      <KeyUsageCard
+        title="Usage by key"
+        hint="What each key used, the biggest first, at the models' prices. The gateways count each key by the client ID its tokens carry (tokens only, with token counts on); the hub reads them every minute."
+        load={(days) => api.tenantKeyUsage(tenant.id, days)}
+        cacheKey={"key-usage/" + tenant.id}
+        prices={data.models.flatMap((m) => (m.prices ? [{ model_name: m.name, ...m.prices }] : []))}
+      />
+
       <TenantQuotas
         tenant={tenant}
         identity={data.signing.identity}
@@ -460,16 +530,19 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
             )}
             {newKey.key.kind === "personal" && (
               <>
-                Give it to the person, with this line to run in a terminal. It asks for the key, then sets up{" "}
-                <span className="mono">aigw-token</span>, Claude Code and Oh My Pi from this hub, with the gateway's
-                address and the person's models. The person's page,{" "}
-                <span className="mono">{window.location.origin}/my-usage</span>, shows the same line.
+                Give it to the person, with the line to run: the first in a terminal on macOS, Linux or WSL, the second
+                in PowerShell on Windows. It asks for the key, then sets up <span className="mono">aigw-token</span>,
+                Claude Code and Oh My Pi from this hub, with the gateway's address and the person's models. The person's
+                page, <span className="mono">{window.location.origin}/my-usage</span>, shows the same lines.
               </>
             )}
           </p>
           <pre className="code">{newKey.secret}</pre>
           {newKey.key.kind === "personal" && (
-            <pre className="code wrap">{installLine}</pre>
+            <>
+              <pre className="code wrap">{installLine}</pre>
+              <pre className="code wrap">{windowsLine}</pre>
+            </>
           )}
           <footer>
             <button className="primary" onClick={() => navigator.clipboard?.writeText(newKey.secret)}>
@@ -480,6 +553,12 @@ function TenantDetail(props: { id: string; onBack: () => void }) {
               <button onClick={() => navigator.clipboard?.writeText(installLine)}>
                 <Copy />
                 Copy line
+              </button>
+            )}
+            {newKey.key.kind === "personal" && (
+              <button onClick={() => navigator.clipboard?.writeText(windowsLine)}>
+                <Copy />
+                Copy Windows line
               </button>
             )}
             <button onClick={() => setNewKey(null)}>Done</button>

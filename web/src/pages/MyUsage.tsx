@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { Check, Copy, LogOut, Wrench } from "lucide-react";
-import { api, Unauthorized, type MyBudget, type MyUsage as Report, type Unit } from "../api";
+import { Check, Copy, KeyRound, LogIn, LogOut, Wrench } from "lucide-react";
+import { api, Unauthorized, type MyBudget, type MyUsage as Report, type SSOStatus, type Unit } from "../api";
+import { KeyUsageCard } from "../KeyUsage";
 import BrandMark from "../BrandMark";
 import { CreditsTrigger, Footer } from "../Credits";
 import { Bar, Legend, TimeBars, fmt, paletteColor } from "../charts";
 import { ErrorBanner, formatAmount, formatDollars, formatNumber, formatPrice, useLoad, windowLabel } from "../components";
 import { stepLabel } from "../history";
+import { unixInstallLine, windowsInstallLine } from "../install";
 import { byModel, cacheOver, percent, requestsOver, shortTokens, tokensOver, totals } from "../workload";
 import { HistoryView, Seg } from "./History";
 
@@ -284,7 +286,7 @@ function SetUp({ signedInWith, gateway }: { signedInWith: string; gateway: strin
         </p>
       )}
       <p className="hint">
-        Run this in a terminal on your machine (macOS, Linux or WSL). It asks for your personal key. It installs{" "}
+        Run the line for your machine. It asks for your personal key. It installs{" "}
         <span className="mono">aigw-token</span> in <span className="mono">~/.local/bin</span> and signs it in, which gets
         your tools a fresh token every 10 minutes. Then it sets up what you have installed: <strong>Claude Code</strong>{" "}
         (the gateway, your models and the <span className="mono">aigw-usage</span> plugin, keeping everything else in{" "}
@@ -292,7 +294,12 @@ function SetUp({ signedInWith, gateway }: { signedInWith: string; gateway: strin
         models and shows your budget). Last, it checks that the gateway takes your token. Everything comes from this hub.
         Restart Claude Code and Oh My Pi afterwards.
       </p>
-      <Command text={`curl -fsSL ${hub}/clients/install.sh | sh -s -- ${hub}`} />
+      <p className="hint mb-1">macOS, Linux or WSL, in a terminal:</p>
+      <Command text={unixInstallLine(hub)} />
+      <p className="hint mb-1">
+        Windows, in PowerShell (Claude Code and Oh My Pi on Windows itself; WSL has its own tools and takes the line above):
+      </p>
+      <Command text={windowsInstallLine(hub)} />
       {!gateway && (
         <p className="banner warn">
           This hub was not told the gateway's address (<span className="mono">config.gatewayURL</span>), so the setup
@@ -316,7 +323,11 @@ function SetUp({ signedInWith, gateway }: { signedInWith: string; gateway: strin
       {setup.data && !cc && <p className="hint">You may call no model yet: ask your admin.</p>}
       <details className="mt-3">
         <summary className="cursor-pointer text-[13.5px] font-medium">Step by step, or without the installer</summary>
-        <p className="hint mt-3">1. aigw-token, signed in with your personal key (paste it when asked):</p>
+        <p className="hint mt-3">
+          For macOS, Linux and WSL. On Windows, use the PowerShell line: Claude Code and Oh My Pi there cannot run the sh{" "}
+          <span className="mono">aigw-token</span>.
+        </p>
+        <p className="hint">1. aigw-token, signed in with your personal key (paste it when asked):</p>
         <Command
           text={`mkdir -p ~/.local/bin
 curl -fsSLo ~/.local/bin/aigw-token ${hub}/clients/aigw-token
@@ -356,7 +367,92 @@ curl -fsSLo ~/.omp/agent/extensions/aigw-usage.ts ${hub}/clients/aigw-usage.ts`}
   );
 }
 
-function SignIn({ onKey }: { onKey: (key: string, report: Report) => void }) {
+/** The team a person who signed in with OpenShift looks at, kept in this tab. */
+const TEAM = "aigw-ui-team";
+
+function storedTeam(): string {
+  try {
+    return sessionStorage.getItem(TEAM) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function storeTeam(team: string) {
+  try {
+    if (team) sessionStorage.setItem(TEAM, team);
+    else sessionStorage.removeItem(TEAM);
+  } catch {
+    // Storage refused: the team is asked for again.
+  }
+}
+
+/**
+ * A person who signed in with OpenShift: their own personal key in the
+ * team, made here and shown once, and the lines that set up their tools
+ * with it. A new key replaces the one they had.
+ */
+function MyKey({ team }: { team: string }) {
+  const hub = window.location.origin;
+  const current = useLoad(() => api.myKey(team), "my-key/" + team);
+  const [secret, setSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const key = current.data?.key ?? null;
+  const make = async () => {
+    if (key && !confirm("Make a new key? The one you have stops working: run the setup again on each machine that used it.")) return;
+    setBusy(true);
+    try {
+      setSecret((await api.createMyKey(team)).secret);
+      setError("");
+      current.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <details className="card" open={!key || secret !== ""}>
+      <summary className="flex cursor-pointer items-center gap-2">
+        <KeyRound className="size-4" />
+        <h2 className="m-0">Your key, and setting up Claude Code and Oh My Pi</h2>
+      </summary>
+      <ErrorBanner message={error || current.error} />
+      {secret ? (
+        <>
+          <p className="banner warn">
+            Your new personal key. Copy it now: it is shown once. The setup asks for it.
+          </p>
+          <Command text={secret} />
+        </>
+      ) : key ? (
+        <p className="hint">
+          You have a personal key ({key.client_id}), made {new Date(key.created_at).toLocaleString()}
+          {key.renewed_at ? `, last used ${new Date(key.renewed_at).toLocaleString()}` : ", not used yet"}. Make a new one for
+          another machine, or if it got out: the old one stops working.
+        </p>
+      ) : (
+        <p className="hint">You have no personal key in this team yet. Make one, then run the setup with it.</p>
+      )}
+      <button className={key ? "" : "primary"} onClick={make} disabled={busy || current.data === null}>
+        <KeyRound />
+        {busy ? "Making…" : key ? "Make a new key" : "Make my key"}
+      </button>
+      <p className="hint mt-4 mb-1">
+        Then run the line for your machine and paste the key when it asks. It installs <span className="mono">aigw-token</span>,
+        which gets your tools a fresh token every 10 minutes, and sets up Claude Code and Oh My Pi with your team's
+        models. It keeps itself up to date.
+      </p>
+      <p className="hint mb-1">macOS, Linux or WSL, in a terminal:</p>
+      <Command text={unixInstallLine(hub)} />
+      <p className="hint mb-1">Windows, in PowerShell:</p>
+      <Command text={windowsInstallLine(hub)} />
+    </details>
+  );
+}
+
+function SignIn({ onKey, sso, ssoError }: { onKey: (key: string, report: Report) => void; sso: SSOStatus | null; ssoError: string }) {
   const [key, setKey] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -383,7 +479,18 @@ function SignIn({ onKey }: { onKey: (key: string, report: Report) => void }) {
             <p className="text-[13px] text-muted-foreground">Budgets, usage and prices of your team</p>
           </div>
         </div>
-        <ErrorBanner message={error} />
+        <ErrorBanner message={error || ssoError} />
+        {sso?.enabled && (
+          <>
+            <button type="button" className="primary mb-2 w-full" onClick={() => window.location.assign("/sso/login")}>
+              <LogIn />
+              Sign in with OpenShift
+            </button>
+            <p className="mb-4 text-center text-[12.5px] text-muted-foreground">
+              For teams linked to your LDAP group. Or sign in with a key:
+            </p>
+          </>
+        )}
         <label className="field">
           <span>Personal key</span>
           <input type="password" required autoFocus placeholder="aigw-pk-…" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} />
@@ -402,27 +509,50 @@ function SignIn({ onKey }: { onKey: (key: string, report: Report) => void }) {
   );
 }
 
-/** A tenant's own page: it signs in with one of its API keys. */
+/**
+ * A tenant's own page: it signs in with one of its keys, or, for a team
+ * linked to an LDAP group, with OpenShift.
+ */
 export default function MyUsage() {
   const [key, setKey] = useState(storedKey);
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState("");
   const [range, setRange] = useState<"hours" | "days">("days");
   const [pickedUnit, setPickedUnit] = useState<Unit | null>(null);
+  const [sso, setSSO] = useState<SSOStatus | null>(null);
+  const [ssoLoaded, setSSOLoaded] = useState(false);
+  const [pickedTeam, setPickedTeam] = useState(storedTeam);
+  // A sign-in with OpenShift that failed comes back with its reason.
+  const [ssoError] = useState(() => new URLSearchParams(window.location.search).get("sso_error") ?? "");
+
+  useEffect(() => {
+    if (ssoError) window.history.replaceState(null, "", window.location.pathname);
+    api
+      .sso()
+      .then(setSSO)
+      .catch(() => setSSO(null))
+      .finally(() => setSSOLoaded(true));
+  }, [ssoError]);
+
+  const person = !key && sso?.user ? sso.user : "";
+  const teams = sso?.teams ?? [];
+  const team = person ? (teams.find((t) => t.slug === pickedTeam)?.slug ?? teams[0]?.slug ?? "") : "";
 
   const signOut = useCallback(() => {
     storeKey("");
+    storeTeam("");
     setKey("");
     setReport(null);
-  }, []);
+    if (sso?.user) api.ssoLogout().finally(() => setSSO((s) => (s ? { ...s, user: "", teams: [] } : s)));
+  }, [sso]);
 
   useEffect(() => {
-    if (!key) return;
+    if (!key && !team) return;
     let stop = false;
     const load = async () => {
       if (document.hidden) return;
       try {
-        const r = await api.myUsage(key);
+        const r = await api.myUsage(key, key ? "" : team);
         if (!stop) {
           setReport(r);
           setError("");
@@ -438,7 +568,7 @@ export default function MyUsage() {
       stop = true;
       clearInterval(timer);
     };
-  }, [key, signOut]);
+  }, [key, team, signOut]);
 
   const points = report ? (range === "days" ? report.days : report.hours) : [];
   const present = useMemo(
@@ -448,9 +578,12 @@ export default function MyUsage() {
   const unit = pickedUnit && present.includes(pickedUnit) ? pickedUnit : (present[0] ?? "credits");
   const now = useMemo(() => new Date(), [report]);
 
-  if (!key)
+  if (!key && !person) {
+    if (!ssoLoaded) return null;
     return (
       <SignIn
+        sso={sso}
+        ssoError={ssoError}
         onKey={(k, r) => {
           storeKey(k);
           setKey(k);
@@ -458,6 +591,7 @@ export default function MyUsage() {
         }}
       />
     );
+  }
 
   return (
     <div className="min-h-screen">
@@ -468,9 +602,28 @@ export default function MyUsage() {
         <div className="min-w-0 flex-1 leading-tight">
           <div className="truncate text-sm font-semibold text-white">Your usage</div>
           <div className="text-xs text-sidebar-foreground">
-            {report ? (report.display_name && report.display_name !== report.tenant ? `${report.display_name} · ${report.tenant}` : `Team ${report.tenant}`) : "Loading…"}
+            {person && `${person} · `}
+            {report ? (report.display_name && report.display_name !== report.tenant ? `${report.display_name} · ${report.tenant}` : `Team ${report.tenant}`) : person && !team ? "No team" : "Loading…"}
           </div>
         </div>
+        {person && teams.length > 1 && (
+          <select
+            className="w-auto"
+            aria-label="Team"
+            value={team}
+            onChange={(e) => {
+              storeTeam(e.target.value);
+              setPickedTeam(e.target.value);
+              setReport(null);
+            }}
+          >
+            {teams.map((t) => (
+              <option key={t.slug} value={t.slug}>
+                {t.display_name || t.slug}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           className="flex h-9 items-center gap-2 rounded-lg border-0 bg-transparent px-3 text-[13.5px] font-medium text-sidebar-foreground shadow-none hover:bg-white/10 hover:text-white"
           onClick={signOut}
@@ -480,10 +633,24 @@ export default function MyUsage() {
         </button>
       </header>
       <main className="mx-auto w-full max-w-[1100px] px-4 pb-12 pt-6 md:px-9 md:pt-8">
-        <ErrorBanner message={error} />
+        <ErrorBanner message={error || (person ? (sso?.error ?? "") : "")} />
+        {person && teams.length === 0 && !sso?.error && (
+          <p className="banner warn">
+            You are signed in as {person}, but none of your LDAP groups is linked to a team on this hub. Ask your admin.
+          </p>
+        )}
         {report && (
           <>
-            <SetUp signedInWith={key} gateway={report.gateway_url} />
+            {person ? <MyKey team={team} /> : <SetUp signedInWith={key} gateway={report.gateway_url} />}
+            {person && (
+              <KeyUsageCard
+                title="Usage by person"
+                hint="What each key of your team used, the biggest first. Every member of the team's LDAP group sees this. Counted by the gateways for each key; read every minute."
+                load={(days) => api.myPeople(team, days)}
+                cacheKey={"my-people/" + team}
+                prices={report.prices}
+              />
+            )}
             {report.budget && (
               <section className="card">
                 <h2>Your budget across models</h2>

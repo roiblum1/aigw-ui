@@ -1,0 +1,29 @@
+{{- $sso := .Values.sso | default dict }}
+{{- if and $sso.enabled $sso.createClusterRole }}
+{{- $name := include "aigw-ui.name" . }}
+# The hub reads the cluster's Groups, synced from LDAP, to tell who may sign
+# in for a tenant and to revoke the key of someone who left. Read only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-{{ .Release.Namespace }}-groups
+  labels: {{- include "aigw-ui.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["user.openshift.io"]
+    resources: ["groups"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-{{ .Release.Namespace }}-groups
+  labels: {{- include "aigw-ui.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}-{{ .Release.Namespace }}-groups
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

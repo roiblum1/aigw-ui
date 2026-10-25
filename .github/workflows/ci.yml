@@ -155,8 +155,12 @@ jobs:
           npx tsc --noEmit
           npm run build
 
+      # The Windows installer's tests need pwsh and skip without it: the
+      # runner has it, and this fails if it ever does not.
       - name: Test the clients
-        run: node --test clients/claude-code/scripts/ clients/aigw-token/ clients/install/ clients/omp/
+        run: |
+          pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+          node --test clients/claude-code/scripts/ clients/aigw-token/ clients/install/ clients/omp/
 
       - name: Lint and render the chart
         run: hack/check-chart.sh

@@ -144,6 +144,7 @@ func budgetPolicy(s State) *unstructured.Unstructured {
 		// request without x-aigw-budget matches it not, and the token rules
 		// keep their positions.
 		rules = append(rules, tokenRules()...)
+		rules = append(rules, keyRules()...)
 		u.SetAnnotations(map[string]string{TokenCountsAnnotation: "true"})
 	}
 	u.Object["spec"] = map[string]any{

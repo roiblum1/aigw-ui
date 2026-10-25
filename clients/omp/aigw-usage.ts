@@ -107,9 +107,19 @@ export function definesAigw(yaml: string): boolean {
 	return /^\s+aigw:\s*(#.*)?$/m.test(yaml);
 }
 
-/** The command omp runs for a token: aigw-token where the installer puts it, or on the PATH. */
-function tokenCommand(): string {
-	const installed = join(homedir(), ".local", "bin", "aigw-token");
+/**
+ * The command omp runs for a token: aigw-token where the installer puts it,
+ * or on the PATH. On Windows omp runs it with its own shell, which cannot run
+ * the sh aigw-token: the PowerShell one that install.ps1 puts in place,
+ * through Windows PowerShell, with a path in forward slashes.
+ */
+export function tokenCommand(platform: string = process.platform, home: string = homedir()): string {
+	if (platform === "win32") {
+		const ps1 = join(home, ".local", "share", "aigw", "aigw-token.ps1");
+		if (!existsSync(ps1)) return "!aigw-token.cmd";
+		return `!powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "${ps1.replaceAll("\\", "/")}"`;
+	}
+	const installed = join(home, ".local", "bin", "aigw-token");
 	return `!${existsSync(installed) ? installed : "aigw-token"}`;
 }
 

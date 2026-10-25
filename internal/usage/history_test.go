@@ -84,15 +84,17 @@ func TestHistoryCounters(t *testing.T) {
 	}
 	now := time.Now()
 	tenants := map[string]store.Tenant{}
+	keys := map[string]store.APIKey{}
 	for _, slug := range []string{"team-a", "team-b", "team-c"} {
 		tn, err := st.CreateTenant(ctx, slug, slug)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := st.CreateToken(ctx, tn.ID, "t", set, now); err != nil {
+		k, _, err := st.CreateToken(ctx, tn.ID, "t", set, now)
+		if err != nil {
 			t.Fatal(err)
 		}
-		tenants[slug] = tn
+		tenants[slug], keys[slug] = tn, k
 	}
 	site, err := st.CreateCluster(ctx, store.Cluster{Name: "site-a", Namespace: "gw", GatewayName: "gw", AuthEnabled: true}, []byte("kubeconfig"), "")
 	if err != nil {
@@ -112,6 +114,10 @@ func TestHistoryCounters(t *testing.T) {
 		if err := rd.rdb.Set(ctx, render.TokenCounterKey(rd.Prefix, "gw", kind, "team-a", "glm", now), v, time.Hour).Err(); err != nil {
 			t.Fatal(err)
 		}
+		// The same use, counted for team-a's key by its client ID.
+		if err := rd.rdb.Set(ctx, render.KeyCounterKey(rd.Prefix, "gw", kind, keys["team-a"].ClientID, "glm", now), v, time.Hour).Err(); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	busy := map[store.UsageKey]bool{{TenantID: tenants["team-b"].ID, ModelID: glm}: true}
@@ -120,8 +126,16 @@ func TestHistoryCounters(t *testing.T) {
 		t.Fatal(err)
 	}
 	tokens := map[string]map[string]int64{}
+	byKey := map[string]map[string]int64{}
 	amounts := map[string][]string{}
 	for _, c := range counters {
+		if c.KeyID != "" {
+			if byKey[c.KeyID] == nil {
+				byKey[c.KeyID] = map[string]int64{}
+			}
+			byKey[c.KeyID][c.Kind] = c.Value
+			continue
+		}
 		slug := ""
 		for s, tn := range tenants {
 			if tn.ID == c.TenantID {
@@ -150,6 +164,13 @@ func TestHistoryCounters(t *testing.T) {
 	}
 	if _, ok := tokens["team-c"]; ok {
 		t.Errorf("team-c sent nothing, yet its token counters were read: %v", tokens["team-c"])
+	}
+	// Each key is read the same way: team-a's, which sent, and no other.
+	if got := byKey[keys["team-a"].ID]; len(got) != 4 || got["requests"] != 2 || got["input"] != 3000 || got["cached"] != 1000 || got["output"] != 50 {
+		t.Errorf("team-a's key's counters: %v", got)
+	}
+	if len(byKey) != 1 {
+		t.Errorf("keys read: %v", byKey)
 	}
 	// Both changed their limits just now: each is read under both amounts.
 	if len(amounts["team-a"]) != 2 || len(amounts["team-c"]) != 2 || len(amounts["team-b"]) != 0 {

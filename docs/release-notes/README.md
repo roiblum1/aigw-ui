@@ -5,6 +5,8 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.37.0](v0.37.0.md) | not released yet | A tenant can be linked to an LDAP group (optional): its members sign in on `/my-usage` with the hub cluster's OpenShift login, make a personal key of their own and see each other's usage; leaving the group revokes the key; the gateways count each key, shown per person to members and admins |
+| [0.36.1](v0.36.1.md) | not released yet | People on Windows set up Claude Code and Oh My Pi from the hub, with an installer and `aigw-token` in PowerShell; every machine set up from the hub follows it, running the installer again by itself when the hub serves other client files or weekly |
 | [0.36.0](v0.36.0.md) | 2026-10-25 | The Deployments page checks the vLLM command before it commits: the command KServe and the chart build, read as vLLM 0.32.0 reads it (its flags, values and combinations), a flag set twice and the GPUs a pod asks for; a save with an error is refused |
 | [0.35.0](v0.35.0.md) | 2026-10-24 | The hub deploys the models: a Deployments page writes the Argo CD platform's values files, a recipe per model and a shape per cluster, and one chart, `model-deployer`, deploys every model |
 | [0.34.0](v0.34.0.md) | 2026-10-21 | A personal key works while the gateways still take API keys; one line from the hub sets up Claude Code with the person's models and Oh My Pi, whose extension adds them; the hub reads each model server's own length; `config.gatewayURL` is the gateway's root, and an address ending in `/anthropic` or `/v1` is taken |

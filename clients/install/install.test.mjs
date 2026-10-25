@@ -6,104 +6,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
-import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { execFile } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { archive, extension, helper, home, hub, key, path } from "./standin.mjs";
 
 const installer = fileURLToPath(new URL("./install.sh", import.meta.url));
-const helper = readFileSync(fileURLToPath(new URL("../aigw-token/aigw-token", import.meta.url)));
-const extension = "// the Oh My Pi extension\n";
-const key = "aigw-pk-test";
-const token = "eyJ.t.sig";
-// node, and the system's tools, without a claude or omp of this machine.
-const path = (...first) => [...first, dirname(process.execPath), "/usr/bin", "/bin"].join(":");
-
-// A marketplace archive as the hub makes it, small.
-function archive(dir) {
-	const src = join(dir, "archive");
-	mkdirSync(join(src, ".claude-plugin"), { recursive: true });
-	mkdirSync(join(src, "aigw-usage"), { recursive: true });
-	writeFileSync(join(src, ".claude-plugin", "marketplace.json"), '{"name":"aigw"}\n');
-	writeFileSync(join(src, "aigw-usage", "plugin.json"), "{}\n");
-	return execFileSync("tar", ["-czf", "-", "-C", src, "."]);
-}
-
-// The hub, which is the gateway too. The gateway refuses the token `refuse`
-// times first, as one that takes API keys does until a sync lists it. A hub
-// without `models` is one from before 0.34.0.
-function hub(tarball, { refuse = 0, models = true } = {}) {
-	const seen = [];
-	let url;
-	const server = createServer((req, res) => {
-		seen.push(`${req.method} ${req.url}`);
-		const auth = req.headers.authorization;
-		if (req.url === "/clients/aigw-token") return res.writeHead(200).end(helper);
-		if (req.url === "/clients/claude-code.tar.gz") return res.writeHead(200).end(tarball);
-		if (req.url === "/clients/aigw-usage.ts") return res.writeHead(200).end(extension);
-		if (req.url === "/api/v1/token" && auth === `Bearer ${key}`)
-			return res.writeHead(200).end(JSON.stringify({ token, expires_in: 604800 }));
-		if (req.url === "/api/v1/my/models" && auth === `Bearer ${key}` && models)
-			return res.writeHead(200).end(
-				JSON.stringify({
-					gateway_url: url,
-					anthropic_base_url: `${url}/anthropic`,
-					openai_base_url: `${url}/v1`,
-					claude_code: { model: "big", small_model: "small" },
-					models: [
-						{ name: "big", context_window: 65536 },
-						{ name: "small", context_window: 0 },
-					],
-				}),
-			);
-		if (req.url === "/v1/models" && auth === `Bearer ${token}`) {
-			if (refuse-- > 0) return res.writeHead(401).end("{}");
-			return res.writeHead(200).end('{"data":[]}');
-		}
-		res.writeHead(404).end("{}");
-	});
-	return new Promise((resolve) =>
-		server.listen(0, "127.0.0.1", () => {
-			url = `http://127.0.0.1:${server.address().port}`;
-			resolve({ url, seen, close: () => server.close() });
-		}),
-	);
-}
-
-// A home with stand-ins for claude and omp. claude logs its arguments and
-// lists the marketplace once it was added.
-function home() {
-	const dir = mkdtempSync(join(tmpdir(), "aigw-install-"));
-	const bin = join(dir, "fake-bin");
-	mkdirSync(bin);
-	writeFileSync(
-		join(bin, "claude"),
-		`#!/bin/sh
-echo "$*" >> "${dir}/claude.log"
-case "$*" in
-"plugin marketplace list") [ -f "${dir}/added" ] && echo "aigw (directory)" ;;
-"plugin marketplace add "*) touch "${dir}/added" ;;
-esac
-exit 0
-`,
-		{ mode: 0o755 },
-	);
-	// omp keeps its roles in a file, as omp config does, and logs each set.
-	writeFileSync(
-		join(bin, "omp"),
-		`#!/bin/sh
-case "$1 $2 $3" in
-"config get modelRoles") printf '{"key":"modelRoles","value":%s}\\n' "$(cat "${dir}/roles" 2>/dev/null || echo '{}')" ;;
-"config set modelRoles") printf '%s' "$4" > "${dir}/roles"; echo "$4" >> "${dir}/omp.log" ;;
-esac
-exit 0
-`,
-		{ mode: 0o755 },
-	);
-	return { dir, bin };
-}
 
 function run(args, env) {
 	return new Promise((resolve) =>
@@ -131,6 +40,8 @@ test("signs in, sets up Claude Code and Oh My Pi from the hub, waits for the gat
 		assert.equal(readFileSync(helperPath, "utf8"), helper.toString());
 		assert.equal(readFileSync(join(h.dir, ".config", "aigw", "hub"), "utf8"), s.url + "\n");
 		assert.equal(readFileSync(join(h.dir, ".config", "aigw", "personal-key"), "utf8"), key + "\n");
+		// The client files' version it installed, for aigw-token.
+		assert.match(readFileSync(join(h.dir, ".config", "aigw", "clients"), "utf8"), /^v1 \d{10}\n$/);
 
 		// Everything else in the settings is kept, and the old file beside them.
 		const settings = JSON.parse(readFileSync(join(h.dir, ".claude", "settings.json"), "utf8"));
@@ -239,6 +150,147 @@ test("a key the hub does not take stops it before the settings", async () => {
 		assert.ok(!existsSync(join(h.dir, ".claude", "settings.json")));
 		assert.ok(!existsSync(join(h.dir, "claude.log")));
 		assert.ok(!existsSync(join(h.dir, ".omp")));
+	} finally {
+		s.close();
+	}
+});
+
+// Git Bash, MSYS2 or Cygwin on Windows: Claude Code there runs its
+// apiKeyHelper with cmd.exe, which cannot run the sh aigw-token, so the
+// person is given the PowerShell line and nothing is installed.
+test("a Unix shell on Windows is sent to the PowerShell setup", async () => {
+	const h = home();
+	const s = await hub(archive(h.dir));
+	writeFileSync(join(h.bin, "uname"), '#!/bin/sh\necho "MINGW64_NT-10.0-22631"\n', { mode: 0o755 });
+	try {
+		const r = await run([s.url], { HOME: h.dir, PATH: path(h.bin), AIGW_PERSONAL_KEY: key });
+		assert.notEqual(r.code, 0);
+		assert.match(r.stderr, /a Unix shell on Windows/);
+		assert.ok(r.stderr.includes(`iex "& { $(irm ${s.url}/clients/install.ps1) } ${s.url}"`), r.stderr);
+		assert.deepEqual(s.seen, []);
+		assert.ok(!existsSync(join(h.dir, ".local")));
+	} finally {
+		s.close();
+	}
+});
+
+// In WSL, Windows' PATH is added to Linux's: claude and omp installed on
+// Windows show up under /mnt/c. They are left out, never run, and the
+// person is told how to set up Windows' own tools.
+test("in WSL, Windows' own claude and omp are left out", async () => {
+	const h = home();
+	const s = await hub(archive(h.dir));
+	const win = join(h.dir, "mnt", "c", "Users", "me", "AppData", "Roaming", "npm");
+	mkdirSync(win, { recursive: true });
+	for (const name of ["claude", "omp"]) {
+		writeFileSync(join(win, name), `#!/bin/sh\ntouch "${h.dir}/windows-ran"\nexit 1\n`, { mode: 0o755 });
+	}
+	try {
+		const env = { HOME: h.dir, PATH: path(win), AIGW_PERSONAL_KEY: key, WSL_DISTRO_NAME: "Ubuntu", AIGW_WINDOWS_DRIVES: join(h.dir, "mnt") };
+		let r = await run([s.url], env);
+		assert.equal(r.code, 0, r.stderr);
+		assert.ok(!existsSync(join(h.dir, "windows-ran")));
+		assert.match(r.stderr, /Claude Code is not installed/);
+		assert.match(r.stderr, /Oh My Pi is not installed/);
+		assert.match(r.stderr, /left out Windows' own claude omp on the PATH/);
+		assert.ok(r.stderr.includes(`iex "& { $(irm ${s.url}/clients/install.ps1) } ${s.url}"`), r.stderr);
+
+		// Claude Code installed in WSL too, ahead on the PATH: that one is set up.
+		mkdirSync(join(h.dir, ".claude"));
+		r = await run([s.url], { ...env, PATH: path(h.bin, win) });
+		assert.equal(r.code, 0, r.stderr);
+		assert.ok(!existsSync(join(h.dir, "windows-ran")));
+		assert.match(readFileSync(join(h.dir, "claude.log"), "utf8"), /plugin install aigw-usage@aigw/);
+		assert.equal(JSON.parse(readFileSync(join(h.dir, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_MODEL, "big");
+	} finally {
+		s.close();
+	}
+});
+
+// aigw-token runs the installer again by itself (AIGW_UPDATE=1): it asks for
+// nothing, keeps the gateway address given by hand before, and skips the
+// gateway's check; never signed in, it stops. Meanwhile aigw-token starts no
+// update of its own, though the hub's tokens name newer client files.
+test("an update asks for nothing and keeps the gateway given by hand", async () => {
+	const h = home();
+	const s = await hub(archive(h.dir), { tokenVersion: "v2" });
+	const env = { HOME: h.dir, PATH: path(h.bin), AIGW_PERSONAL_KEY: key };
+	mkdirSync(join(h.dir, ".claude"));
+	const base = () => JSON.parse(readFileSync(join(h.dir, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_BASE_URL;
+	try {
+		let r = await run([s.url, "http://127.0.0.1:9/v1"], env);
+		assert.equal(r.code, 0, r.stderr);
+		assert.equal(base(), "http://127.0.0.1:9/anthropic");
+		writeFileSync(join(h.dir, ".config", "aigw", "clients"), "v0 0\n");
+
+		r = await run([s.url], { ...env, AIGW_PERSONAL_KEY: "", AIGW_UPDATE: "1" });
+		assert.equal(r.code, 0, r.stderr);
+		assert.equal(base(), "http://127.0.0.1:9/anthropic");
+		assert.doesNotMatch(r.stderr, /gateway at/);
+		assert.match(readFileSync(join(h.dir, ".config", "aigw", "clients"), "utf8"), /^v1 /);
+		await new Promise((resolve) => setTimeout(resolve, 1500));
+		assert.ok(!s.seen.some((x) => x.startsWith("GET /clients/install.")), s.seen.join(", "));
+
+		// Run by hand without an address: the hub's again.
+		r = await run([s.url], env);
+		assert.equal(r.code, 0, r.stderr);
+		assert.equal(base(), `${s.url}/anthropic`);
+		assert.ok(!existsSync(join(h.dir, ".config", "aigw", "gateway")));
+
+		// Signed out: the update stops without asking.
+		rmSync(join(h.dir, ".config", "aigw", "hub"));
+		r = await run([s.url], { ...env, AIGW_PERSONAL_KEY: "", AIGW_UPDATE: "1" });
+		assert.notEqual(r.code, 0);
+		assert.match(r.stderr, /the update stops/);
+	} finally {
+		s.close();
+	}
+});
+
+// The whole round: the hub is upgraded to other client files; the next
+// token aigw-token fetches names them, and it runs the hub's installer in
+// the background, which puts the new files in place and keeps the new
+// version. Nothing is asked and nothing is printed but the token.
+test("a machine follows a hub upgrade by itself", async () => {
+	const h = home();
+	const s = await hub(archive(h.dir));
+	const env = { HOME: h.dir, PATH: path(h.bin), AIGW_PERSONAL_KEY: key };
+	const kept = join(h.dir, ".omp", "agent", "extensions", "aigw-usage.ts");
+	try {
+		let r = await run([s.url], env);
+		assert.equal(r.code, 0, r.stderr);
+		assert.equal(readFileSync(kept, "utf8"), extension);
+
+		s.state.version = s.state.tokenVersion = "v2";
+		s.state.extension = "// the Oh My Pi extension, new\n";
+		r = await new Promise((resolve) =>
+			execFile(join(h.dir, ".local", "bin", "aigw-token"), [], { env: { ...env, AIGW_TOKEN_RENEW_SECONDS: "0" } }, (err, stdout, stderr) =>
+				resolve({ code: err ? err.code : 0, stdout, stderr }),
+			),
+		);
+		assert.equal(r.code, 0, r.stderr);
+		assert.equal(r.stdout, "eyJ.t.sig\n");
+		for (const end = Date.now() + 30000; Date.now() < end && !/^v2 /.test(readFileSync(join(h.dir, ".config", "aigw", "clients"), "utf8")); ) {
+			await new Promise((resolve) => setTimeout(resolve, 200));
+		}
+		assert.match(readFileSync(join(h.dir, ".config", "aigw", "clients"), "utf8"), /^v2 /, readFileSync(join(h.dir, ".config", "aigw", "update.log"), "utf8"));
+		assert.equal(readFileSync(kept, "utf8"), "// the Oh My Pi extension, new\n");
+		assert.match(readFileSync(join(h.dir, ".config", "aigw", "update.log"), "utf8"), /done/);
+
+		// A fix the same day: taken at once, as the last try finished a setup.
+		s.state.version = s.state.tokenVersion = "v3";
+		s.state.extension = "// the Oh My Pi extension, fixed\n";
+		await new Promise((resolve) => setTimeout(resolve, 1100));
+		r = await new Promise((resolve) =>
+			execFile(join(h.dir, ".local", "bin", "aigw-token"), [], { env: { ...env, AIGW_TOKEN_RENEW_SECONDS: "0" } }, (err, stdout, stderr) =>
+				resolve({ code: err ? err.code : 0, stdout, stderr }),
+			),
+		);
+		assert.equal(r.stdout, "eyJ.t.sig\n");
+		for (const end = Date.now() + 30000; Date.now() < end && !/^v3 /.test(readFileSync(join(h.dir, ".config", "aigw", "clients"), "utf8")); ) {
+			await new Promise((resolve) => setTimeout(resolve, 200));
+		}
+		assert.equal(readFileSync(kept, "utf8"), "// the Oh My Pi extension, fixed\n");
 	} finally {
 		s.close();
 	}

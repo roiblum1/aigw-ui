@@ -93,6 +93,14 @@ func (s *Server) tenantAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusNotFound, "the tenants' page is turned off")
 			return
 		}
+		// No key: a person who signed in with OpenShift, for one of the
+		// tenants linked to their groups.
+		if bearer, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); strings.TrimSpace(bearer) == "" && s.sso != nil {
+			if ctx, ok := s.sessionTenant(w, r); ok {
+				next.ServeHTTP(w, r.WithContext(ctx))
+			}
+			return
+		}
 		addr, now := clientAddr(r), time.Now()
 		if s.keyFailures.blocked(addr, now) {
 			writeError(w, http.StatusTooManyRequests, "too many wrong keys; try again in a minute")

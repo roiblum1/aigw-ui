@@ -154,22 +154,69 @@ these, so that the length of one cannot tell anything about the secret in it
 (BREACH). The helper `aigw-token`
 keeps the key and the last token in `~/.config/aigw`, readable by the user
 only, and passes the key to `curl` on stdin, so it is not on any command
-line.
+line. Its Windows twin `aigw-token.ps1` keeps the same files in
+`%USERPROFILE%\.config\aigw`, which only the user, Administrators and
+SYSTEM can read by the profile's own permissions (it sets none itself), and
+sends the key in a header from its own process.
+
+**Signing in with OpenShift (0.37.0).** For a tenant linked to an
+OpenShift Group, its members sign in on `/my-usage` with the hub cluster's
+login. The hub's ServiceAccount is the OAuth client (its token is the
+client's secret; its redirect reference names the hub's Route, so the
+OAuth server sends codes nowhere else). It asks for `user:info` only, with
+PKCE where offered, and a random state in a signed cookie that lasts 10
+minutes. It uses the access token once to read who signed in and does not
+keep it; the token stays valid on the cluster until it expires. The
+session cookie holds the user name, signed with HMAC-SHA256 under a key
+derived from the encryption key (HttpOnly, SameSite=Lax, Secure over
+HTTPS, 12 hours); changing the encryption key ends every session.
+
+- **Which tenants** a person sees is read from the Groups each time, with
+  the hub's own account (a ClusterRole that may get, list and watch
+  `groups.user.openshift.io`, nothing else). A group is linked to at most
+  one tenant; a tenant without one cannot be reached this way.
+- **Members see each other's use**: requests and tokens per key and model,
+  and the cost. Not prompts or answers, which the hub never has.
+- **A key made by signing in** belongs to the person (`owner`). Making a new
+  one revokes the old in the same transaction. Making one needs the
+  `X-Aigw-Team` header, which a form of another site cannot send, besides
+  the SameSite cookie.
+- **Leaving the group** revokes the key within a minute. When the Groups
+  cannot be read, or the group is not on the cluster, nothing is revoked:
+  a group renamed or deleted in LDAP leaves its members' keys until an admin
+  revokes them or links the tenant again.
+- **The admin pages** still take the admin token only.
 
 **The client files.** `/clients/` (the installer, `aigw-token`, the Claude
 Code plugin and the Oh My Pi extension) needs no sign-in: the files hold no
 secret and are the same for everyone, copied from the hub's binary. The
 installer asks for the personal key on the terminal, or takes it from
-`AIGW_PERSONAL_KEY`, and never puts it on a command line. It sends the key
+`AIGW_PERSONAL_KEY`, and never puts it on a command line (`install.ps1`
+pipes it to `aigw-token.ps1`, and asks for it hidden). It sends the key
 to the hub on `curl`'s stdin, as `aigw-token` does, for `GET
 /api/v1/my/models`. It changes `~/.claude/settings.json` only through
-`node`, keeps every other setting, and keeps the old file as
-`settings.json.aigw-backup`. It does not touch `~/.omp/agent/models.yml`:
+`node` (`install.ps1` through PowerShell's JSON), keeps every other setting,
+and keeps the old file as `settings.json.aigw-backup`. It does not touch `~/.omp/agent/models.yml`:
 the Oh My Pi extension adds the models when omp starts, and keeps the last
 list (names, lengths, prices; no secret) in `~/.config/aigw/models.json` for
 when the hub cannot be reached. omp gets its tokens by running `aigw-token`,
-as Claude Code does. Piping a script from the hub into `sh` trusts the hub
-and its TLS certificate as much as the helper itself does.
+as Claude Code does. Piping a script from the hub into `sh`, or into
+PowerShell's `iex`, trusts the hub and its TLS certificate as much as the
+helper itself does. On Windows, Claude Code and omp run `aigw-token.ps1`
+with `-ExecutionPolicy Bypass` for that one process; an execution policy
+set by Group Policy still wins, and then the script does not run.
+
+**Updates follow the hub (0.36.1).** A machine the installer set up runs
+the hub's installer again by itself when the hub serves other client files,
+or weekly, without asking (see [API](api.md#client-files)). This makes the
+hub's `/clients/` files code that runs on every such machine within minutes
+of a change, as the person: whoever can change the hub's image or its
+answers can change what runs there. That trust was there before (people ran
+the installer and `aigw-token` from the hub), but the person no longer sees
+the moment. The files come only from the hub address `aigw-token` signed in
+to, over the TLS it checks. `AIGW_AUTO_UPDATE=0` in the environment of
+Claude Code and omp turns it off on a machine; `~/.config/aigw/update.log`
+shows the last run.
 
 **The signing key** is an EC P-256 key the hub makes when it signs its first
 token. Its private half is stored in Postgres, encrypted with the encryption

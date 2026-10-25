@@ -17,6 +17,12 @@ key:
 curl -fsSL https://aigw.example.com/clients/install.sh | sh -s -- https://aigw.example.com
 ```
 
+On Windows, in PowerShell (see [Windows](#windows)):
+
+```powershell
+iex "& { $(irm https://aigw.example.com/clients/install.ps1) } https://aigw.example.com"
+```
+
 [`install/install.sh`](install/install.sh):
 
 1. installs `aigw-token` in `~/.local/bin` and signs it in (it asks for the
@@ -48,10 +54,56 @@ Without `node`, `claude` or `omp` it says what to do by hand. Run it again
 after a hub upgrade, or when your models change, to get the new files and
 settings; it keeps the sign-in.
 
+**It keeps itself up to date** (0.36.1). The installer keeps the version
+of the client files it installed in `~/.config/aigw/clients`. The hub names
+its own with every token (`clients_version`), and when they differ, or a
+week after the last setup, `aigw-token` runs the installer again from the
+hub, in the background and with nothing shown: no key is asked for, a
+gateway address given by hand before is kept, the gateway's check is
+skipped, and the output goes to `~/.config/aigw/update.log`. A try that did
+not finish is made again a day later. A hub upgrade reaches a machine within
+about 10 minutes of its next use of Claude Code or omp; one that changes no
+client file moves nobody. `AIGW_AUTO_UPDATE=0` turns it off;
+`AIGW_UPDATE_DAYS` changes the week. A machine set up by hand, without the
+installer, is left alone.
+
+In Git Bash, MSYS2 or Cygwin it stops and gives the PowerShell line. In WSL
+it sets up the tools installed in WSL and leaves out Windows' own programs,
+which WSL puts on the `PATH` under `/mnt/<drive>/` (`AIGW_WINDOWS_DRIVES`
+if wsl.conf moves them): it names them and gives the PowerShell line.
+
+### Windows
+
+Claude Code on Windows runs its `apiKeyHelper` with `cmd.exe`, and Oh My Pi
+runs commands with its own shell, so neither can run the `sh` `aigw-token`.
+[`install/install.ps1`](install/install.ps1) does the same steps from
+PowerShell (Windows PowerShell 5.1 or PowerShell 7), from the hub alone:
+
+1. puts [`aigw-token/aigw-token.ps1`](aigw-token/aigw-token.ps1) in
+   `%USERPROFILE%\.local\share\aigw` and `aigw-token.cmd` in
+   `%USERPROFILE%\.local\bin`, and signs in (the key is asked for hidden,
+   or read from `AIGW_PERSONAL_KEY`). The `.ps1` keeps the same files as the
+   `sh` one in `%USERPROFILE%\.config\aigw`;
+2. writes Claude Code's settings as `install.sh` does, without `node`, with
+   `apiKeyHelper` set to `powershell.exe -NoLogo -NoProfile -ExecutionPolicy
+   Bypass -File "<the .ps1>"`. The plugin and the status line (`node
+   "<home>/.claude/aigw-usage/statusline.mjs"`) need `node`, and are left
+   out without it;
+3. sets up Oh My Pi as `install.sh` does; the extension runs the same
+   `powershell.exe` line for a token on Windows;
+4. checks that the gateway takes the token.
+
+It runs inside your PowerShell through `iex`, so the execution policy does
+not stop it. Claude Code and omp run `aigw-token.ps1` with `-ExecutionPolicy
+Bypass`, which a policy set by Group Policy overrides: then ask IT to allow
+it.
+
 | `<hub>/clients/` | Is |
 |---|---|
 | `install.sh` | The installer above |
+| `install.ps1` | The installer for Windows, in PowerShell |
 | `aigw-token` | [`aigw-token/aigw-token`](aigw-token/aigw-token) |
+| `aigw-token.ps1` | [`aigw-token/aigw-token.ps1`](aigw-token/aigw-token.ps1), the same for Windows |
 | `claude-code.tar.gz` | [`claude-code/`](claude-code) as the marketplace `aigw` |
 | `aigw-usage.ts` | [`omp/aigw-usage.ts`](omp/aigw-usage.ts) |
 
@@ -63,7 +115,8 @@ token that carries your team's budget and models as they are now, and gets a
 new one every 10 minutes (`AIGW_TOKEN_RENEW_SECONDS`), so you never handle a
 token and a change of budget reaches you by itself. If the hub cannot be
 reached it goes on printing the token it has until that expires (7 days by
-default). Needs `sh` and `curl` (macOS, Linux, WSL).
+default). Needs `sh` and `curl` (macOS, Linux, WSL); on Windows, the
+PowerShell `aigw-token.ps1` that `install.ps1` puts in place does the same.
 
 ```sh
 curl -fsSLo ~/.local/bin/aigw-token \
@@ -241,7 +294,24 @@ as thinking on both paths, and reasoning tokens are charged as output.
   with the token.
 - The Oh My Pi extension's models: `node --test clients/omp/`, against a
   stand-in hub (registered, the kept list with the hub down, a person's own
-  provider `aigw`).
+  provider `aigw`), and its token command on Windows.
+- Updates (2026-10-25): the `sh` and PowerShell `aigw-token` against a
+  stand-in hub that names a version: the installer again for another
+  version and for a week-old setup, not again for a try that did not
+  finish, not for a machine set up by hand, nor with `AIGW_AUTO_UPDATE=0`;
+  the `sh` one prints its token while the installer is still running. Both
+  installers in update mode (no key asked, the gateway given by hand kept,
+  no gateway check), and the whole round with the real files: a hub
+  upgraded to other files, then a fix the same day, each taken through
+  `aigw-token`. Not run on Windows: there `Start-Process -WindowStyle
+  Hidden` is meant to keep the update off Claude Code's handles.
+- install.ps1 and aigw-token.ps1 (2026-10-25): under PowerShell 7.6.9 on
+  Linux (`install-ps1.test.mjs`, `aigw-token-ps1.test.mjs`, which need
+  `pwsh`), against the same stand-ins as `install.sh`, including the line
+  `/my-usage` shows run through `iex` from the hub, and the `sh` and
+  PowerShell `aigw-token` taking each other's sign-in. Not run on Windows
+  or under Windows PowerShell 5.1. install.sh in Git Bash and in WSL: with a
+  stand-in `uname` and stand-in Windows programs under a stand-in `/mnt/c`.
 
 ```sh
 node --test clients/claude-code/scripts/ clients/aigw-token/ clients/install/ clients/omp/

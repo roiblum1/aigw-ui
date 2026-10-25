@@ -8,8 +8,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// UsageKey names the usage of one tenant on one model.
-type UsageKey struct{ TenantID, ModelID string }
+// UsageKey names the usage of one tenant on one model, or of one of its
+// keys when KeyID is set (the gateways count each key too, 0.37.0).
+type UsageKey struct{ TenantID, ModelID, KeyID string }
 
 // UsageCursor is what the counters of a tenant on a model held at the last
 // look before 0.30.0, and the period they belonged to. The first look after
@@ -53,7 +54,8 @@ type UsageDelta struct {
 }
 
 // TokenDelta is what a tenant sent to a model since the last look, to be
-// added to an hour of the token history.
+// added to an hour of the token history: token_hours, or key_token_hours
+// for one key's (KeyID).
 type TokenDelta struct {
 	UsageKey
 	Hour                            time.Time
@@ -103,6 +105,15 @@ func (s *Store) RecordUsage(ctx context.Context, look func(Before) (Look, error)
 				d.TenantID, d.ModelID, d.Hour.UTC().Truncate(time.Hour), d.Unit, d.Used, d.BestEffort)
 		}
 		for _, d := range found.Tokens {
+			if d.KeyID != "" {
+				batch.Queue(`INSERT INTO key_token_hours (key_id, model_id, hour, requests, input_tokens, cached_tokens, output_tokens)
+					VALUES ($1, $2, $3, $4, $5, $6, $7)
+					ON CONFLICT (key_id, model_id, hour) DO UPDATE
+					SET requests = key_token_hours.requests + EXCLUDED.requests, input_tokens = key_token_hours.input_tokens + EXCLUDED.input_tokens,
+					    cached_tokens = key_token_hours.cached_tokens + EXCLUDED.cached_tokens, output_tokens = key_token_hours.output_tokens + EXCLUDED.output_tokens`,
+					d.KeyID, d.ModelID, d.Hour.UTC().Truncate(time.Hour), d.Requests, d.Input, d.Cached, d.Output)
+				continue
+			}
 			batch.Queue(`INSERT INTO token_hours (tenant_id, model_id, hour, requests, input_tokens, cached_tokens, output_tokens)
 				VALUES ($1, $2, $3, $4, $5, $6, $7)
 				ON CONFLICT (tenant_id, model_id, hour) DO UPDATE
@@ -116,10 +127,10 @@ func (s *Store) RecordUsage(ctx context.Context, look func(Before) (Look, error)
 			if old, ok := before.Cursors[c.Key]; ok && old == c {
 				continue
 			}
-			batch.Queue(`INSERT INTO usage_counter_cursors (redis_key, tenant_id, model_id, kind, unit, window_size, window_start, value)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			batch.Queue(`INSERT INTO usage_counter_cursors (redis_key, tenant_id, model_id, kind, unit, window_size, window_start, value, key_id)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, nullif($9, '')::uuid)
 				ON CONFLICT (redis_key) DO UPDATE SET value = EXCLUDED.value`,
-				c.Key, c.TenantID, c.ModelID, c.Kind, c.Unit, c.Window, c.WindowStart, c.Value)
+				c.Key, c.TenantID, c.ModelID, c.Kind, c.Unit, c.Window, c.WindowStart, c.Value, c.KeyID)
 		}
 		// The counters that held nothing this time, or whose window is over
 		// and was read to its end, lose their cursor. Only those are named:
@@ -146,13 +157,14 @@ func (s *Store) RecordUsage(ctx context.Context, look func(Before) (Look, error)
 // readCursors reads what the last look left.
 func readCursors(ctx context.Context, tx pgx.Tx) (Before, error) {
 	before := Before{Cursors: map[string]CounterCursor{}, Legacy: map[UsageKey]UsageCursor{}}
-	rows, err := tx.Query(ctx, `SELECT redis_key, tenant_id, model_id, kind, unit, window_size, window_start, value FROM usage_counter_cursors`)
+	rows, err := tx.Query(ctx, `SELECT redis_key, tenant_id, model_id, kind, unit, window_size, window_start, value, coalesce(key_id::text, '')
+		FROM usage_counter_cursors`)
 	if err != nil {
 		return before, err
 	}
 	for rows.Next() {
 		var c CounterCursor
-		if err := rows.Scan(&c.Key, &c.TenantID, &c.ModelID, &c.Kind, &c.Unit, &c.Window, &c.WindowStart, &c.Value); err != nil {
+		if err := rows.Scan(&c.Key, &c.TenantID, &c.ModelID, &c.Kind, &c.Unit, &c.Window, &c.WindowStart, &c.Value, &c.KeyID); err != nil {
 			rows.Close()
 			return before, err
 		}
@@ -275,8 +287,61 @@ func (s *Store) PruneUsage(ctx context.Context, before time.Time) error {
 	if _, err := s.db.Exec(ctx, `DELETE FROM usage_hours WHERE hour < $1`, before); err != nil {
 		return mapErr(err)
 	}
-	_, err := s.db.Exec(ctx, `DELETE FROM token_hours WHERE hour < $1`, before)
+	if _, err := s.db.Exec(ctx, `DELETE FROM token_hours WHERE hour < $1`, before); err != nil {
+		return mapErr(err)
+	}
+	_, err := s.db.Exec(ctx, `DELETE FROM key_token_hours WHERE hour < $1`, before)
 	return mapErr(err)
+}
+
+// KeyUse is what one key of a tenant sent to one model over a period.
+type KeyUse struct {
+	KeyID    string     `json:"key_id"`
+	KeyName  string     `json:"key_name"`
+	Owner    string     `json:"owner"`
+	ClientID string     `json:"client_id"`
+	Kind     string     `json:"kind"`
+	Revoked  *time.Time `json:"revoked_at"`
+	Model    string     `json:"model_name"`
+	Requests int64      `json:"requests"`
+	// Input counts every input token, the cached ones too.
+	Input  int64 `json:"input_tokens"`
+	Cached int64 `json:"cached_tokens"`
+	Output int64 `json:"output_tokens"`
+}
+
+// KeyUses returns what each key of a tenant sent to each model since a
+// point in time, from the history the gateways' counters of each key feed,
+// by owner, key name and model.
+func (s *Store) KeyUses(ctx context.Context, tenantID string, from time.Time) ([]KeyUse, error) {
+	return list(ctx, s, func(r scanner) (KeyUse, error) {
+		var u KeyUse
+		err := r.Scan(&u.KeyID, &u.KeyName, &u.Owner, &u.ClientID, &u.Kind, &u.Revoked, &u.Model, &u.Requests, &u.Input, &u.Cached, &u.Output)
+		return u, err
+	}, `SELECT k.id, k.name, coalesce(k.owner, ''), k.client_id, k.kind, k.revoked_at, m.name,
+		       sum(h.requests)::bigint, sum(h.input_tokens)::bigint, sum(h.cached_tokens)::bigint, sum(h.output_tokens)::bigint
+		FROM key_token_hours h JOIN api_keys k ON k.id = h.key_id JOIN models m ON m.id = h.model_id
+		WHERE k.tenant_id = $1 AND h.hour >= $2
+		GROUP BY k.id, k.name, k.owner, k.client_id, k.kind, k.revoked_at, m.name
+		ORDER BY coalesce(k.owner, ''), k.name, m.name`, tenantID, from)
+}
+
+// CountedKey is a key the gateways count on its own, by its client ID.
+type CountedKey struct {
+	ID, TenantID, ClientID string
+}
+
+// CountedKeys returns the live tokens and personal keys of enabled tenants:
+// those whose requests carry a client ID the gateways count by. API keys
+// are left out: the counting rules read headers that only tokens set.
+func (s *Store) CountedKeys(ctx context.Context) ([]CountedKey, error) {
+	return list(ctx, s, func(r scanner) (CountedKey, error) {
+		var k CountedKey
+		err := r.Scan(&k.ID, &k.TenantID, &k.ClientID)
+		return k, err
+	}, `SELECT k.id, k.tenant_id, k.client_id FROM api_keys k JOIN tenants t ON t.id = k.tenant_id
+		WHERE t.enabled AND k.revoked_at IS NULL AND k.kind <> 'key' AND (k.kind = 'personal' OR k.expires_at IS NULL OR k.expires_at > now())
+		ORDER BY k.client_id`)
 }
 
 // TenantOfKey returns the tenant an API key belongs to. The keys are stored

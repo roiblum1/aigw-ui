@@ -333,9 +333,9 @@ func TestUsageSinceAndAllQuotas(t *testing.T) {
 	day := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
 	err := s.RecordUsage(ctx, func(Before) (Look, error) {
 		return Look{Usage: []UsageDelta{
-			{UsageKey: UsageKey{a.ID, glm}, Hour: day.Add(9 * time.Hour), Unit: UnitTokens, Used: 100, BestEffort: 20},
-			{UsageKey: UsageKey{b.ID, glm}, Hour: day.Add(10 * time.Hour), Unit: UnitTokens, Used: 50},
-			{UsageKey: UsageKey{a.ID, glm}, Hour: day.Add(33 * time.Hour), Unit: UnitTokens, Used: 90},
+			{UsageKey: UsageKey{TenantID: a.ID, ModelID: glm}, Hour: day.Add(9 * time.Hour), Unit: UnitTokens, Used: 100, BestEffort: 20},
+			{UsageKey: UsageKey{TenantID: b.ID, ModelID: glm}, Hour: day.Add(10 * time.Hour), Unit: UnitTokens, Used: 50},
+			{UsageKey: UsageKey{TenantID: a.ID, ModelID: glm}, Hour: day.Add(33 * time.Hour), Unit: UnitTokens, Used: 90},
 		}}, nil
 	})
 	if err != nil {

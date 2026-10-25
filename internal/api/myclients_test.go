@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"aigw-ui/clients"
 	"aigw-ui/internal/store"
 )
 
@@ -116,6 +117,7 @@ func TestMyModels(t *testing.T) {
 			{Name: "big", Prices: &myDollarPrices{Input: 3, Cached: 0.3, Output: 15}},
 			{Name: "small", Prices: &myDollarPrices{Input: 0.1, Cached: 0.01, Output: 0.4}},
 		},
+		ClientsVersion: clients.Version(),
 	}
 	if !reflect.DeepEqual(out, want) {
 		t.Errorf("got %+v\nwant %+v", out, want)

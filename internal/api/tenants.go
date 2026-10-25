@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -22,10 +23,27 @@ func (s *Server) listTenants(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// ssoGroup checks the name of an OpenShift Group a tenant is linked to:
+// what OpenShift takes as a Group's name (no "/" or "%", not "." or ".."),
+// trimmed. "" links none.
+func ssoGroup(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", nil
+	}
+	if len(name) > 253 || strings.ContainsAny(name, "/%") || name == "." || name == ".." {
+		return "", invalid("sso_group must be the name of an OpenShift Group: up to 253 characters, without / or %%")
+	}
+	return name, nil
+}
+
 func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		Slug        string `json:"slug"`
 		DisplayName string `json:"display_name"`
+		// SSOGroup links the tenant to an OpenShift Group, synced from
+		// LDAP, whose members sign in for it (0.37.0); optional.
+		SSOGroup string `json:"sso_group"`
 	}
 	if err := decode(r, &b); err != nil {
 		fail(w, err)
@@ -40,12 +58,25 @@ func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
 		fail(w, invalid("a slug must not start with %q, which is kept for the self-test", selftest.TenantPrefix))
 		return
 	}
-	t, err := s.st.CreateTenant(r.Context(), b.Slug, b.DisplayName)
+	group, err := ssoGroup(b.SSOGroup)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	s.log(r, "tenant.add", "Added tenant "+t.Slug, true,
+	t, err := s.st.CreateTenantInGroup(r.Context(), b.Slug, b.DisplayName, group)
+	if errors.Is(err, store.ErrConflict) && group != "" {
+		writeError(w, http.StatusConflict, "a tenant with that slug exists, or another tenant is linked to the group "+group)
+		return
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	summary := "Added tenant " + t.Slug
+	if group != "" {
+		summary += ", linked to the OpenShift group " + group
+	}
+	s.log(r, "tenant.add", summary, true,
 		"Saved. Nothing is applied to the clusters until the tenant has a key or a quota.")
 	writeJSON(w, http.StatusCreated, t)
 }
@@ -74,6 +105,9 @@ func (s *Server) updateTenant(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		DisplayName string `json:"display_name"`
 		Enabled     bool   `json:"enabled"`
+		// SSOGroup, when given, links the tenant to another OpenShift
+		// Group, or to none with "". Left out, the link stays.
+		SSOGroup *string `json:"sso_group"`
 	}
 	if err := decode(r, &b); err != nil {
 		fail(w, err)
@@ -94,6 +128,34 @@ func (s *Server) updateTenant(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// The group first: it is the change that can be refused (another
+	// tenant has it), and then nothing is changed.
+	linked := ""
+	if b.SSOGroup != nil {
+		group, err := ssoGroup(*b.SSOGroup)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		cur, err := s.st.GetTenant(r.Context(), r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if group != cur.SSOGroup {
+			if _, err := s.st.SetTenantGroup(r.Context(), cur.ID, group); errors.Is(err, store.ErrConflict) {
+				writeError(w, http.StatusConflict, "another tenant is linked to the group "+group)
+				return
+			} else if err != nil {
+				fail(w, err)
+				return
+			}
+			linked = ", linked to no OpenShift group"
+			if group != "" {
+				linked = ", linked to the OpenShift group " + group
+			}
+		}
+	}
 	t, err := s.st.UpdateTenant(r.Context(), r.PathValue("id"), b.DisplayName, b.Enabled)
 	if err != nil {
 		fail(w, err)
@@ -103,7 +165,7 @@ func (s *Server) updateTenant(w http.ResponseWriter, r *http.Request) {
 	if !t.Enabled {
 		state = "Disabled"
 	}
-	s.changed(r, "tenant.update", state+" tenant "+t.Slug)
+	s.changed(r, "tenant.update", state+" tenant "+t.Slug+linked)
 	writeJSON(w, http.StatusOK, t)
 }
 

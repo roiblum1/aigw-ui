@@ -584,12 +584,16 @@ carries the tenant's budget and models as they are then, and gets a new one
 every 10 minutes. The gateways check the token as any other. The admin
 gives the person the key with one line to run, which the Tenants page shows
 when the key is made and `/my-usage` shows again: it runs the installer the
-hub serves (`/clients/install.sh`). That downloads `aigw-token` from the
-hub and signs in, asks the hub for the gateway's address and the person's
+hub serves (`/clients/install.sh`; on Windows `/clients/install.ps1` in
+PowerShell, with a PowerShell `aigw-token`). That downloads `aigw-token`
+from the hub and signs in, asks the hub for the gateway's address and the person's
 models (`GET /api/v1/my/models`), writes Claude Code's settings with them
 and installs its `aigw-usage` plugin, and puts the Oh My Pi extension in
 place, which adds the models to omp each time it starts. Last it checks
-that the gateway takes the token.
+that the gateway takes the token. From then on the machine follows the hub
+(0.36.1): when the hub is upgraded with other client files, or once a week,
+`aigw-token` runs the installer again in the background, so a change to the
+clients reaches people with nothing for them to do.
 
 **Why.**
 
@@ -617,6 +621,49 @@ that the gateway takes the token.
   the hub is the one address they all reach. The files are in the hub's
   binary, so they match the hub's version. The key is asked for on the
   terminal, never put in the command, where the shell would keep it.
+- *Updated by `aigw-token`, on the hub's version.* `aigw-token` already runs
+  every few minutes while Claude Code or omp works, holds the sign-in, and
+  talks to the hub: the token's answer names the client files the hub
+  serves, so a change arrives within minutes of a hub upgrade and no hub
+  upgrade without one moves anybody. The weekly run also brings changes
+  that are not files, such as the tenant's models in Claude Code's
+  settings. No scheduled task (cron, launchd, Task Scheduler) is put on
+  people's machines.
+- *PowerShell on Windows.* Claude Code on Windows runs `apiKeyHelper` with
+  `cmd.exe` and omp runs commands with its own shell: neither runs a `sh`
+  script, and Windows always has Windows PowerShell, while Git Bash and
+  WSL are optional.
+
+### Sign in with your LDAP group
+
+**What it does.** A tenant can be linked to an LDAP group, as the hub
+cluster's OpenShift Group (0.37.0). Its members sign in on `/my-usage` with
+the cluster's own login, make a personal key of their own, set up Claude
+Code and Oh My Pi with it, and see what every member's keys used. Someone
+who leaves the group loses their key within a minute. A tenant without a
+group works by its keys alone.
+
+**How.** The hub's ServiceAccount is an OAuth client of the cluster's OAuth
+server: the browser signs in there and comes back with a code, which the
+hub trades to learn who it is. A signed cookie keeps that for 12 hours. The
+hub reads the Groups with its own account every minute: a person sees the
+tenants their groups are linked to, and the key of someone who left is
+revoked. The gateways count each key's requests and tokens by the client
+ID its tokens carry, beside the tenant's, and the hub keeps them by hour.
+
+**Why.**
+
+- *OpenShift's login, not LDAP itself.* The cluster already signs people in
+  against LDAP and syncs their groups; the hub never sees a password, needs
+  no LDAP account, and the sign-in is the console's.
+- *Per tenant, optional.* Tenants are created by an admin as before; a
+  group is a link, not a source of tenants, and tenants for tools or
+  people outside LDAP need none.
+- *One key per person per tenant.* A key is named after its owner, so the
+  usage by person is by person; a new key replaces the old, and leaving
+  the group ends it.
+- *Unknown is not empty.* When the Groups cannot be read, or a group is not
+  there, nobody's key is revoked.
 
 ### Set a budget across models
 

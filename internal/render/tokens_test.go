@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -11,8 +12,9 @@ import (
 
 // While the hub reads the counters and the gateway takes tokens only, the
 // budget policy counts each tenant's requests and tokens by model, in four
-// shadow rules after the budget rule, which never refuse; without a budget
-// the policy is there for them alone, its budget rule first all the same.
+// shadow rules after the budget rule, which never refuse, then each key's in
+// four more (0.37.0); without a budget the policy is there for them alone,
+// its budget rule first all the same.
 func TestTokenRules(t *testing.T) {
 	s := budgetState()
 	s.Budgets, s.TokenCounts = nil, true
@@ -21,20 +23,24 @@ func TestTokenRules(t *testing.T) {
 		t.Fatalf("annotations: %v", p.GetAnnotations())
 	}
 	rules, _, _ := unstructured.NestedSlice(p.Object, "spec", "rateLimit", "global", "rules")
-	if len(rules) != 5 {
-		t.Fatalf("%d rules, want the budget rule and four token rules", len(rules))
+	if len(rules) != 9 {
+		t.Fatalf("%d rules, want the budget rule, four token rules and four key rules", len(rules))
 	}
 	if limit, _, _ := unstructured.NestedMap(rules[0].(map[string]any), "limit", "fromMetadata"); limit == nil {
 		t.Fatalf("rule 0 is not the budget rule: %v", rules[0])
 	}
-	for i, kind := range TokenKinds {
+	for i, kind := range slices.Concat(TokenKinds, TokenKinds) {
 		r := rules[i+1].(map[string]any)
 		if r["shadowMode"] != true || r["shared"] != true {
 			t.Errorf("%s: %v", kind, r)
 		}
+		by := "x-aigw-tenant"
+		if i >= len(TokenKinds) {
+			by = "x-aigw-client-id"
+		}
 		headers := fmt.Sprint(r["clientSelectors"])
-		if headers != "[map[headers:[map[name:x-aigw-tenant type:Distinct] map[name:x-ai-eg-model type:Distinct]]]]" {
-			t.Errorf("%s selects %s", kind, headers)
+		if headers != "[map[headers:[map[name:"+by+" type:Distinct] map[name:x-ai-eg-model type:Distinct]]]]" {
+			t.Errorf("rule %d (%s) selects %s", i+1, kind, headers)
 		}
 		cost := fmt.Sprint(r["cost"])
 		want := map[TokenKind]string{
@@ -113,5 +119,12 @@ func TestTokenCounterKey(t *testing.T) {
 	}
 	if k := TokenCounterKey("", "gw", TokenRequests, "a", "m", at); k[:len("gw/aigw-ui-tenant-budgets_gw/aigw-ui-tenant-budgets/rule/1_")] != "gw/aigw-ui-tenant-budgets_gw/aigw-ui-tenant-budgets/rule/1_" {
 		t.Fatalf("requests key %s", k)
+	}
+	// A key's counters: rules 5 to 8, by its client ID.
+	got = KeyCounterKey("p:", "gw", TokenCached, "team-a.0011223344556677", "glm-5.3", at)
+	want = "p:gw/aigw-ui-tenant-budgets_gw/aigw-ui-tenant-budgets/rule/7_gw/aigw-ui-tenant-budgets/rule/7_rule-7-match-0_team-a.0011223344556677_rule-7-match-1_glm-5.3_" +
+		fmt.Sprint(time.Date(2026, 10, 17, 14, 0, 0, 0, time.UTC).Unix())
+	if got != want {
+		t.Fatalf("key's key\n got %s\nwant %s", got, want)
 	}
 }

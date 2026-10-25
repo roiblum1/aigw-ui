@@ -28,6 +28,13 @@ func TestClientFiles(t *testing.T) {
 	if w := get("install.sh"); w.Code != http.StatusOK || !strings.HasPrefix(w.Body.String(), "#!/bin/sh") {
 		t.Fatalf("install.sh: %d", w.Code)
 	}
+	// Windows' installer and aigw-token, as text: PowerShell's irm runs text.
+	for _, name := range []string{"install.ps1", "aigw-token.ps1"} {
+		if w := get(name); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "param(") ||
+			!strings.HasPrefix(w.Header().Get("Content-Type"), "text/plain") {
+			t.Fatalf("%s: %d %v", name, w.Code, w.Header())
+		}
+	}
 	if w := get("claude-code.tar.gz"); w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/gzip" || w.Body.Len() < 1000 {
 		t.Fatalf("plugin: %d %v %d", w.Code, w.Header(), w.Body.Len())
 	}

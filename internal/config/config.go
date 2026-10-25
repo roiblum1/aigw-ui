@@ -68,6 +68,16 @@ type Config struct {
 	// to a tenant that may call them. Empty, or a model the tenant may not
 	// call: its priciest model and its cheapest.
 	ClaudeCodeModel, ClaudeCodeSmallModel string
+	// SSOOpenShift lets the members of a tenant's OpenShift Group sign in on
+	// the tenants' page with the hub cluster's own login (0.37.0). The hub's
+	// ServiceAccount, SSOServiceAccount, is the OAuth client and reads the
+	// Groups. SSOCAFile adds a CA for the OAuth server; SSOTokenURL replaces
+	// its token endpoint (internal/sso.Config).
+	SSOOpenShift                              bool
+	SSOServiceAccount, SSOCAFile, SSOTokenURL string
+	// SSOAPIServer, SSOTokenFile and SSONamespace replace the pod's own, to
+	// run the hub outside a pod with a token of its ServiceAccount.
+	SSOAPIServer, SSOTokenFile, SSONamespace string
 
 	// CapacityImage is the AIPerf image a capacity measurement runs on the
 	// clusters. Empty turns measurements off.
@@ -179,6 +189,12 @@ func Load() (*Config, error) {
 	}
 	c.ClaudeCodeModel = strings.TrimSpace(os.Getenv("CLAUDE_CODE_MODEL"))
 	c.ClaudeCodeSmallModel = strings.TrimSpace(os.Getenv("CLAUDE_CODE_SMALL_MODEL"))
+	c.SSOOpenShift = os.Getenv("SSO_OPENSHIFT") == "true"
+	c.SSOServiceAccount, c.SSOCAFile, c.SSOTokenURL = os.Getenv("SSO_SERVICE_ACCOUNT"), os.Getenv("SSO_CA_FILE"), os.Getenv("SSO_TOKEN_URL")
+	c.SSOAPIServer, c.SSOTokenFile, c.SSONamespace = os.Getenv("SSO_API_SERVER"), os.Getenv("SSO_TOKEN_FILE"), os.Getenv("SSO_NAMESPACE")
+	if c.SSOOpenShift && (c.SSOServiceAccount == "" || !c.TenantPage) {
+		return nil, errors.New("SSO_OPENSHIFT needs SSO_SERVICE_ACCOUNT, the hub's ServiceAccount, and TENANT_PAGE on")
+	}
 	c.CapacityImage = os.Getenv("CAPACITY_IMAGE")
 	c.CapacityEvery, err = time.ParseDuration(envOr("CAPACITY_INTERVAL", "20s"))
 	if err != nil || c.CapacityEvery < 5*time.Second {

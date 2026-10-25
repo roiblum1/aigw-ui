@@ -207,6 +207,11 @@ type Tenant struct {
 	// changed: both travel in the tenant's tokens, so a token signed before
 	// carries the ones from before.
 	LimitsChangedAt *time.Time `json:"limits_changed_at"`
+	// SSOGroup is the OpenShift Group (synced from LDAP) whose members sign
+	// in on the tenants' page for this tenant, get a personal key of their
+	// own and see every member's use. Empty: none, the tenant works by its
+	// keys alone.
+	SSOGroup string `json:"sso_group"`
 }
 
 // TenantBudget is a tenant's budget across models: credits for each window.
@@ -231,6 +236,9 @@ type APIKey struct {
 	Kind      string     `json:"kind"`
 	ExpiresAt *time.Time `json:"expires_at"`
 	RenewedAt *time.Time `json:"renewed_at"`
+	// Owner is the OpenShift user who made this personal key for themselves
+	// by signing in; empty for a key an admin made.
+	Owner string `json:"owner"`
 }
 
 type Quota struct {

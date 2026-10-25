@@ -1,4 +1,5 @@
 import type { Unit } from "./money";
+import type { KeyUses } from "./people";
 
 export type Window = "1m" | "1h" | "1d";
 
@@ -216,6 +217,8 @@ export interface Tenant {
   models: string[] | null;
   /** When the budget or the list of models last changed: a token created before carries the ones from before. */
   limits_changed_at: string | null;
+  /** The OpenShift Group (synced from LDAP) whose members sign in for the tenant; "" for none. */
+  sso_group: string;
 }
 
 export interface TenantBudget {
@@ -237,6 +240,24 @@ export interface ApiKey {
   expires_at: string | null;
   /** When a personal key last got a token. */
   renewed_at: string | null;
+  /** The OpenShift user who made this personal key by signing in; "" for a key an admin made. */
+  owner: string;
+}
+
+/** The sign-in with OpenShift, and who is signed in with their teams. */
+export interface SSOStatus {
+  enabled: boolean;
+  user: string;
+  teams: { id: string; slug: string; display_name: string }[];
+  error?: string;
+}
+
+/** The cluster's Groups, for linking a tenant to one. */
+export interface SSOGroups {
+  enabled: boolean;
+  groups: string[];
+  read_at?: string;
+  error?: string;
 }
 
 /** How the gateways tell tenants apart. */
@@ -1055,6 +1076,23 @@ export interface GitOps {
   argocd_error?: string;
 }
 
+/**
+ * A call of the tenants' page: with a key, or, signed in with OpenShift,
+ * with the session cookie and the team in X-Aigw-Team.
+ */
+async function my<T>(method: string, path: string, key: string, team: string): Promise<T> {
+  const res = await fetch("/api/v1" + path, {
+    method,
+    headers: { ...(key ? { Authorization: "Bearer " + key } : {}), ...(team ? { "X-Aigw-Team": team } : {}) },
+  });
+  if (res.status === 401) throw new Unauthorized("Not signed in");
+  if (res.status === 204) return undefined as T;
+  const data = await res.json().catch(() => null);
+  if (res.status === 404) throw new NotFound(data?.error ?? "Not found");
+  if (!res.ok) throw new Error(data?.error ?? `Request failed (${res.status})`);
+  return data as T;
+}
+
 async function request<T>(method: string, path: string, body?: unknown, token = getToken()): Promise<T> {
   const res = await fetch("/api/v1" + path, {
     method,
@@ -1106,10 +1144,22 @@ export const api = {
     request<{ counters: number; deleted: number }>("POST", `/tenants/${tenantId}/budget/reset`),
   usage: (tenantId?: string) => request<UsageReport>("GET", "/usage" + (tenantId ? `?tenant_id=${tenantId}` : "")),
   usageHistory: (step: Step, days: number) => request<UsageHistory>("GET", `/usage/history?step=${step}&days=${days}`),
-  /** A tenant's own usage, by one of its API keys. */
-  myUsage: (key: string) => request<MyUsage>("GET", "/my/usage", undefined, key),
-  /** What a tenant's clients are set up with, by one of its keys. */
-  myModels: (key: string) => request<MyModels>("GET", "/my/models", undefined, key),
+  /** A tenant's own usage, by one of its API keys, or by a team of a person who signed in with OpenShift (key ""). */
+  myUsage: (key: string, team = "") => my<MyUsage>("GET", "/my/usage", key, team),
+  /** What a tenant's clients are set up with, by one of its keys or a team. */
+  myModels: (key: string, team = "") => my<MyModels>("GET", "/my/models", key, team),
+  /** The sign-in with OpenShift: whether it is on, and who is signed in. */
+  sso: () => my<SSOStatus>("GET", "/sso", "", ""),
+  ssoLogout: () => my<void>("POST", "/sso/logout", "", ""),
+  /** A person's own key in a team, without its secret. */
+  myKey: (team: string) => my<{ key: ApiKey | null; user: string }>("GET", "/my/key", "", team),
+  /** Makes a person's own key in a team, in place of the one they had; the secret is shown once. */
+  createMyKey: (team: string) => my<{ key: ApiKey; secret: string }>("POST", "/my/key", "", team),
+  /** What every key of a team used over the last days. */
+  myPeople: (team: string, days: number) => my<KeyUses>("GET", `/my/people?days=${days}`, "", team),
+  /** The same for an admin, on any tenant. */
+  tenantKeyUsage: (tenantId: string, days: number) => request<KeyUses>("GET", `/tenants/${tenantId}/key-usage?days=${days}`),
+  ssoGroups: () => request<SSOGroups>("GET", "/sso/groups"),
 
   clusters: () => request<Cluster[]>("GET", "/clusters"),
   createCluster: (c: ClusterInput) => request<Cluster>("POST", "/clusters", c),
@@ -1190,9 +1240,12 @@ export const api = {
 
   tenants: () => request<Tenant[]>("GET", "/tenants"),
   tenant: (id: string) => request<TenantDetail>("GET", `/tenants/${id}`),
-  createTenant: (slug: string, display_name: string) => request<Tenant>("POST", "/tenants", { slug, display_name }),
-  updateTenant: (id: string, display_name: string, enabled: boolean) =>
-    request<Tenant>("PUT", `/tenants/${id}`, { display_name, enabled }),
+  /** sso_group links the tenant to an OpenShift Group; "" to none. */
+  createTenant: (slug: string, display_name: string, sso_group = "") =>
+    request<Tenant>("POST", "/tenants", { slug, display_name, sso_group }),
+  /** sso_group left out keeps the tenant's group; "" unlinks it. */
+  updateTenant: (id: string, display_name: string, enabled: boolean, sso_group?: string) =>
+    request<Tenant>("PUT", `/tenants/${id}`, { display_name, enabled, ...(sso_group === undefined ? {} : { sso_group }) }),
   deleteTenant: (id: string) => request<void>("DELETE", `/tenants/${id}`),
   /** A null amount removes the budget. */
   setTenantBudget: (id: string, credits: number | null, window: Window) =>

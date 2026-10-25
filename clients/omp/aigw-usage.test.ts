@@ -7,7 +7,7 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import aigw, { definesAigw, ompModels } from "./aigw-usage.ts";
+import aigw, { definesAigw, ompModels, tokenCommand } from "./aigw-usage.ts";
 
 const clients = {
 	openai_base_url: "https://llm.example.com/v1",
@@ -33,6 +33,24 @@ test("a provider aigw of the person's own in models.yml", () => {
 	assert.ok(definesAigw("providers:\n    aigw:   # mine\n"));
 	assert.ok(!definesAigw("providers:\n  aigw-anthropic:\n"));
 	assert.ok(!definesAigw(""));
+});
+
+// omp runs the token command with /bin/sh, but on Windows with its own
+// shell, which cannot run the sh aigw-token: there it is the PowerShell one
+// install.ps1 puts in place.
+test("the command omp runs for a token", () => {
+	const home = mkdtempSync(join(tmpdir(), "aigw-omp-home-"));
+	assert.equal(tokenCommand("linux", home), "!aigw-token");
+	assert.equal(tokenCommand("win32", home), "!aigw-token.cmd");
+	mkdirSync(join(home, ".local", "bin"), { recursive: true });
+	writeFileSync(join(home, ".local", "bin", "aigw-token"), "#!/bin/sh\n");
+	assert.equal(tokenCommand("darwin", home), `!${home}/.local/bin/aigw-token`);
+	mkdirSync(join(home, ".local", "share", "aigw"), { recursive: true });
+	writeFileSync(join(home, ".local", "share", "aigw", "aigw-token.ps1"), "");
+	assert.equal(
+		tokenCommand("win32", home),
+		`!powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "${home}/.local/share/aigw/aigw-token.ps1"`,
+	);
 });
 
 // Loaded, it asks the hub with the personal key aigw-token keeps and adds

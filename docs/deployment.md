@@ -99,7 +99,11 @@ Back up the encryption key straight away. See
 | `redis.tlsInsecure` | `false` | Skip verification of the Redis certificate. For tests only |
 | `redis.allowReset` | `false` | Allow resetting a tenant's usage. The server then deletes counters in Redis, so its Redis user needs `DEL` |
 | `redis.keyPrefix` | empty | The rate limit service's `CACHE_KEY_PREFIX`, if set |
-| `redis.tokenCounts` | `true` | Have the gateways count each tenant's requests and input, cached and output tokens by model and hour, for the tenant's own page. Four rules that never refuse, in the hub's `BackendTrafficPolicy` on the client listener. Needs global rate limiting in Envoy Gateway (as budgets across models do) and tenants on tokens; turn it off for a site without it. See [token counts on every route](#token-counts-on-every-route) |
+| `redis.tokenCounts` | `true` | Have the gateways count each tenant's requests and input, cached and output tokens by model and hour, for the tenant's own page, and since 0.37.0 the same for each key. Eight rules that never refuse (four by tenant, four by key), in the hub's `BackendTrafficPolicy` on the client listener. Needs global rate limiting in Envoy Gateway (as budgets across models do) and tenants on tokens; turn it off for a site without it. See [token counts on every route](#token-counts-on-every-route) |
+| `sso.enabled` | `false` | Sign-in with OpenShift on `/my-usage` for tenants linked to an OpenShift Group (0.37.0); see [operations](operations.md#sign-in-with-openshift). Needs `route.enabled` and `config.tenantPage` |
+| `sso.tokenURL` | the OAuth server's Service | The token endpoint as the pod reaches it; empty uses the one the OAuth server names (its Route) |
+| `sso.caConfigMap` | empty | A ConfigMap with a CA bundle (`ca.crt`) for the OAuth server |
+| `sso.createClusterRole` | `true` | Create the ClusterRole to read the Groups and bind it to the hub (needs cluster-admin at install) |
 | `config.syncInterval` | `5m` | How often every cluster is synced again without a change. `0` turns it off. Needs `autoSync` |
 | `config.overageInterval` | `15s` | For models that serve a spent budget as best-effort: how often the usage counters are read. At least `5s`. Needs `redis.url` |
 | `config.overageThreshold` | `0.9` | The share of its budget a tenant has to have used to be moved to best-effort, from `0.5` to `1` |

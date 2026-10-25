@@ -24,3 +24,8 @@ render "external database and secret" --set postgresql.enabled=false --set exter
 render "deployments over HTTPS with Argo CD status" --set gitops.repo=https://git.example/models.git --set gitops.existingSecret=aigw-gitops --set gitops.argocdNamespace=openshift-gitops --set redis.caSecret=redis-ca
 render "deployments over SSH" --set gitops.repo=git@git.example:models.git --set gitops.existingSecret=aigw-gitops --set gitops.auth=ssh
 render "disconnected install" --set global.imageRegistry=registry.example:5000 --set 'global.imagePullSecrets[0]=pull-secret'
+render "sign-in with OpenShift" --set sso.enabled=true --set sso.caConfigMap=oauth-ca
+if helm template aigw-ui "$chart" --set sso.enabled=true --set route.enabled=false >/dev/null 2>&1; then
+  echo "the chart renders the sign-in with OpenShift without a Route"
+  exit 1
+fi

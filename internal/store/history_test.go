@@ -11,7 +11,7 @@ func TestUsageHistory(t *testing.T) {
 	glm := model(t, s, ctx, "glm", false)
 	a, b := tenant(t, s, ctx, "team-a"), tenant(t, s, ctx, "team-b")
 	day := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
-	ka, kb := UsageKey{a.ID, glm}, UsageKey{b.ID, glm}
+	ka, kb := UsageKey{TenantID: a.ID, ModelID: glm}, UsageKey{TenantID: b.ID, ModelID: glm}
 
 	record := func(found Look) Before {
 		t.Helper()

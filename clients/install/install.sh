@@ -14,7 +14,14 @@
 # AIGW_PERSONAL_KEY; it is never put on a command line. Claude Code and
 # Oh My Pi are each set up when they are installed, and skipped with what
 # to do otherwise; the settings need node. Last, it checks that the gateway
-# takes the token. Needs sh and curl.
+# takes the token. Needs sh and curl. On Windows, install.ps1 does the same
+# from PowerShell; in WSL this sets up the tools installed in WSL.
+#
+# It keeps the version of the client files it installed (clients, in
+# aigw-token's directory), and aigw-token runs it again by itself, with
+# AIGW_UPDATE=1, when the hub serves others or a week later: then it asks
+# for nothing, keeps a gateway address given before, and skips the
+# gateway's check.
 set -eu
 
 fail() {
@@ -25,6 +32,43 @@ say() { echo "aigw install: $*" >&2; }
 
 [ $# -ge 1 ] || fail "usage: install.sh HUB_URL [GATEWAY_URL]"
 hub=${1%/}
+update=${AIGW_UPDATE:-}
+# aigw-token, run below, must not start an update of its own meanwhile.
+AIGW_AUTO_UPDATE=0
+export AIGW_AUTO_UPDATE
+windows_line="iex \"& { \$(irm $hub/clients/install.ps1) } $hub\""
+
+# Claude Code on Windows runs its apiKeyHelper with cmd.exe, and Oh My Pi
+# runs commands with its own shell: neither can run a sh script, so a Unix
+# shell on Windows (Git Bash, MSYS2, Cygwin) is sent to the PowerShell setup.
+case $(uname -s 2>/dev/null) in
+MINGW* | MSYS* | CYGWIN*)
+	fail "this is a Unix shell on Windows, where Claude Code and Oh My Pi cannot run the sh aigw-token. Run this in PowerShell instead:
+  $windows_line"
+	;;
+esac
+
+# In WSL, Windows' own programs are on the PATH too, under /mnt/<drive>/
+# (AIGW_WINDOWS_DRIVES, wsl.conf's automount root). Claude Code or Oh My Pi
+# installed on Windows keeps its settings in the Windows home, which this
+# does not set up, and a Windows launcher run from Linux fails: only the
+# programs installed in WSL count, and Windows' are set up from PowerShell.
+wsl=
+if [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then wsl=1; fi
+drives=${AIGW_WINDOWS_DRIVES:-/mnt}
+windows_side=
+have() {
+	found=$(command -v "$1" 2>/dev/null) || return 1
+	if [ -n "$wsl" ]; then
+		case $found in
+		"$drives"/[a-zA-Z]/*)
+			case " $windows_side " in *" $1 "*) ;; *) windows_side="$windows_side $1" ;; esac
+			return 1
+			;;
+		esac
+	fi
+	return 0
+}
 bin=${AIGW_BIN_DIR:-$HOME/.local/bin}
 claude_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
 omp_dir=$HOME/.omp/agent
@@ -44,6 +88,8 @@ case ":$PATH:" in *":$bin:"*) ;; *) say "add $bin to your PATH to run aigw-token
 config=${AIGW_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/aigw}
 if [ "$(cat "$config/hub" 2>/dev/null)" = "$hub" ] && AIGW_TOKEN_RENEW_SECONDS=0 "$bin/aigw-token" >/dev/null 2>&1; then
 	say "already signed in to $hub (aigw-token logout, then run this again, to change the key)"
+elif [ -n "$update" ]; then
+	fail "not signed in to $hub with a key it takes: the update stops; run the installer by hand"
 elif [ -n "${AIGW_PERSONAL_KEY:-}" ]; then
 	printf '%s\n' "$AIGW_PERSONAL_KEY" | "$bin/aigw-token" login "$hub"
 elif [ -r /dev/tty ]; then
@@ -60,7 +106,17 @@ setup=$tmp/setup.json
 printf 'Authorization: Bearer %s\n' "$(cat "$config/personal-key")" |
 	curl -fsS --max-time 30 -H @- -o "$setup" "$hub/api/v1/my/models" 2>/dev/null || rm -f "$setup"
 field() { [ -r "$setup" ] && sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" "$setup" || true; }
-gateway=${2:-$(field gateway_url)}
+# A gateway address given by hand is kept for the updates, which give none.
+if [ -n "$update" ]; then
+	given=$(cat "$config/gateway" 2>/dev/null || true)
+elif [ -n "${2:-}" ]; then
+	given=$2
+	printf '%s\n' "$given" >"$config/gateway"
+else
+	given=
+	rm -f "$config/gateway"
+fi
+gateway=${given:-$(field gateway_url)}
 gateway=${gateway%/}
 # An address copied from a client's settings ends with its API's path.
 gateway=${gateway%/anthropic}
@@ -71,9 +127,9 @@ gateway=${gateway%/v1}
 # API as the address, the hub's models where the person has none of their
 # own, and the plugin's status line when there is none. Everything else in
 # the settings is kept, and the old file beside them.
-if command -v claude >/dev/null || [ -d "$claude_dir" ]; then
+if have claude || [ -d "$claude_dir" ]; then
 	settings="$claude_dir/settings.json"
-	if command -v node >/dev/null; then
+	if have node; then
 		mkdir -p "$claude_dir"
 		if model=$(AIGW_SETTINGS="$settings" AIGW_HELPER="$bin/aigw-token" AIGW_GATEWAY="$gateway" AIGW_SETUP="$setup" node -e '
 const fs = require("fs");
@@ -135,11 +191,17 @@ EOF
 	fi
 
 	# The aigw-usage plugin, from a copy of its marketplace the hub serves.
-	if command -v claude >/dev/null; then
+	if have claude; then
 		market="$claude_dir/aigw-marketplace"
 		rm -rf "$market.tmp" && mkdir -p "$market.tmp"
 		curl -fsS --max-time 60 "$hub/clients/claude-code.tar.gz" | tar -xzf - -C "$market.tmp" || fail "could not download the plugin from $hub"
-		rm -rf "$market" && mv "$market.tmp" "$market"
+		# Claude Code loads the plugin from this folder at each session's
+		# start: swapped in two renames, so a session that starts meanwhile
+		# misses it for as short a time as can be.
+		rm -rf "$market.old"
+		if [ -d "$market" ]; then mv "$market" "$market.old"; fi
+		mv "$market.tmp" "$market"
+		rm -rf "$market.old"
 		if claude plugin marketplace list 2>/dev/null | grep -qw aigw; then
 			claude plugin marketplace update aigw >/dev/null
 		else
@@ -159,7 +221,7 @@ fi
 
 # 5. Oh My Pi: the extension adds the person's models from the hub as the
 # provider aigw, with aigw-token for tokens, and shows the budget.
-if command -v omp >/dev/null || [ -d "$omp_dir" ]; then
+if have omp || [ -d "$omp_dir" ]; then
 	mkdir -p "$omp_dir/extensions"
 	curl -fsS --max-time 30 -o "$omp_dir/extensions/aigw-usage.ts.tmp" "$hub/clients/aigw-usage.ts" || fail "could not download the Oh My Pi extension from $hub"
 	mv "$omp_dir/extensions/aigw-usage.ts.tmp" "$omp_dir/extensions/aigw-usage.ts"
@@ -168,7 +230,7 @@ if command -v omp >/dev/null || [ -d "$omp_dir" ]; then
 	# smol, for omp's quick tasks. A role the person set to another
 	# provider is theirs; one on a gateway model they may no longer call
 	# is replaced.
-	if command -v omp >/dev/null && command -v node >/dev/null; then
+	if have omp && have node; then
 		roles=$(omp config get modelRoles --json 2>/dev/null) || roles='{}'
 		if new=$(AIGW_SETUP="$setup" AIGW_ROLES="$roles" node -e '
 const fs = require("fs");
@@ -204,7 +266,7 @@ fi
 # 6. The gateway takes the token. While it takes API keys too, it takes a
 # personal key's token once a sync has listed it, a few seconds after the
 # first sign-in.
-if [ -n "$gateway" ]; then
+if [ -n "$gateway" ] && [ -z "$update" ]; then
 	wait=${AIGW_CHECK_SECONDS:-60}
 	start=$(date +%s)
 	while :; do
@@ -221,5 +283,15 @@ if [ -n "$gateway" ]; then
 	000) say "the gateway at $gateway cannot be reached from here" ;;
 	*) say "the gateway at $gateway answered HTTP $code" ;;
 	esac
+fi
+# What was installed, for aigw-token to tell when to run this again.
+version=$(field clients_version)
+if [ -n "$version" ]; then
+	printf '%s %s\n' "$version" "$(date +%s)" >"$config/clients.tmp"
+	mv "$config/clients.tmp" "$config/clients"
+fi
+if [ -n "$windows_side" ]; then
+	say "left out Windows' own${windows_side} on the PATH: this set up WSL. For Claude Code or Oh My Pi on Windows, run this in PowerShell:
+  $windows_line"
 fi
 say "done"

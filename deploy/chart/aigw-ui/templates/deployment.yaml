@@ -4,6 +4,11 @@
 {{- $name := include "aigw-ui.name" . }}
 {{- /* Absent from the values of a release before 0.35.0 that an upgrade reuses. */}}
 {{- $gitops := .Values.gitops | default dict }}
+{{- /* Absent from the values of a release before 0.37.0 that an upgrade reuses. */}}
+{{- $sso := .Values.sso | default dict }}
+{{- if and $sso.enabled (not .Values.route.enabled) }}
+{{- fail "sso.enabled needs route.enabled: the ServiceAccount's redirect reference names the Route" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -26,8 +31,10 @@ spec:
     spec:
       serviceAccountName: {{ $name }}
       {{- /* The hub calls no Kubernetes API with its own account, except to
-             read Argo CD's Applications when gitops.argocdNamespace is set. */}}
-      automountServiceAccountToken: {{ if and $gitops.repo $gitops.argocdNamespace }}true{{ else }}false{{ end }}
+             read Argo CD's Applications when gitops.argocdNamespace is set,
+             and, for the sign-in with OpenShift, to be the OAuth client and
+             read the Groups. */}}
+      automountServiceAccountToken: {{ if or (and $gitops.repo $gitops.argocdNamespace) $sso.enabled }}true{{ else }}false{{ end }}
       {{- include "aigw-ui.pullSecrets" . | nindent 6 }}
       containers:
         - name: server
@@ -81,6 +88,20 @@ spec:
             {{- with .smallModel }}
             - name: CLAUDE_CODE_SMALL_MODEL
               value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $sso.enabled }}
+            - name: SSO_OPENSHIFT
+              value: "true"
+            - name: SSO_SERVICE_ACCOUNT
+              value: {{ $name }}
+            {{- with $sso.tokenURL }}
+            - name: SSO_TOKEN_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if $sso.caConfigMap }}
+            - name: SSO_CA_FILE
+              value: /etc/aigw-ui/sso-ca/ca.crt
             {{- end }}
             {{- end }}
             - name: BEST_EFFORT_PRIORITY
@@ -187,8 +208,14 @@ spec:
             readOnlyRootFilesystem: true
           {{- $redisCA := or .Values.redis.caSecret .Values.redis.caConfigMap }}
           {{- $ssh := and $gitops.repo $gitops.existingSecret (eq ($gitops.auth | default "token") "ssh") }}
-          {{- if or $redisCA $gitops.repo }}
+          {{- $ssoCA := and $sso.enabled $sso.caConfigMap }}
+          {{- if or $redisCA $gitops.repo $ssoCA }}
           volumeMounts:
+            {{- if $ssoCA }}
+            - name: sso-ca
+              mountPath: /etc/aigw-ui/sso-ca
+              readOnly: true
+            {{- end }}
             {{- if $redisCA }}
             - name: redis-ca
               mountPath: /etc/aigw-ui/redis-ca
@@ -205,8 +232,12 @@ spec:
               readOnly: true
             {{- end }}
           {{- end }}
-      {{- if or $redisCA $gitops.repo }}
+      {{- if or $redisCA $gitops.repo $ssoCA }}
       volumes:
+        {{- if $ssoCA }}
+        - name: sso-ca
+          configMap: { name: {{ $sso.caConfigMap }} }
+        {{- end }}
         {{- if $redisCA }}
         - name: redis-ca
           {{- if .Values.redis.caSecret }}
@@ -236,6 +267,12 @@ kind: ServiceAccount
 metadata:
   name: {{ $name }}
   labels: {{- include "aigw-ui.labels" . | nindent 4 }}
+  {{- if $sso.enabled }}
+  annotations:
+    # The OAuth server takes the hub's ServiceAccount as a client and sends
+    # the browser back to an address of this Route only.
+    serviceaccounts.openshift.io/oauth-redirectreference.aigw-ui: '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"{{ $name }}"}}'
+  {{- end }}
 automountServiceAccountToken: false
 ---
 apiVersion: v1

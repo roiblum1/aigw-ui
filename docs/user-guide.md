@@ -283,7 +283,12 @@ operator name.
 
 A tenant is a team.
 
-1. **Add tenant**. The ID cannot be changed later.
+1. **Add tenant**. The ID cannot be changed later. With the sign-in with
+   OpenShift on (`sso.enabled`, 0.37.0), **LDAP group** links it to an
+   OpenShift Group synced from LDAP; leave it empty for a tenant that works
+   by its keys alone. The tenant's page shows the link in **LDAP group**,
+   where it can be changed or removed, and warns when the cluster has no
+   such Group.
 2. **Create** a key for each person or tool, shown once:
    - a **personal key** for a person in Claude Code (see below): they never
      handle a token, and a change of the tenant's budget or models reaches
@@ -422,17 +427,32 @@ tokens** at the top of the Tenants page says what the gateways take now:
 **Personal keys and `aigw-token`.** A personal key is what a person keeps
 on their machine; the hub stores only its hash, and the gateways never see
 it. The helper `aigw-token` (`clients/aigw-token`, served by the hub at
-`/clients/aigw-token`; it needs `sh` and `curl`) trades it at the hub (`POST /api/v1/token`) for a
+`/clients/aigw-token`; it needs `sh` and `curl`; on Windows its PowerShell
+twin `aigw-token.ps1`) trades it at the hub (`POST /api/v1/token`) for a
 token that lives 7 days (`tokens.renewedLifetimeHours`), carrying the
 tenant's budget and models as they are then, and asks for a new one every
 10 minutes. Claude Code and Oh My Pi run it for their tokens. When the
-personal key is made, the Tenants page shows the line that sets up both
-from the hub, with no internet needed; the person's page `/my-usage` shows
-it too (see [the tenants' own page](#the-tenants-own-page)):
+personal key is made, the Tenants page shows the lines that set up both
+from the hub, with no internet needed, with a copy button for each; the
+person's page `/my-usage` shows them too (see [the tenants' own
+page](#the-tenants-own-page)). On macOS, Linux or WSL, in a terminal:
 
 ```sh
 curl -fsSL https://<the hub>/clients/install.sh | sh -s -- https://<the hub>
 ```
+
+On Windows, in PowerShell (Windows PowerShell 5.1 or PowerShell 7). Claude
+Code and Oh My Pi on Windows cannot run the `sh` helper, so this installs
+the PowerShell one; WSL has its own tools and takes the line above:
+
+```powershell
+iex "& { $(irm https://<the hub>/clients/install.ps1) } https://<the hub>"
+```
+
+From 0.36.1 a machine set up this way keeps itself up to date: when the hub
+is upgraded with other client files, or once a week, `aigw-token` runs the
+installer again in the background with nothing shown (see
+[operations](operations.md#peoples-tools-follow-the-hub)).
 
 By hand, for Claude Code:
 
@@ -486,6 +506,15 @@ counted, nobody refused. A model with prices shows its input price, and
 **dry-run** while that is on. See [charging by cost](pricing.md); the
 Capacity page can check the prices against what the GPUs cost, which is
 optional.
+
+### Usage by key
+
+On a tenant's page, **Usage by key** (0.37.0) shows what each key used over
+a day, a week or 30 days: requests, input, cached and output tokens, and the
+cost at the models' prices, the biggest first. A key a person made by
+signing in with OpenShift is named after them and shows "made by … signed
+in with OpenShift" in the keys table. The gateways count each key while
+they take tokens only and `redis.tokenCounts` is on.
 
 ## Letting tenants use what others leave unused
 
@@ -634,9 +663,20 @@ A tenant can see its own budgets and usage without the admin token. It
 opens `/my-usage` on the hub's address and signs in with a personal key or
 any of its API keys or tokens. The sign-in page of the hub links to it.
 
+With the sign-in with OpenShift on (0.37.0), a member of a tenant's LDAP
+group presses **Sign in with OpenShift** instead and signs in as on the
+OpenShift console. The header names them; with several teams it has a
+picker. In place of the setup panel they get **Your key, and setting up
+Claude Code and Oh My Pi**: **Make my key** makes their own personal key,
+shown once (a new one replaces the old), with the two setup lines. **Usage
+by person** lists every key of the team, theirs marked, with requests,
+input, cached and output tokens, the cost at the models' prices and the
+share, over a day, a week or 30 days. A person who leaves the group loses
+their key within a minute.
+
 | Section | Shows |
 |---|---|
-| Set up Claude Code and Oh My Pi | One line to paste in a terminal: `curl -fsSL <hub>/clients/install.sh \| sh -s -- <hub>`. It installs `aigw-token` in `~/.local/bin` and signs it in (it asks for the personal key on the terminal), then asks the hub for the gateway's address and the person's models (`GET /api/v1/my/models`) and sets up what is installed. Claude Code: `apiKeyHelper`, `ANTHROPIC_BASE_URL` (the gateway with `/anthropic`), the models (`ANTHROPIC_MODEL` and the alias models, from `config.claudeCode` or by price; a model the person set that they may call is kept), the model's length and longest answer when the hub knows it, and the status line in `~/.claude/settings.json` (everything else is kept, the old file is kept as `settings.json.aigw-backup`), and the `aigw-usage` plugin with `claude plugin`. Oh My Pi: the extension in `~/.omp/agent/extensions`, which adds the person's models as `aigw/<model>` when omp starts and shows the budget, and omp's model roles `default` and `smol` (quick tasks) set to the same two models (a role set to another provider is kept). Last, it checks that the gateway takes the token, and waits up to a minute while the gateways list it. Every file comes from the hub (`/clients/`), so it works with no internet. The panel names the models each tool gets; below it, the same step by step. Open by default after a sign-in with a personal key; with a token or API key it says a personal key is needed. Without `config.gatewayURL` the page says the hub was not told the gateway's address |
+| Set up Claude Code and Oh My Pi | One line to paste: in a terminal on macOS, Linux or WSL `curl -fsSL <hub>/clients/install.sh \| sh -s -- <hub>`, or in PowerShell on Windows `iex "& { $(irm <hub>/clients/install.ps1) } <hub>"` (0.36.1; it installs a PowerShell `aigw-token`, writes the settings without `node`, and leaves out the plugin and the status line when `node` is missing). It installs `aigw-token` in `~/.local/bin` and signs it in (it asks for the personal key on the terminal), then asks the hub for the gateway's address and the person's models (`GET /api/v1/my/models`) and sets up what is installed. Claude Code: `apiKeyHelper`, `ANTHROPIC_BASE_URL` (the gateway with `/anthropic`), the models (`ANTHROPIC_MODEL` and the alias models, from `config.claudeCode` or by price; a model the person set that they may call is kept), the model's length and longest answer when the hub knows it, and the status line in `~/.claude/settings.json` (everything else is kept, the old file is kept as `settings.json.aigw-backup`), and the `aigw-usage` plugin with `claude plugin`. Oh My Pi: the extension in `~/.omp/agent/extensions`, which adds the person's models as `aigw/<model>` when omp starts and shows the budget, and omp's model roles `default` and `smol` (quick tasks) set to the same two models (a role set to another provider is kept). Last, it checks that the gateway takes the token, and waits up to a minute while the gateways list it. Every file comes from the hub (`/clients/`), so it works with no internet. The panel names the models each tool gets; below it, the same step by step. Open by default after a sign-in with a personal key; with a token or API key it says a personal key is needed. Without `config.gatewayURL` the page says the hub was not told the gateway's address |
 | Your budget across models | The tenant's budget across every priced model, when it has one: what is used and left, when the next period starts, and whether a gateway holds the tenant to it |
 | Your models | The models the tenant may call, when it is held to some; the budgets and prices below are of those only |
 | Your budgets | For each model the tenant has a budget on: what is used and left in the running period, when the next period starts, and whether its requests are served as best-effort or refused |

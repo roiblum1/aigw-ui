@@ -13,6 +13,11 @@
 #
 # The key and the token are kept in ~/.config/aigw, readable by the user
 # only. The key is passed to curl on stdin, never on its command line.
+#
+# A machine the hub's installer set up follows the hub: the installer keeps
+# the version of the client files it installed, and when the hub's answer
+# names another, or a week after the last setup, this runs the installer
+# again from the hub in the background (see follow).
 set -eu
 dir=${AIGW_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/aigw}
 renew=${AIGW_TOKEN_RENEW_SECONDS:-600}
@@ -51,6 +56,32 @@ logout)
 *) fail "usage: aigw-token [login HUB_URL [PERSONAL_KEY] | logout]" ;;
 esac
 
+# The installer keeps "<version> <when>" in clients. When the hub serves
+# other client files, or AIGW_UPDATE_DAYS (7) after the last setup, the
+# installer runs again from the hub in the background, with this sign-in
+# and nothing on the terminal, writing to update.log. A try that has not
+# finished a setup (update-tried later than the setup) is not made again
+# for a day, so a running or failing one is not repeated every 10 minutes;
+# after a setup, the next version is taken at once. AIGW_AUTO_UPDATE=0
+# turns it off.
+follow() {
+	want=$1
+	[ -n "$want" ] && [ "${AIGW_AUTO_UPDATE:-1}" != 0 ] && [ -r "$dir/clients" ] || return 0
+	have= at= tried=
+	read -r have at <"$dir/clients" || true
+	[ -r "$dir/update-tried" ] && read -r tried <"$dir/update-tried" || true
+	days=${AIGW_UPDATE_DAYS:-7}
+	case $at in '' | *[!0-9]*) at=0 ;; esac
+	case $tried in '' | *[!0-9]*) tried=0 ;; esac
+	case $days in '' | *[!0-9]*) days=7 ;; esac
+	if [ "$want" = "$have" ] && [ $((now - at)) -lt $((days * 86400)) ]; then return 0; fi
+	if [ "$tried" -gt "$at" ] && [ $((now - tried)) -lt 86400 ]; then return 0; fi
+	printf '%s\n' "$now" >"$dir/update-tried" || return 0
+	# Every descriptor away from the caller's: Claude Code waits for this
+	# helper's output to end, and gets its token now.
+	(curl -fsS --max-time 60 "$hub/clients/install.sh" | AIGW_UPDATE=1 sh -s -- "$hub") </dev/null >"$dir/update.log" 2>&1 &
+}
+
 [ -r "$dir/hub" ] && [ -r "$dir/personal-key" ] || fail "not signed in: run aigw-token login HUB_URL"
 hub=$(cat "$dir/hub")
 key=$(cat "$dir/personal-key")
@@ -79,6 +110,7 @@ case $code in
 	[ -n "$new" ] && [ -n "$life" ] || fail "the hub's answer has no token"
 	printf '%s %s %s\n' "$now" "$((now + life))" "$new" >"$dir/token.tmp"
 	mv "$dir/token.tmp" "$dir/token"
+	follow "$(printf '%s' "$body" | sed -n 's/.*"clients_version": *"\([^"]*\)".*/\1/p')"
 	printf '%s\n' "$new"
 	exit 0
 	;;

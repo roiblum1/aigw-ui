@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"aigw-ui/clients"
 	"aigw-ui/internal/store"
 )
 
@@ -44,9 +45,12 @@ func (s *Server) renewToken(w http.ResponseWriter, r *http.Request) {
 	}
 	// A token is a credential: no cache may keep it (RFC 6749, 5.1).
 	w.Header().Set("Cache-Control", "no-store")
+	// The client files' version rides along: aigw-token runs the installer
+	// again when it differs from the one it installed.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"token":      got.Token,
-		"expires_at": got.Expires,
-		"expires_in": int64(got.Expires.Sub(now).Seconds()),
+		"token":           got.Token,
+		"expires_at":      got.Expires,
+		"expires_in":      int64(got.Expires.Sub(now).Seconds()),
+		"clients_version": clients.Version(),
 	})
 }

@@ -7,8 +7,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"path"
 	"strings"
@@ -16,7 +19,7 @@ import (
 	"time"
 )
 
-//go:embed aigw-token/aigw-token install/install.sh omp/aigw-usage.ts
+//go:embed aigw-token/aigw-token aigw-token/aigw-token.ps1 install/install.sh install/install.ps1 omp/aigw-usage.ts
 var files embed.FS
 
 // The Claude Code plugin, with its hidden .claude-plugin directory.
@@ -30,10 +33,14 @@ type File struct {
 	Name, Path, Type string
 }
 
-// Files are the files served as they are.
+// Files are the files served as they are. The .ps1 files are Windows'
+// installer and aigw-token: text, so that PowerShell's irm reads them as a
+// script and not as bytes.
 var Files = []File{
 	{"aigw-token", "aigw-token/aigw-token", "text/plain; charset=utf-8"},
+	{"aigw-token.ps1", "aigw-token/aigw-token.ps1", "text/plain; charset=utf-8"},
 	{"install.sh", "install/install.sh", "text/plain; charset=utf-8"},
+	{"install.ps1", "install/install.ps1", "text/plain; charset=utf-8"},
 	{"aigw-usage.ts", "omp/aigw-usage.ts", "text/plain; charset=utf-8"},
 }
 
@@ -57,6 +64,36 @@ const (
 	Marketplace = "aigw"
 	Plugin      = "aigw-usage"
 )
+
+var version struct {
+	once sync.Once
+	text string
+}
+
+// Version names the client files this hub serves: the first 12 hex digits
+// of a SHA-256 over each file's name and bytes, the plugin's archive with
+// them. A machine the installer set up keeps the version it installed, and
+// aigw-token runs the installer again when the hub's differs, so a hub
+// upgrade that changes a client reaches every machine by itself, and one
+// that changes none moves nobody. Empty if the archive cannot be built.
+func Version() string {
+	version.once.Do(func() {
+		h := sha256.New()
+		for _, f := range Files {
+			_, data, _ := Read(f.Name)
+			fmt.Fprintf(h, "%s\x00%d\x00", f.Name, len(data))
+			h.Write(data)
+		}
+		data, err := Archive()
+		if err != nil {
+			return
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00", PluginArchive, len(data))
+		h.Write(data)
+		version.text = hex.EncodeToString(h.Sum(nil))[:12]
+	})
+	return version.text
+}
 
 var archive struct {
 	once sync.Once

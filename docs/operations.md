@@ -79,6 +79,11 @@ fork, which may not write the status, are tested again.
 - **The account can read the Secrets of its namespace**, which hold the
   admin token and the encryption key. Anyone who can change the workflow
   on `main`, or the environment's secrets, can use it.
+- **The account cannot read cluster-wide objects.** With
+  `sso.createClusterRole=true` in the release, Helm must read the
+  ClusterRole on every upgrade, and the job fails. Turn sign-in on with
+  `sso.createClusterRole=false`, and grant the role by hand
+  ([Sign-in with OpenShift](#sign-in-with-openshift)).
 - **Turn it off** by setting `HUB_DEPLOY` to anything else. To remove it
   for good, delete the service account on the cluster too.
 - **Try it by hand** with `DRY_RUN=1 hack/deploy-hub.sh` and the same
@@ -130,6 +135,69 @@ version; `cmd/upstream-docs` fetches it while the image is built.
 - **A project that moved its docs** fails the fetch ("no pages under …"),
   in the weekly workflow before a pull request and in the image build: fix
   its `roots` in the file.
+
+## People's tools follow the hub
+
+From 0.36.1 a machine set up with the installer (`install.sh`, or
+`install.ps1` on Windows) updates itself from the hub. To push a change to
+`aigw-token`, the installers, the Claude Code plugin or the Oh My Pi
+extension, upgrade the hub: the next token each machine's `aigw-token`
+fetches (every 10 minutes while Claude Code or omp asks for one) names the
+new `clients_version`, and `aigw-token` runs the hub's installer again in
+the background, with nothing shown. Machines also re-run it weekly, which
+brings the tenant's current models into Claude Code's settings.
+
+- **What a machine has.** `~/.config/aigw/clients` holds the version
+  installed and when (`%USERPROFILE%\.config\aigw\clients` on Windows);
+  `update.log` beside it is the last update's output; `update-tried` the
+  last try. The hub's version is `clients_version` in `GET
+  /api/v1/my/models` with the person's personal key.
+- **Who does not follow.** A machine set up by hand (no `clients` file), one
+  with `AIGW_AUTO_UPDATE=0` in Claude Code's or omp's environment, one that
+  does not use Claude Code or omp, and one signed out or with a revoked key
+  (the update stops; the person runs the installer by hand). A try that did
+  not finish is made again a day later.
+- **A bad client.** Every set-up machine takes it within about 10 minutes
+  of its next use. Fix it with another hub version, which they take the same
+  way: a machine whose last try finished takes the next version at once.
+
+## Sign-in with OpenShift
+
+From 0.37.0 the members of a tenant's LDAP group can sign in on
+`/my-usage` with the hub cluster's own OpenShift login, make a personal key
+of their own and see what every member's keys used. It is per tenant and
+optional: a tenant without a group works by its keys alone, as before.
+
+1. **Groups in OpenShift.** The hub reads the cluster's Groups, not LDAP:
+   they must be synced from LDAP (`oc adm groups sync` with an
+   LDAPSyncConfig, usually a CronJob). `oc get groups` lists them.
+2. **Turn it on** with `sso.enabled=true` (needs `route.enabled`). The chart
+   annotates the hub's ServiceAccount with a redirect reference to the
+   Route, which makes it the OAuth client, and creates a ClusterRole to read
+   the Groups (`sso.createClusterRole`; installing it needs cluster-admin).
+   A hub that CI upgrades needs `sso.createClusterRole=false` and the role
+   granted by hand (see [Upgrading a hub from CI](#upgrading-a-hub-from-ci)):
+
+   ```sh
+   oc create clusterrole aigw-ui-aigw-ui-groups --verb=get,list,watch \
+     --resource=groups.user.openshift.io
+   oc create clusterrolebinding aigw-ui-aigw-ui-groups \
+     --clusterrole=aigw-ui-aigw-ui-groups --serviceaccount=aigw-ui:aigw-ui
+   ```
+3. **Link a tenant** on the Tenants page: **LDAP group** when adding it, or
+   on its page. The form offers the Groups the hub read.
+4. People open `/my-usage` and press **Sign in with OpenShift**.
+
+- **Check.** `GET /api/v1/sso/groups` with the admin token lists the Groups
+  read and the last error. The hub logs `openshift sign-in` with the user
+  for each sign-in.
+- **Leaving.** Every minute the hub revokes the personal key of each person
+  no longer in their tenant's group, and syncs (`key.revoke` in the task
+  log). When the Groups cannot be read, or a tenant's group is not among
+  them, nothing is revoked; the tenant's page warns that the group is
+  missing.
+- **What members see.** Requests and tokens per key and model, and the
+  cost at the model's prices. No prompt or answer.
 
 ## If the hub is down
 
@@ -245,6 +313,15 @@ does, and read the header.
 | A model's length on the Models page is empty or the market's, though its deployment declares none | The hub may not get `pods/proxy` for the workload pods (the cluster's discovery message says `not allowed to get pods/proxy`), or the pod's model server does not answer `/v1/models` at the scheme and port of its readiness check (it is asked again every 10 minutes) | Grant `get` on `pods/proxy`, or annotate the deployment with `aigw-ui.io/max-model-len` |
 | Oh My Pi lists no `aigw/` model | The extension cannot reach the hub and kept no list, `aigw-token` is not signed in, or `~/.omp/agent/models.yml` defines a provider `aigw` itself | omp says which when a session starts. Remove the person's own `aigw` provider to get the hub's models |
 | The installer stops with `could not download aigw-token` | The machine cannot reach the hub at the address the page showed, or curl does not trust the hub's certificate | Check the address from that machine; give curl the CA (`CURL_CA_BUNDLE`) |
+| On Windows the setup or Claude Code fails with a message about `ELF`, `cannot execute binary file` or `Exec format error`, or Claude Code says `apiKeyHelper failed` | A hub before 0.36.1, whose installer and `aigw-token` are `sh` only. Claude Code on Windows runs `apiKeyHelper` with `cmd.exe` and omp with its own shell, neither of which runs a `sh` script; in WSL the installer could run Windows' own `claude` or `omp` from `/mnt/c`, and a program built for Linux (ELF) cannot run on Windows' side or the other way round | Upgrade, then run the PowerShell line from `/my-usage` in PowerShell for Claude Code and omp on Windows itself. The `curl` line is for WSL's own tools only; from 0.36.1 it says so and stops in Git Bash |
+| **Sign in with OpenShift** comes back with `OpenShift refused the sign-in` about the redirect URI or the client | The hub's ServiceAccount has no redirect reference to its Route (chart before 0.37.0, `sso.enabled` off, or a Route named otherwise), or the page was opened by another address than the Route's | Upgrade with `sso.enabled=true`; open `/my-usage` at the Route's host |
+| The sign-in comes back with `the OAuth server's token endpoint: … x509` | The pod does not trust the certificate of the token endpoint it was given | Keep `sso.tokenURL` at the OAuth server's Service (the default), or give its CA with `sso.caConfigMap` |
+| After signing in: `the hub cannot read the cluster's Groups yet` (503) | The hub's account may not list `groups.user.openshift.io` (`sso.createClusterRole=false` and no grant), or the API cannot be reached | Grant get, list and watch on groups to the hub's ServiceAccount; the hub reads them every minute |
+| After signing in: `you are in no tenant's group` | No enabled tenant is linked to a Group the person is in: the name differs (it is exact, case included), the group sync has not run, or the person is not in it | Compare the tenant's **LDAP group** with `oc get groups`, and `oc get group <name> -o yaml` for its users |
+| A person's own key stopped working | They left the tenant's group in OpenShift and the hub revoked it (`key.revoke`, `Revoked the personal keys of …`), or they made a new one, which replaces the old | Expected. Back in the group, they sign in and make a new key |
+| A person's machine does not take the clients of a new hub version | It was set up by hand or before 0.36.1 (no `~/.config/aigw/clients`), `AIGW_AUTO_UPDATE=0` is set, Claude Code and omp were not used since, or the try failed (`~/.config/aigw/update.log`; tried again a day later) | Run the line from `/my-usage` once: from then on it follows the hub |
+| Claude Code on Windows says `apiKeyHelper failed` with `running scripts is disabled` or `cannot be loaded` | An execution policy set by Group Policy, which `-ExecutionPolicy Bypass` does not override | Ask IT to allow `%USERPROFILE%\.local\share\aigw\aigw-token.ps1`, or sign it |
+| `irm` stops with `Could not create SSL/TLS secure channel`, or the certificate is not trusted, in Windows PowerShell | Windows PowerShell 5.1 on an old .NET offers TLS 1.0 only until the script itself asks for 1.2; PowerShell trusts Windows' certificate store, not a CA file | Run `[Net.ServicePointManager]::SecurityProtocol = 'Tls12'` first, or use PowerShell 7; add the hub's CA to Windows' store |
 | Requests are rejected with 429 for a tenant that has no quota | The model has quotas for other tenants, so this one only has the shared pool | Give the tenant a quota |
 
 ## Upgrading Envoy Gateway to 1.10

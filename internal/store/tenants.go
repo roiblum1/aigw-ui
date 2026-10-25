@@ -15,7 +15,7 @@ const tenantSelect = `SELECT t.id, t.slug, t.display_name, t.enabled, t.created_
 	(SELECT count(*) FROM quotas q WHERE q.tenant_id = t.id),
 	t.budget_credits, t.budget_window, t.restricted,
 	(SELECT coalesce(array_agg(tm.model_id::text ORDER BY tm.model_id), '{}') FROM tenant_models tm WHERE tm.tenant_id = t.id),
-	t.limits_changed_at
+	t.limits_changed_at, coalesce(t.sso_group, '')
 	FROM tenants t`
 
 func scanTenant(row pgx.Row) (Tenant, error) {
@@ -25,7 +25,7 @@ func scanTenant(row pgx.Row) (Tenant, error) {
 	var restricted bool
 	var models []string
 	err := row.Scan(&t.ID, &t.Slug, &t.DisplayName, &t.Enabled, &t.CreatedAt, &t.KeyCount, &t.APIKeyCount, &t.QuotaCount,
-		&credits, &window, &restricted, &models, &t.LimitsChangedAt)
+		&credits, &window, &restricted, &models, &t.LimitsChangedAt, &t.SSOGroup)
 	if credits != nil && window != nil {
 		t.Budget = &TenantBudget{Credits: *credits, Window: *window}
 	}
@@ -122,12 +122,37 @@ func (s *Store) GetTenant(ctx context.Context, id string) (Tenant, error) {
 }
 
 func (s *Store) CreateTenant(ctx context.Context, slug, displayName string) (Tenant, error) {
+	return s.CreateTenantInGroup(ctx, slug, displayName, "")
+}
+
+// CreateTenantInGroup creates a tenant linked to an OpenShift Group, or to
+// none when group is "". A group linked to another tenant is ErrConflict.
+func (s *Store) CreateTenantInGroup(ctx context.Context, slug, displayName, group string) (Tenant, error) {
 	var id string
-	err := s.db.QueryRow(ctx, `INSERT INTO tenants (slug, display_name) VALUES ($1, $2) RETURNING id`, slug, displayName).Scan(&id)
+	err := s.db.QueryRow(ctx, `INSERT INTO tenants (slug, display_name, sso_group) VALUES ($1, $2, nullif($3, '')) RETURNING id`,
+		slug, displayName, group).Scan(&id)
 	if err != nil {
 		return Tenant{}, mapErr(err)
 	}
 	return s.GetTenant(ctx, id)
+}
+
+// SetTenantGroup links a tenant to an OpenShift Group, or to none when
+// group is "". A group linked to another tenant is ErrConflict. The
+// personal keys its members made stay; those of people who are not in the
+// new group are revoked by the next look at the groups.
+func (s *Store) SetTenantGroup(ctx context.Context, id, group string) (Tenant, error) {
+	if err := affected(s.db.Exec(ctx, `UPDATE tenants SET sso_group = nullif($2, '') WHERE id = $1`, id, group)); err != nil {
+		return Tenant{}, err
+	}
+	return s.GetTenant(ctx, id)
+}
+
+// TenantsInGroups returns the enabled tenants linked to any of the groups,
+// by slug: the teams a person who signed in belongs to.
+func (s *Store) TenantsInGroups(ctx context.Context, groups []string) ([]Tenant, error) {
+	return list(ctx, s, func(r scanner) (Tenant, error) { return scanTenant(r) },
+		tenantSelect+` WHERE t.enabled AND t.sso_group = ANY($1) ORDER BY t.slug`, groups)
 }
 
 // UpdateTenant does not change the slug: it is part of every key's client ID.
@@ -160,11 +185,11 @@ func (s *Store) ListKeys(ctx context.Context, tenantID string) ([]APIKey, error)
 const keyPrefixLen = 9
 
 // keyColumns is what scanKey reads. The key itself is never among them.
-const keyColumns = `id, tenant_id, name, client_id, key_prefix, revoked_at, created_at, kind, expires_at, renewed_at`
+const keyColumns = `id, tenant_id, name, client_id, key_prefix, revoked_at, created_at, kind, expires_at, renewed_at, coalesce(owner, '')`
 
 func scanKey(r scanner) (APIKey, error) {
 	var k APIKey
-	err := r.Scan(&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt, &k.Kind, &k.ExpiresAt, &k.RenewedAt)
+	err := r.Scan(&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt, &k.Kind, &k.ExpiresAt, &k.RenewedAt, &k.Owner)
 	return k, err
 }
 
@@ -206,7 +231,7 @@ func (s *Store) KeySecret(ctx context.Context, id string) (APIKey, string, error
 	var enc []byte
 	var k APIKey
 	err := s.db.QueryRow(ctx, `SELECT `+keyColumns+`, key_enc FROM api_keys WHERE id = $1`, id).Scan(
-		&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt, &k.Kind, &k.ExpiresAt, &k.RenewedAt, &enc)
+		&k.ID, &k.TenantID, &k.Name, &k.ClientID, &k.KeyPrefix, &k.RevokedAt, &k.CreatedAt, &k.Kind, &k.ExpiresAt, &k.RenewedAt, &k.Owner, &enc)
 	if err != nil || enc == nil {
 		return k, "", mapErr(err)
 	}

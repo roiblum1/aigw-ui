@@ -38,6 +38,7 @@ config:
   # Pi (an address that ends with either is taken as well). Empty leaves it
   # out of the setup.
   gatewayURL: ""
+  # (Sign-in with OpenShift for a tenant's LDAP group: see sso below.)
   # The models the setup gives Claude Code, by the names the gateway routes
   # on: model for its work, smallModel for its small background tasks such
   # as naming a conversation. A tenant that may not call one, or with it
@@ -129,6 +130,29 @@ gitops:
   # namespace for its ServiceAccount (gitops/aigw-ui/bootstrap/
   # hub-status-role.yaml). Empty shows no Argo CD status.
   argocdNamespace: ""
+
+# Sign-in with OpenShift on /my-usage (0.37.0), for the tenants an admin
+# links to an OpenShift Group: the hub cluster's own login (LDAP behind it)
+# and its Groups (synced from LDAP with oc adm groups sync). A member of a
+# tenant's group signs in, makes a personal key of their own and sees what
+# every member used; leaving the group revokes the key within a minute. A
+# tenant without a group works by its keys alone, as before. The hub's
+# ServiceAccount is the OAuth client: its redirect reference to the Route
+# lets the OAuth server send the browser back, so route.enabled is needed.
+sso:
+  enabled: false
+  # The OAuth server's token endpoint as the pod reaches it. Its Service,
+  # whose certificate the service CA signs (which every pod trusts), works
+  # where the Route's certificate is one the pod does not trust. Empty uses
+  # the endpoint the OAuth server names (its Route).
+  tokenURL: https://oauth-openshift.openshift-authentication.svc/oauth/token
+  # A ConfigMap with a CA bundle (key ca.crt) for the OAuth server, if its
+  # certificate is signed by a CA the pod does not trust.
+  caConfigMap: ""
+  # The ClusterRole that lets the hub read the cluster's Groups (get, list,
+  # watch groups.user.openshift.io), and its binding to the hub. Creating
+  # them needs cluster-admin; set false and grant it yourself otherwise.
+  createClusterRole: true
 
 # The admin token and the encryption key.
 auth:

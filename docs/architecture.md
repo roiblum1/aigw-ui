@@ -836,10 +836,69 @@ Nothing passes through the hub for it.
   rate limit service's key format; the self-test step "The tenant's requests
   and tokens are counted by model" checks it on a gateway).
 
+- **Per key (0.37.0).** Four more rules after those count the same for
+  each key: they match `x-aigw-client-id` (the hub's JWT provider writes it
+  from the token's `cid` claim) and `x-ai-eg-model`, both Distinct. Their
+  counters are rules 5 to 8 with the key's client ID in place of the tenant
+  (`render.KeyCounterKey`). The budget rule and the four tenant rules keep
+  their positions, so no counter is renamed.
+
 The history reads the requests counter of every tenant and model it may
 call, and the other three only where a request was counted or it already
 follows the pair: about one key per tenant and model a minute, in batches of
-1,000 per `MGET`. The tenants' own page shows what it recorded.
+1,000 per `MGET`. It reads each live token and personal key of an enabled
+tenant the same way (`store.CountedKeys`; API keys are left out, as the
+rules read headers only tokens set), into `key_token_hours`, with the key
+in the cursor (`usage_counter_cursors.key_id`). The tenants' own page shows
+what it recorded, and `GET /tenants/{id}/key-usage` and `/my/people` what
+each key used.
+
+## Sign-in with OpenShift (0.37.0)
+
+A tenant may be linked to an OpenShift Group (`tenants.sso_group`, unique,
+optional; migration 037). The Groups are the hub cluster's own, synced
+from LDAP with `oc adm groups sync`. A member signs in on `/my-usage` with
+the cluster's login, makes a personal key of their own, and sees what every
+key of the tenant used. A tenant without a group works by its keys alone,
+as before; nothing is created from LDAP.
+
+- **The OAuth client is the hub's ServiceAccount**
+  (`system:serviceaccount:<ns>:<sa>`). Its redirect reference to the hub's
+  Route (`serviceaccounts.openshift.io/oauth-redirectreference.aigw-ui`)
+  lets the OAuth server send the browser back, and its token is the
+  client's secret. No OAuthClient object and no cluster-admin are needed
+  for it.
+- **The flow** (`internal/sso`, `internal/api/sso.go`):
+  1. `GET /sso/login` reads the OAuth server from the API's
+     `/.well-known/oauth-authorization-server` and sends the browser there
+     for `user:info`, with PKCE (S256) when offered. A random state and the
+     verifier are kept in a signed cookie (`aigw-sign-in`, 10 minutes).
+  2. `GET /sso/callback` checks the state and trades the code at the token
+     endpoint (`SSO_TOKEN_URL`, by default in the chart the OAuth server's
+     Service, whose certificate the service CA signs). It reads
+     `users/~` with the access token, which it then drops.
+  3. The session is a cookie (`aigw-session`, 12 hours, HttpOnly,
+     SameSite=Lax, Secure over HTTPS) holding the user name, signed with
+     HMAC-SHA256 under a key derived from `ENCRYPTION_KEY`.
+- **Who is in which group** is read with the hub's own account, every
+  minute (`GET /apis/user.openshift.io/v1/groups`; the chart's ClusterRole
+  `<name>-<ns>-groups`). Each request of a person who signed in checks the
+  groups of the last read. `/my/*` takes the session when no key is sent,
+  and the tenant from `X-Aigw-Team` among the person's (their only one by
+  default). Before the first read works: 503.
+- **Own keys.** `POST /my/key` (session, `X-Aigw-Team` required, which no
+  form of another site can send) makes a personal key with
+  `api_keys.owner` = the user name. It revokes the person's live key in that
+  tenant in the same transaction, so each person has one
+  (`api_keys_owner`, a partial unique index).
+- **Leaving.** `sso.Watcher` revokes every live owned key whose owner is not
+  in its tenant's group, and queues a sync (`key.revoke`). Unknown is not
+  empty: when the Groups cannot be read, or the tenant's group is not among
+  them, nothing is revoked.
+- **What a member sees.** The tenant's report (as with a key), their own
+  key without its secret, and `GET /my/people`: every live key of the
+  tenant, and each revoked one that used something, with requests and
+  tokens per model over 1 to 90 days. A key sign-in gets 403 there.
 
 ## Usage history
 
@@ -911,9 +970,53 @@ pages, with its own sign-in. See [security](security.md#the-tenants-own-page).
 The page's **Set up Claude Code and Oh My Pi** runs the installer from
 `/clients/`, which the hub serves without a sign-in from files compiled into
 its binary (package `clients`, `clients/embed.go`): `install.sh`,
-`aigw-token`, the Omp extension, and the Claude Code plugin packed on first
-request as a marketplace archive (`claude-code.tar.gz`, the same bytes every
-time).
+`aigw-token`, their PowerShell twins for Windows `install.ps1` and
+`aigw-token.ps1` (0.36.1), the Omp extension, and the Claude Code plugin
+packed on first request as a marketplace archive (`claude-code.tar.gz`, the
+same bytes every time).
+
+**Machines follow the hub (0.36.1).** `clients.Version()` hashes the served
+files and the archive (12 hex digits); `POST /api/v1/token` and `GET
+/api/v1/my/models` carry it as `clients_version`. The installer writes
+`<version> <unix time>` to `~/.config/aigw/clients` at the end of a run that
+got through. `aigw-token`, on each token it fetches from the hub (every 10
+minutes while Claude Code or omp asks), runs the installer again from the
+hub when the hub's version differs or the setup is older than
+`AIGW_UPDATE_DAYS` (7): in the background with every descriptor sent to
+`~/.config/aigw/update.log` (Claude Code waits for an `apiKeyHelper`'s
+output to end), on Windows through `Start-Process -WindowStyle Hidden` with
+`-EncodedCommand`. A try that has not finished a setup (`update-tried`
+later than the `clients` time) is not made again for a day, so a running or
+failing one is not repeated every 10 minutes; after a setup the next
+version is taken at once. Never on a machine the installer did not set up
+(no `clients` file), and not with `AIGW_AUTO_UPDATE=0`. The installer sets `AIGW_AUTO_UPDATE=0` for the
+`aigw-token` it runs, so no run starts another. With `AIGW_UPDATE=1` it asks
+for nothing (signed out, it stops), skips the gateway's check, and uses the
+gateway address given by hand at the last run (`~/.config/aigw/gateway`).
+The plugin's marketplace folder is swapped in two renames: Claude Code
+(2.1.308) loads a plugin from a directory marketplace in place at each
+session's start, so the new files apply from the next session.
+
+**Windows (0.36.1).** Claude Code on Windows runs `apiKeyHelper` with
+`shell: true`, which is `cmd.exe`, and Oh My Pi runs a `!command` with its
+own shell (brush), so neither can run the `sh` `aigw-token`. `install.ps1`
+does what `install.sh` does from PowerShell, with no `node` for the
+settings: it puts `aigw-token.ps1` in `%USERPROFILE%\.local\share\aigw` (off
+the `PATH`, where PowerShell would pick it before `aigw-token.cmd` and refuse
+it under the default execution policy), `aigw-token.cmd` in
+`%USERPROFILE%\.local\bin` for people, and gives Claude Code and the omp
+extension `powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File
+"<the .ps1>"`. The `.ps1` keeps the same files in `~/.config/aigw` as the
+`sh` one, so the plugin and the extension find the key. The status line is
+`node "<home>/.claude/aigw-usage/statusline.mjs"` with forward slashes, as
+Claude Code runs it through Git Bash, or PowerShell without it; without
+`node` the plugin and the status line are left out. Both `.ps1` files stay
+ASCII (`TestPowerShellFilesAreASCII`): Windows PowerShell 5.1 reads a file
+without a byte order mark in the system's code page. `install.sh` stops in
+Git Bash, MSYS2 or Cygwin with the PowerShell line, and in WSL leaves out
+the programs it finds under `/mnt/<drive>/` (`AIGW_WINDOWS_DRIVES`): a
+Windows `claude` or `omp` there keeps its settings in the Windows home and
+fails when run from Linux.
 
 `GET /api/v1/my/models` (`internal/api/myclients.go`, 0.34.0) takes the same
 keys and gives what the clients are set up with: the gateway's address
@@ -1054,6 +1157,14 @@ LeaderWorkerSet) with RoCE (`llmisvc.roce`), and its own flags
 - The vLLM check (0.36.0): its verdicts match vLLM 0.32.0's in the CPU image;
   the GPU shapes' commands were compared with KServe's render on the
   exported site, not started on GPUs.
+- Counting per key (0.37.0): the four rules by `x-aigw-client-id` were
+  taken by a real API server with Envoy Gateway's CRD (1.9.1 and 1.9.2), and
+  their counter names follow the tenant rules' seen form; that a live
+  gateway counts under exactly those names was not seen.
+- Signing in with OpenShift (0.37.0): run against a stand-in for the OAuth
+  server and the API (metadata, code exchange with PKCE, `users/~`, Groups)
+  and in a browser against it, not against a real cluster's OAuth server,
+  ServiceAccount client or Groups.
 
 **Run on a gateway.** On OpenShift 4.22 with Envoy Gateway 1.9.1 and Envoy
 AI Gateway 1.1.0, one site, a model added by hand:

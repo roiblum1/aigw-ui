@@ -19,6 +19,7 @@ import (
 	"aigw-ui/internal/overage"
 	"aigw-ui/internal/secretbox"
 	"aigw-ui/internal/selftest"
+	"aigw-ui/internal/sso"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/syncer"
 	"aigw-ui/internal/usage"
@@ -112,9 +113,22 @@ func run() error {
 		return err
 	}
 
+	// Sign-in with OpenShift for tenants linked to a Group: the Groups are
+	// read every minute, and a person who left loses their key.
+	var cluster *sso.OpenShift
+	if cfg.SSOOpenShift {
+		c, err := sso.InCluster(sso.Options{ServiceAccount: cfg.SSOServiceAccount, CAFile: cfg.SSOCAFile, TokenURL: cfg.SSOTokenURL,
+			APIServer: cfg.SSOAPIServer, TokenFile: cfg.SSOTokenFile, Namespace: cfg.SSONamespace})
+		if err != nil {
+			return err
+		}
+		cluster = sso.New(c)
+		go sso.NewWatcher(cluster, st, sy.Changed, time.Minute).Run(ctx)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService, overageService), bench, cfg.AdminToken, cfg.UIDir, cfg.TenantPage).WithUpstreamDocs(cfg.UpstreamDocsDir).WithGatewayURL(cfg.GatewayURL).WithClaudeCode(cfg.ClaudeCodeModel, cfg.ClaudeCodeSmallModel).WithHistory(historyOf(hist)).WithGitOps(deployerOf(repo), appsOf(apps), cfg.ArgoCDAppName).Handler(),
+		Handler:           api.New(st, sy, usageService, selftest.New(ctx, st, sy, usageService, overageService), bench, cfg.AdminToken, cfg.UIDir, cfg.TenantPage).WithUpstreamDocs(cfg.UpstreamDocsDir).WithGatewayURL(cfg.GatewayURL).WithClaudeCode(cfg.ClaudeCodeModel, cfg.ClaudeCodeSmallModel).WithHistory(historyOf(hist)).WithGitOps(deployerOf(repo), appsOf(apps), cfg.ArgoCDAppName).WithSSO(cluster, sso.NewSealer(cfg.EncryptionKey)).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -124,7 +138,7 @@ func run() error {
 		srv.Shutdown(shutdown)
 	}()
 
-	slog.Info("listening", "addr", cfg.ListenAddr, "auto_sync", cfg.AutoSync, "discovery_interval", cfg.DiscoverEvery.String(), "sync_interval", cfg.SyncEvery.String(), "usage_monitoring", usageService != nil)
+	slog.Info("listening", "addr", cfg.ListenAddr, "auto_sync", cfg.AutoSync, "discovery_interval", cfg.DiscoverEvery.String(), "sync_interval", cfg.SyncEvery.String(), "usage_monitoring", usageService != nil, "openshift_sign_in", cluster != nil)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

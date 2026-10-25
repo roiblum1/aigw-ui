@@ -145,9 +145,10 @@ func TestRealAPIServerIdentity(t *testing.T) {
 	}
 
 	// Token counts bring it back for their four rules, after the budget
-	// rule: the CRD keeps shadowMode, the two Distinct headers and the cost
-	// from metadata, and the route's token cost types are ones the AI
-	// gateway's CRD takes.
+	// rule, and the four that count each key by its client ID (0.37.0): the
+	// CRD keeps shadowMode, the two Distinct headers and the cost from
+	// metadata, and the route's token cost types are ones the AI gateway's
+	// CRD takes.
 	s.TokenCounts = true
 	if _, err := c.Sync(ctx, ns, render.Objects(s), nil); err != nil {
 		t.Fatalf("token counts: the API server refused a rendered object: %v", err)
@@ -156,7 +157,7 @@ func TestRealAPIServerIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	rl, _, _ = unstructured.NestedSlice(bp.Object, "spec", "rateLimit", "global", "rules")
-	if len(rl) != 5 || rl[2].(map[string]any)["shadowMode"] != true ||
+	if len(rl) != 9 || rl[2].(map[string]any)["shadowMode"] != true || !strings.Contains(fmt.Sprint(rl[6].(map[string]any)["clientSelectors"]), "name:x-aigw-client-id type:Distinct") ||
 		fmt.Sprint(rl[2].(map[string]any)["cost"]) != "map[request:map[from:Number number:0] response:map[from:Metadata metadata:map[key:aigw_ui_input namespace:io.envoy.ai_gateway]]]" ||
 		strings.Count(fmt.Sprint(rl[2].(map[string]any)["clientSelectors"]), "type:Distinct") != 2 {
 		t.Fatalf("token rules as stored: %v", rl)

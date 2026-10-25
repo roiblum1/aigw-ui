@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"aigw-ui/clients"
 	"aigw-ui/internal/market"
 	"aigw-ui/internal/store"
 )
@@ -29,6 +30,9 @@ type myClients struct {
 	// tenant may call no model.
 	ClaudeCode *myClaudeCode   `json:"claude_code"`
 	Models     []myClientModel `json:"models"`
+	// The version of the client files the hub serves (clients.Version), which
+	// the installer keeps so that aigw-token can tell when to run it again.
+	ClientsVersion string `json:"clients_version"`
 }
 
 // myClaudeCode is the model Claude Code works with and the one it uses for
@@ -69,7 +73,7 @@ func (s *Server) getMyModels(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	out := myClients{GatewayURL: s.gatewayURL, Models: []myClientModel{}}
+	out := myClients{GatewayURL: s.gatewayURL, Models: []myClientModel{}, ClientsVersion: clients.Version()}
 	if s.gatewayURL != "" {
 		out.AnthropicBaseURL, out.OpenAIBaseURL = s.gatewayURL+"/anthropic", s.gatewayURL+"/v1"
 	}

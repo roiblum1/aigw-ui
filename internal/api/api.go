@@ -14,6 +14,7 @@ import (
 
 	"aigw-ui/internal/benchmark"
 	"aigw-ui/internal/selftest"
+	"aigw-ui/internal/sso"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/syncer"
 	"aigw-ui/internal/usage"
@@ -48,6 +49,10 @@ type Server struct {
 	argocd appStatus
 	// appName is how the platform names a model's Application on a cluster.
 	appName string
+	// sso signs people in with OpenShift for tenants linked to a Group, nil
+	// when that is off; sealer signs its cookies (sso.go).
+	sso    *sso.OpenShift
+	sealer *sso.Sealer
 }
 
 // recorder records what was used since the last look (history.Service).
@@ -140,6 +145,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/v1/tenants", s.listTenants)
 	api.HandleFunc("POST /api/v1/tenants", s.createTenant)
 	api.HandleFunc("GET /api/v1/tenants/{id}", s.getTenant)
+	api.HandleFunc("GET /api/v1/tenants/{id}/key-usage", s.getTenantKeyUsage)
+	api.HandleFunc("GET /api/v1/sso/groups", s.getSSOGroups)
 	api.HandleFunc("PUT /api/v1/tenants/{id}", s.updateTenant)
 	api.HandleFunc("DELETE /api/v1/tenants/{id}", s.deleteTenant)
 	api.HandleFunc("POST /api/v1/tenants/{id}/keys", s.createKey)
@@ -166,6 +173,15 @@ func (s *Server) Handler() http.Handler {
 	// A tenant's own usage, by one of its API keys and not the admin token.
 	root.Handle("GET /api/v1/my/usage", s.tenantAuth(http.HandlerFunc(s.getMyUsage)))
 	root.Handle("GET /api/v1/my/models", s.tenantAuth(http.HandlerFunc(s.getMyModels)))
+	// A person who signed in with OpenShift: their own key and what every
+	// key of their tenant used. The sign-in itself, and who is signed in.
+	root.Handle("GET /api/v1/my/key", s.tenantAuth(http.HandlerFunc(s.getMyKey)))
+	root.Handle("POST /api/v1/my/key", s.tenantAuth(http.HandlerFunc(s.createMyKey)))
+	root.Handle("GET /api/v1/my/people", s.tenantAuth(http.HandlerFunc(s.getMyPeople)))
+	root.HandleFunc("GET /api/v1/sso", s.getSSO)
+	root.HandleFunc("POST /api/v1/sso/logout", s.ssoLogout)
+	root.HandleFunc("GET /sso/login", s.ssoLogin)
+	root.HandleFunc("GET /sso/callback", s.ssoCallback)
 	// A new token for a personal key, which a user's helper asks for.
 	root.HandleFunc("POST /api/v1/token", s.renewToken)
 	// The tools for the people who use the models, which the tenants' page

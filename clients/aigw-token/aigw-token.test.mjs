@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -108,4 +108,102 @@ test("refuses what is not a personal key", async () => {
   const r = await run(["login", "http://127.0.0.1:9", "sk-abc"], { AIGW_CONFIG_DIR: mkdtempSync(join(tmpdir(), "aigw-")) });
   assert.notEqual(r.code, 0);
   assert.match(r.stderr, /starts with aigw-pk-/);
+});
+
+// A hub that names its client files' version with each token, and serves a
+// stand-in installer that notes how it was run, after a pause.
+function followedHub(version) {
+  const seen = [];
+  const installer = `#!/bin/sh
+sleep 2
+echo "update=$AIGW_UPDATE hub=$1" > "$AIGW_CONFIG_DIR/ran"
+`;
+  const server = createServer((req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    if (req.url === "/clients/install.sh") return res.writeHead(200).end(installer);
+    res.writeHead(200, { "content-type": "application/json" }).end(
+      JSON.stringify({ token: "eyJ.t.sig", expires_in: 604800, ...(version ? { clients_version: version } : {}) }),
+    );
+  });
+  return new Promise((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve({ url: `http://127.0.0.1:${server.address().port}`, seen, close: () => server.close() })),
+  );
+}
+
+const waitFor = async (file, ms = 8000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) {
+    try {
+      return readFileSync(file, "utf8");
+    } catch {}
+  }
+  return null;
+};
+
+// A machine the installer set up runs it again from the hub, in the
+// background, when the hub serves other client files or a week after the
+// last setup; at most once a day, never where the installer did not run,
+// and not with AIGW_AUTO_UPDATE=0. The token comes at once all the same.
+test("follows the hub: the installer again when the hub's client files change, or weekly", async () => {
+  const h = await followedHub("v2");
+  const dir = mkdtempSync(join(tmpdir(), "aigw-"));
+  const env = { AIGW_CONFIG_DIR: dir, AIGW_TOKEN_RENEW_SECONDS: "0" };
+  const now = Math.floor(Date.now() / 1000);
+  const installs = () => h.seen.filter((s) => s === "GET /clients/install.sh").length;
+  try {
+    let r = await run(["login", h.url, key], env);
+    assert.equal(r.code, 0, r.stderr);
+    // Set up by hand, not by the installer: left alone.
+    r = await run([], env);
+    assert.equal(r.stdout, "eyJ.t.sig\n");
+    assert.equal(installs(), 0);
+
+    // The installer put v1 in place; the hub serves v2.
+    // Set up a minute ago: a try now is later than that setup.
+    writeFileSync(join(dir, "clients"), `v1 ${now - 60}\n`);
+    const start = Date.now();
+    r = await run([], env);
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.stdout, "eyJ.t.sig\n");
+    assert.equal(r.stderr, "");
+    assert.ok(Date.now() - start < 1500, `the token took ${Date.now() - start} ms: it waited for the update`);
+    assert.equal(await waitFor(join(dir, "ran")), `update=1 hub=${h.url}\n`);
+    assert.equal(installs(), 1);
+
+    // Tried today: not again, though the version still differs.
+    r = await run([], env);
+    assert.equal(r.stdout, "eyJ.t.sig\n");
+    assert.equal(installs(), 1);
+
+    // Up to date and set up today: nothing. A week old: again.
+    rmSync(join(dir, "update-tried"));
+    writeFileSync(join(dir, "clients"), `v2 ${now - 60}\n`);
+    await run([], env);
+    assert.equal(installs(), 1);
+    writeFileSync(join(dir, "clients"), `v2 ${now - 8 * 86400}\n`);
+    rmSync(join(dir, "ran"));
+    await run([], env);
+    assert.ok(await waitFor(join(dir, "ran")));
+    assert.equal(installs(), 2);
+
+    // Turned off.
+    rmSync(join(dir, "update-tried"));
+    await run([], { ...env, AIGW_AUTO_UPDATE: "0" });
+    assert.equal(installs(), 2);
+  } finally {
+    h.close();
+  }
+});
+
+test("a hub that names no client version moves nobody", async () => {
+  const h = await followedHub("");
+  const dir = mkdtempSync(join(tmpdir(), "aigw-"));
+  try {
+    await run(["login", h.url, key], { AIGW_CONFIG_DIR: dir });
+    writeFileSync(join(dir, "clients"), `v1 0\n`);
+    const r = await run([], { AIGW_CONFIG_DIR: dir, AIGW_TOKEN_RENEW_SECONDS: "0" });
+    assert.equal(r.stdout, "eyJ.t.sig\n");
+    assert.ok(!h.seen.includes("GET /clients/install.sh"));
+  } finally {
+    h.close();
+  }
 });

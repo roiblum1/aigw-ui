@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"aigw-ui/clients"
 	"aigw-ui/internal/store"
 	"aigw-ui/internal/syncer"
 )
@@ -36,10 +37,14 @@ func TestRenewToken(t *testing.T) {
 	}
 	w := renew(secret)
 	var out struct {
-		Token     string `json:"token"`
-		ExpiresIn int64  `json:"expires_in"`
+		Token          string `json:"token"`
+		ExpiresIn      int64  `json:"expires_in"`
+		ClientsVersion string `json:"clients_version"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &out); w.Code != http.StatusOK || err != nil || out.Token == "" {
+	// The client files' version comes with the token, for aigw-token to
+	// tell when to run the installer again.
+	if err := json.Unmarshal(w.Body.Bytes(), &out); w.Code != http.StatusOK || err != nil || out.Token == "" ||
+		out.ClientsVersion == "" || out.ClientsVersion != clients.Version() {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 	if out.ExpiresIn < 7*24*3600-2 || out.ExpiresIn > 7*24*3600 || w.Header().Get("Cache-Control") != "no-store" {

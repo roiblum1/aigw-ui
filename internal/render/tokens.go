@@ -18,7 +18,9 @@ import (
 //
 // The policy keeps the budget rule first, also without any budget, so that
 // the token rules after it, and the counters named after their positions,
-// never move.
+// never move. Since 0.37.0 four more rules come after them and count the
+// same for each key, by the client ID a token carries (keyRules): who in a
+// tenant used what.
 const (
 	// InputTokensKey is where a route writes an answer's input tokens, the
 	// cached ones included.
@@ -85,13 +87,21 @@ func TokenCosts() []any {
 // kind: each tenant and model has a counter of its own (Distinct on the
 // tenant header and on the model header the AI gateway sets from the
 // request body), across every route of the listener (shared), by the hour.
-func tokenRules() []any {
+func tokenRules() []any { return countRules(TenantHeader) }
+
+// keyRules count the same for each key and model: Distinct on the client
+// ID, which the hub's JWT provider writes from the token's cid claim. They
+// come after the token rules, so neither the budget rule's counters nor the
+// tenants' move.
+func keyRules() []any { return countRules(ClientIDHeader) }
+
+func countRules(by string) []any {
 	var out []any
 	for _, kind := range TokenKinds {
 		rule := map[string]any{
 			"clientSelectors": []any{
 				map[string]any{"headers": []any{
-					map[string]any{"name": TenantHeader, "type": "Distinct"},
+					map[string]any{"name": by, "type": "Distinct"},
 					map[string]any{"name": ModelHeader, "type": "Distinct"},
 				}},
 			},
@@ -131,15 +141,30 @@ func tokenRules() []any {
 // internal/xds/translator/ratelimit.go). The budget rule's key, seen in the
 // shared Redis, has the same form.
 func TokenCounterKey(prefix, namespace string, kind TokenKind, tenantSlug, model string, now time.Time) string {
-	i := 0
+	return countKey(prefix, namespace, kindRule(kind), tenantSlug, model, now)
+}
+
+// KeyCounterKey is the Redis key of a key's counter of one kind on a model,
+// in the hour that contains now, by the key's client ID: a rule of
+// keyRules, after the budget rule and the four token rules.
+func KeyCounterKey(prefix, namespace string, kind TokenKind, clientID, model string, now time.Time) string {
+	return countKey(prefix, namespace, len(TokenKinds)+kindRule(kind), clientID, model, now)
+}
+
+// kindRule is the position of a kind's token rule: after the budget rule.
+func kindRule(kind TokenKind) int {
 	for n, k := range TokenKinds {
 		if k == kind {
-			i = n + 1
+			return n + 1
 		}
 	}
+	return 0
+}
+
+func countKey(prefix, namespace string, i int, value, model string, now time.Time) string {
 	policy := namespace + "/" + BudgetPolicyName
 	rule := policy + "/rule/" + strconv.Itoa(i)
 	match := "rule-" + strconv.Itoa(i) + "-match-"
-	return prefix + policy + "_" + rule + "_" + rule + "_" + match + "0_" + tenantSlug + "_" + match + "1_" + model + "_" +
+	return prefix + policy + "_" + rule + "_" + rule + "_" + match + "0_" + value + "_" + match + "1_" + model + "_" +
 		strconv.FormatInt(WindowStart(tokenWindow, now).Unix(), 10)
 }

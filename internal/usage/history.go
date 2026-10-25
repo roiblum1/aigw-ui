@@ -33,7 +33,9 @@ type HistoryCounter struct {
 //   - the token counters of each tenant on each model it may call, where the
 //     gateway counts tokens. Their requests counter is read first, and the
 //     others only where it shows a request or busy says the history already
-//     follows the tenant on the model, which keeps the read small.
+//     follows the tenant on the model, which keeps the read small;
+//   - the same counters of each live token and personal key, by its client
+//     ID (0.37.0), read the same way; their UsageKey names the key.
 func (s *Service) HistoryCounters(ctx context.Context, now time.Time, busy func(store.UsageKey) bool) ([]HistoryCounter, error) {
 	f, err := s.load(ctx)
 	if err != nil {
@@ -64,6 +66,11 @@ func (s *Service) HistoryCounters(ctx context.Context, now time.Time, busy func(
 	if err != nil {
 		return nil, err
 	}
+	keyTokens, err := s.keyTokenCounters(ctx, f, now, busy)
+	if err != nil {
+		return nil, err
+	}
+	tokens = append(tokens, keyTokens...)
 	var keys []string
 	for _, c := range out {
 		keys = append(keys, c.Key)
@@ -144,34 +151,84 @@ func (s *Service) formerAmounts(f fleet, now time.Time) []HistoryCounter {
 	return out
 }
 
+// counted is a tenant, or one of its keys, whose token counters the
+// history reads: by the tenant's slug, or by the key's client ID.
+type counted struct {
+	tenant store.Tenant
+	keyID  string
+	value  string
+}
+
+// counterKey names a counter of a tenant (render.TokenCounterKey) or of a
+// key (render.KeyCounterKey).
+type counterKey func(prefix, namespace string, kind render.TokenKind, value, model string, now time.Time) string
+
 // tokenCounters returns the token counters of each enabled tenant on each
 // model it may call, on every gateway namespace whose clusters count them,
 // with what they hold.
 func (s *Service) tokenCounters(ctx context.Context, f fleet, now time.Time, busy func(store.UsageKey) bool) ([]HistoryCounter, error) {
+	var who []counted
+	for _, t := range f.tenants {
+		if t.Enabled {
+			who = append(who, counted{tenant: t, value: t.Slug})
+		}
+	}
+	return s.countersOf(ctx, f, now, busy, who, render.TokenCounterKey)
+}
+
+// keyTokenCounters returns the same counters of each live token and
+// personal key of an enabled tenant, by its client ID, on each model the
+// tenant may call. The keys are read only where some cluster counts tokens.
+func (s *Service) keyTokenCounters(ctx context.Context, f fleet, now time.Time, busy func(store.UsageKey) bool) ([]HistoryCounter, error) {
+	if len(countingNamespaces(f)) == 0 {
+		return nil, nil
+	}
+	keys, err := s.st.CountedKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tenants := make(map[string]store.Tenant, len(f.tenants))
+	for _, t := range f.tenants {
+		tenants[t.ID] = t
+	}
+	var who []counted
+	for _, k := range keys {
+		if t, ok := tenants[k.TenantID]; ok && t.Enabled {
+			who = append(who, counted{tenant: t, keyID: k.ID, value: k.ClientID})
+		}
+	}
+	return s.countersOf(ctx, f, now, busy, who, render.KeyCounterKey)
+}
+
+// countingNamespaces are the gateway namespaces whose clusters count tokens.
+func countingNamespaces(f fleet) []string {
 	namespaces := map[string]bool{}
 	for _, state := range f.states {
 		if state.CountsTokens() {
 			namespaces[state.Namespace] = true
 		}
 	}
+	return sortedKeys(namespaces)
+}
+
+// countersOf returns the token counters of each of who on each model its
+// tenant may call, named by keyOf, with what they hold.
+func (s *Service) countersOf(ctx context.Context, f fleet, now time.Time, busy func(store.UsageKey) bool, who []counted, keyOf counterKey) ([]HistoryCounter, error) {
 	type pair struct {
 		key       store.UsageKey
-		ns, slug  string
+		ns, value string
 		modelName string
 	}
 	var pairs []pair
 	var requests []string
-	for _, ns := range sortedKeys(namespaces) {
-		for _, t := range f.tenants {
-			if !t.Enabled {
-				continue
-			}
+	for _, ns := range countingNamespaces(f) {
+		for _, c := range who {
 			for _, m := range f.models {
-				if t.Models != nil && !slices.Contains(t.Models, m.ID) {
+				if c.tenant.Models != nil && !slices.Contains(c.tenant.Models, m.ID) {
 					continue
 				}
-				pairs = append(pairs, pair{store.UsageKey{TenantID: t.ID, ModelID: m.ID}, ns, t.Slug, m.Name})
-				requests = append(requests, render.TokenCounterKey(s.rd.Prefix, ns, render.TokenRequests, t.Slug, m.Name, now))
+				pairs = append(pairs, pair{store.UsageKey{TenantID: c.tenant.ID, ModelID: m.ID, KeyID: c.keyID}, ns, c.value, m.Name})
+				requests = append(requests, keyOf(s.rd.Prefix, ns, render.TokenRequests, c.value, m.Name, now))
 			}
 		}
 	}
@@ -189,7 +246,7 @@ func (s *Service) tokenCounters(ctx context.Context, f fleet, now time.Time, bus
 			continue
 		}
 		for _, kind := range render.TokenKinds {
-			key := render.TokenCounterKey(s.rd.Prefix, p.ns, kind, p.slug, p.modelName, now)
+			key := keyOf(s.rd.Prefix, p.ns, kind, p.value, p.modelName, now)
 			out = append(out, HistoryCounter{Key: key, UsageKey: p.key, Kind: string(kind), Window: render.TokenWindow()})
 			if kind != render.TokenRequests {
 				keys = append(keys, key)
