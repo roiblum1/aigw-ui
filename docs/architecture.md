@@ -842,6 +842,11 @@ Nothing passes through the hub for it.
   counters are rules 5 to 8 with the key's client ID in place of the tenant
   (`render.KeyCounterKey`). The budget rule and the four tenant rules keep
   their positions, so no counter is renamed.
+- **Refused requests count.** The requests counters, the tenant's and the
+  key's, count every request that reaches the budget policy, also those a
+  limit after it refuses; those add no tokens. Seen on the lab: 4 requests
+  counted for 1 answer and 3 refusals by the model's default limit, the same
+  under rule 1 and rule 5. A token the gateway refuses is not counted.
 
 The history reads the requests counter of every tenant and model it may
 call, and the other three only where a request was counted or it already
@@ -1157,14 +1162,9 @@ LeaderWorkerSet) with RoCE (`llmisvc.roce`), and its own flags
 - The vLLM check (0.36.0): its verdicts match vLLM 0.32.0's in the CPU image;
   the GPU shapes' commands were compared with KServe's render on the
   exported site, not started on GPUs.
-- Counting per key (0.37.0): the four rules by `x-aigw-client-id` were
-  taken by a real API server with Envoy Gateway's CRD (1.9.1 and 1.9.2), and
-  their counter names follow the tenant rules' seen form; that a live
-  gateway counts under exactly those names was not seen.
-- Signing in with OpenShift (0.37.0): run against a stand-in for the OAuth
-  server and the API (metadata, code exchange with PKCE, `users/~`, Groups)
-  and in a browser against it, not against a real cluster's OAuth server,
-  ServiceAccount client or Groups.
+- Signing in with OpenShift (0.37.0): seen on one OpenShift 4.20 cluster
+  with htpasswd users and a Group made by hand. Groups synced from LDAP, a
+  person in several tenants' groups, and large Groups were not.
 
 **Run on a gateway.** On OpenShift 4.22 with Envoy Gateway 1.9.1 and Envoy
 AI Gateway 1.1.0, one site, a model added by hand:

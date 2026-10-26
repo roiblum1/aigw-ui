@@ -514,7 +514,8 @@ a day, a week or 30 days: requests, input, cached and output tokens, and the
 cost at the models' prices, the biggest first. A key a person made by
 signing in with OpenShift is named after them and shows "made by … signed
 in with OpenShift" in the keys table. The gateways count each key while
-they take tokens only and `redis.tokenCounts` is on.
+they take tokens only and `redis.tokenCounts` is on. Requests include
+those a limit refused, which used no tokens.
 
 ## Letting tenants use what others leave unused
 

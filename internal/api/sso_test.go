@@ -157,7 +157,9 @@ func TestSignInWithOpenShift(t *testing.T) {
 	if w := b.do("GET", "/api/v1/my/key", "", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"key":null`) {
 		t.Fatalf("no key yet: %d %s", w.Code, w.Body)
 	}
-	if w := b.do("GET", "/api/v1/my/key", "team-c", ""); w.Code != http.StatusForbidden {
+	// alice is in a tenant's group, just not this one's: the answer says so
+	// (seen live: it said she was in no tenant's group at all).
+	if w := b.do("GET", "/api/v1/my/key", "team-c", ""); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "not linked to any of your groups") {
 		t.Fatalf("another group's tenant: %d %s", w.Code, w.Body)
 	}
 	if w := b.do("GET", "/api/v1/my/key", "plain", ""); w.Code != http.StatusForbidden {
@@ -183,6 +185,20 @@ func TestSignInWithOpenShift(t *testing.T) {
 	}
 	if w := b.do("GET", "/api/v1/my/key", "team-a", ""); !strings.Contains(w.Body.String(), made.Key.ID) {
 		t.Fatalf("my key now: %s", w.Body)
+	}
+	// One task-log entry per key made (seen live: two for each).
+	tasks, err := st.ListTasks(ctx, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	added := 0
+	for _, task := range tasks {
+		if task.Action == "key.add" {
+			added++
+		}
+	}
+	if added != 2 {
+		t.Errorf("%d key.add tasks for two keys", added)
 	}
 
 	// Every key's use: alice's live key, marked hers, and the admin's.

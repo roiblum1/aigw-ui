@@ -190,6 +190,10 @@ func (s *Server) teams(ctx context.Context, user string) ([]store.Tenant, error)
 // errNoTeam is a person who signed in but whose groups link no tenant.
 var errNoTeam = errors.New("you are in no tenant's group: ask your admin to link your LDAP group to a tenant")
 
+// errNotYourTeam is a tenant named in teamHeader that none of the person's
+// groups link, while others do.
+var errNotYourTeam = errors.New("that tenant is not linked to any of your groups")
+
 // teamOf returns the tenant a person who signed in looks at: the one named
 // by slug, or their only one.
 func (s *Server) teamOf(ctx context.Context, user, slug string) (store.Tenant, error) {
@@ -208,7 +212,7 @@ func (s *Server) teamOf(ctx context.Context, user, slug string) (store.Tenant, e
 	if slug == "" {
 		return store.Tenant{}, invalid("you are in several tenants' groups: name one in %s", teamHeader)
 	}
-	return store.Tenant{}, errNoTeam
+	return store.Tenant{}, errNotYourTeam
 }
 
 // sessionTenant is tenantAuth for a person who signed in with OpenShift.
@@ -223,7 +227,7 @@ func (s *Server) sessionTenant(w http.ResponseWriter, r *http.Request) (context.
 	case errors.Is(err, sso.ErrNoGroups):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return nil, false
-	case errors.Is(err, errNoTeam):
+	case errors.Is(err, errNoTeam) || errors.Is(err, errNotYourTeam):
 		writeError(w, http.StatusForbidden, err.Error())
 		return nil, false
 	case err != nil:
@@ -314,10 +318,9 @@ func (s *Server) createMyKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	summary := "Created personal key " + k.ClientID + " for " + user + ", who signed in with OpenShift"
-	if err := s.st.CreateFinishedTask(context.WithoutCancel(r.Context()), "key.add", summary, true, ""); err != nil {
-		slog.Error("record task", "err", err)
-	}
-	s.sy.Changed(r.Context(), "key.add", summary)
+	// The sync's task is the one entry: a finished task beside it showed
+	// every key twice in the task log.
+	s.changed(r, "key.add", summary)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, map[string]any{"key": k, "secret": secret})
 }

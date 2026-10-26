@@ -152,6 +152,8 @@ sso:
   # The ClusterRole that lets the hub read the cluster's Groups (get, list,
   # watch groups.user.openshift.io), and its binding to the hub. Creating
   # them needs cluster-admin; set false and grant it yourself otherwise.
+  # A hub that CI upgrades with a namespace account needs false: Helm reads
+  # the role on every upgrade (docs/operations.md).
   createClusterRole: true
 
 # The admin token and the encryption key.
