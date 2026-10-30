@@ -23,8 +23,8 @@
         "site/content/en/v{minor}"
       ],
       "static": "site/static",
-      "ref": "v1.9.2",
-      "version": "v1.9.2"
+      "ref": "v1.9.3",
+      "version": "v1.9.3"
     },
     {
       "id": "kserve",
@@ -37,7 +37,7 @@
         "versioned_docs/version-{version}"
       ],
       "static": "static",
-      "ref": "83bfee627b0ddb6b424e311c9fd1742c4591df84",
+      "ref": "2d116c72fa2bf8ef6c6d5d2f4334c645c52cc60e",
       "version": "0.20"
     },
     {
@@ -49,8 +49,8 @@
       "roots": [
         "docs"
       ],
-      "ref": "v0.31.0",
-      "version": "v0.31.0"
+      "ref": "v0.32.0",
+      "version": "v0.32.0"
     },
     {
       "id": "llm-d",
@@ -62,8 +62,8 @@
         "docs",
         "guides"
       ],
-      "ref": "v0.10.0",
-      "version": "v0.10.0"
+      "ref": "v1.0.0",
+      "version": "v1.0.0"
     }
   ]
 }
