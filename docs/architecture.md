@@ -1081,12 +1081,12 @@ flag in `llmisvc.args` and `llmisvc.extraArgs` one plain token or
 `--kv-transfer-config`, `--max-model-len` in one place, no
 `VLLM_ADDITIONAL_ARGS`. The chart checks the same at render.
 
-**The vLLM check** (0.36.0; `internal/vllmflags`, `gitops.CheckFlags`).
-KServe hands the arguments to vLLM unread: a flag vLLM does not have stops
-the pod only when it starts, minutes after Argo CD synced, and a flag set
-twice is taken from the last place without a word (vLLM only warns of
-dotted keys). Before every save, and on the page as the form changes, the
-hub:
+**The vLLM check** (0.36.0; since 0.38.0 against `vllm serve --help` only;
+`internal/vllmflags`, `gitops.CheckFlags`). KServe hands the arguments to
+vLLM unread: a flag vLLM does not have stops the pod only when it starts,
+minutes after Argo CD synced, and a flag set twice is taken from the last
+place without a word (vLLM only warns of dotted keys). Before every save,
+and on the page as the form changes, the hub:
 
 1. builds the pods' command word by word as vLLM gets it
    (`gitops.LaunchOf`): KServe's launcher (`kserve-config-llm-template`;
@@ -1094,16 +1094,18 @@ hub:
    the workers), then the chart's arguments (data parallel over ports,
    `llmisvc.extraArgs`, `llmisvc.args` with bash's quotes removed,
    `--max-model-len` from `model.maxModelLen`, LMCache's connector);
-2. reads it as `vllm serve` does against the flag list of the image's vLLM
-   version: vLLM's own rewriting (underscores, `-O3`, dotted keys merged
-   into one JSON value) and argparse's rules (exact flags, `--flag=value`,
-   a unique abbreviation, how many values each flag takes, each value's
-   type and choices, the keys of a JSON config);
-3. applies the checks vLLM runs before it loads a model: the serve checks
-   (`validate_parsed_serve_args`, with the data-parallel-over-ports rules),
-   the data-parallel launch checks, `ParallelConfig` and `SchedulerConfig`,
-   and the configs built when the engine starts (`--speculative-config`);
-4. adds the hub's own rules: a flag set twice (refused; KServe's
+2. reads it against `vllm serve --help=all` of the image's vLLM version,
+   after the rewriting vLLM does first (underscores in a flag's name,
+   `-O3`, a dotted key as a key of its flag's JSON value) and with
+   argparse's own ways (`--flag=value`, a unique abbreviation, a short flag
+   with its value attached). It refuses what the help rules out: a flag it
+   does not list (naming the nearest), a flag without its value, a value
+   for a switch, a value outside the choices shown as `{a,b}` (compared
+   lowercased with underscores for dashes, as vLLM reads some), a word that
+   is no flag's value. It never refuses what vLLM takes: run against vLLM
+   0.32.0's own verdicts on 72 commands before the change (0.38.0), it took
+   all 26 that vLLM takes and refused 11 of the 46 vLLM refuses;
+3. adds the hub's own rules: a flag set twice (refused; KServe's
    `--shutdown-timeout` and access-log flags may be changed, with a
    warning), the GPUs a pod asks for against tensor × pipeline ×
    prefill-context parallel × the data-parallel ranks in the pod (fewer is
@@ -1116,23 +1118,30 @@ every cluster that runs the model, with each cluster's own layer. The
 deployments list carries each deployment's check in short, so a file
 edited by hand in git shows its problems too.
 
-**The flag lists** (`internal/vllmflags/catalogs/vllm-<version>.json`; in
-0.36.0 vLLM 0.32.0) are written by vLLM's own parser inside an image of the
-version (`hack/vllm-flags.sh <image>` runs `hack/vllm-flags.py` there,
-without network): every option, its value type, choices, default and
-deprecation, and the keys of the JSON configs. The flags are the Python
-package's, the same in the CUDA and the CPU builds. An image uses the list
+**The flag lists** (`internal/vllmflags/catalogs/vllm-<version>.txt`; vLLM
+0.32.0) are `vllm serve --help=all` as an image of the version prints it,
+after one line naming the image (`hack/vllm-flags.sh <image>`, podman,
+without network). A flag is a help line that starts with two spaces and a
+dash: its spellings, and after the first one what it takes (nothing, `X`,
+`[X]`, `X [X ...]`, or the choices `{a,b}`; a list such as `['auto', 'hf']`
+only names the known values). `-h`/`--help` is left out. The flags are the
+Python package's, the same in the CUDA and the CPU builds. An image uses the list
 of its own version when a list was written from it, or when it is a
 `vllm*` repository (not under `lmcache/`) tagged `vX.Y.Z` with a list for
 X.Y.Z. Any other image (an LMCache build, whose tag is LMCache's version; a
 digest; KServe's default image when `images.vllm` is empty) is checked
 against the newest list, and every finding is then a warning.
-`TestVerdictsMatchVLLM` holds the hub to vLLM's own verdicts (written by the
-same script in the image) on 72 argument lists: production's commands, the
-three shapes, and each kind of mistake.
 
-**What the check does not know**: KServe's TLS flags (its global
-`EnableTLS`); what the model rules out (a dense model with external data
+**What the check does not know**: what the help does not show (a value's
+type, such as `--max-num-seqs many`; JSON that does not parse; the keys of
+a JSON config, such as `--speculative-config` `{"methd": ...}`; a flag the
+help hides); the checks vLLM runs before it loads a model (the serve
+checks, such as `--enable-auto-tool-choice` without `--tool-call-parser`;
+the data-parallel launch checks; `ParallelConfig`, such as EPLB without
+expert parallel; `SchedulerConfig`, such as batched tokens below the length
+with chunked prefill off), which 0.36.0 and 0.37.0 checked and 0.38.0 left
+to the pod's start; `--model` beside KServe's model; KServe's TLS flags
+(its global `EnableTLS`); what the model rules out (a dense model with external data
 parallel, a length above the model's, a tensor parallel that does not
 divide its heads); values vLLM picks per GPU when a flag is left out (only
 values given are compared).
@@ -1159,9 +1168,10 @@ LeaderWorkerSet) with RoCE (`llmisvc.roce`), and its own flags
 - Deployments (0.35.0): the GPU shapes of `model-deployer` (data parallel
   over ports, tensor parallel, multi-node over RoCE, LMCache) were rendered
   and compared with the old charts, not run on GPUs.
-- The vLLM check (0.36.0): its verdicts match vLLM 0.32.0's in the CPU image;
-  the GPU shapes' commands were compared with KServe's render on the
-  exported site, not started on GPUs.
+- The vLLM check (0.36.0, `--help` only since 0.38.0): it takes every
+  command vLLM 0.32.0 takes in the CPU image (26 of 26 in 0.36.0's
+  verdicts); the GPU shapes' commands were compared with KServe's render on
+  the exported site, not started on GPUs.
 - Signing in with OpenShift (0.37.0): seen on one OpenShift 4.20 cluster
   with htpasswd users and a Group made by hand. Groups synced from LDAP, a
   person in several tenants' groups, and large Groups were not.

@@ -1,19 +1,18 @@
 // Package vllmflags checks the arguments of `vllm serve` before they reach a
 // pod. KServe hands the arguments to vLLM as they are, and vLLM refuses a
-// flag it does not have, a bad value or a bad combination only when the pod
-// starts. This package knows the flags of each vLLM version from a list
-// written by vLLM's own parser (hack/vllm-flags.py, run inside the image),
-// reads arguments the way vLLM's parser reads them, and applies the checks
-// vLLM runs before it loads a model. testdata/verdicts-<version>.json holds
-// vLLM's verdicts on testdata/cases.json; TestVerdictsMatchVLLM keeps the two
-// in agreement.
+// flag it does not have only when the pod starts. The flags of each vLLM
+// version are what `vllm serve --help=all` prints in that version's image
+// (hack/vllm-flags.sh writes catalogs/vllm-<version>.txt). The check knows
+// what the help shows: each flag's spellings, whether it takes a value, and
+// a value's choices. It does not know value types, the keys of JSON
+// configs, or the combinations vLLM refuses when it starts.
 package vllmflags
 
 import (
 	"embed"
-	"encoding/json"
 	"fmt"
 	"io/fs"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -21,74 +20,44 @@ import (
 	"sync"
 )
 
-//go:embed catalogs/*.json
+//go:embed catalogs/*.txt
 var catalogFiles embed.FS
 
 // Catalog is the flags of one vLLM version's `vllm serve`.
 type Catalog struct {
-	Version string `json:"vllm"`
-	// Image is the image the list was written from.
-	Image  string `json:"image"`
-	Python string `json:"python"`
-	// AllowAbbrev: argparse takes a unique start of a long flag for the
-	// flag (--max-num-seq for --max-num-seqs).
-	AllowAbbrev bool              `json:"allow_abbrev"`
-	Flags       []*Flag           `json:"flags"`
-	Configs     map[string]Config `json:"configs"`
+	Version string
+	// Image is the image the help was read from.
+	Image string
+	Flags []*Flag
 
 	options map[string]*Flag
-	names   []string // every option, sorted
+	names   []string // every spelling, sorted
 }
 
-// Flag is one option of `vllm serve`.
+// Value kinds, from the metavar the help shows after a flag.
+const (
+	NoValue   = ""         // --enforce-eager, or a --x / --no-x pair
+	OneValue  = "one"      // --port PORT, --dtype {auto,half}
+	Optional  = "optional" // --hf-token [HF_TOKEN]
+	OneOrMore = "many"     // --api-key API_KEY [API_KEY ...]
+	AnyNumber = "any"      // --x [X ...]
+)
+
+// Flag is one option of `vllm serve`, as one line of its help.
 type Flag struct {
-	// Options are its spellings: --tensor-parallel-size, -tp; a boolean
-	// has --x and --no-x.
-	Options []string `json:"options"`
-	Dest    string   `json:"dest"`
-	// Kind is value, switch (no value), bool (--x / --no-x), append or count.
-	Kind  string `json:"kind"`
-	Nargs string `json:"nargs,omitempty"`
-	// Type is what a value must be: int, float, str, hint (an integer that
-	// may end in k/K/m/M/g/G/t/T), hint_auto (hint, -1 or auto), json,
-	// config (a JSON object of Config), dict_or_str, port or any.
-	Type     string `json:"type,omitempty"`
-	Optional bool   `json:"optional,omitempty"`
-	// Normalize lower_underscore: the value is lowercased, dashes made
-	// underscores, before it is compared with Choices.
-	Normalize string `json:"normalize,omitempty"`
-	// Config names the JSON object's config; ConfigAt "startup" when vLLM
-	// builds it only when the engine starts (--speculative-config).
-	Config     string          `json:"config,omitempty"`
-	ConfigAt   string          `json:"config_at,omitempty"`
-	Choices    []string        `json:"choices,omitempty"`
-	Const      json.RawMessage `json:"const,omitempty"`
-	Default    json.RawMessage `json:"default,omitempty"`
-	Deprecated bool            `json:"deprecated,omitempty"`
-	Group      string          `json:"group,omitempty"`
-	Help       string          `json:"help,omitempty"`
+	// Options are its spellings: --tensor-parallel-size, -tp; a pair is
+	// --x and --no-x.
+	Options []string
+	// Dest is the long name with underscores: tensor_parallel_size.
+	Dest  string
+	Value string
+	// Choices are the values argparse takes, when the help shows them as
+	// {a,b,c}. A list such as ['auto', 'hf'] only names the known ones.
+	Choices []string
 }
 
 // Name is the flag's main spelling.
 func (f *Flag) Name() string { return f.Options[0] }
-
-// Config is the keys of a JSON config (KVTransferConfig, ...).
-type Config struct {
-	// Strict: a key the config does not have is refused.
-	Strict bool             `json:"strict"`
-	Fields map[string]Field `json:"fields"`
-}
-
-// Field is one key of a config.
-type Field struct {
-	// Type is choice, config, bool, int, float, str, object, list or any.
-	Type    string   `json:"type"`
-	Choices []string `json:"choices,omitempty"`
-	// Fold: the choice is compared in any case (an enum's member name).
-	Fold     bool   `json:"fold,omitempty"`
-	Config   string `json:"config,omitempty"`
-	Optional bool   `json:"optional,omitempty"`
-}
 
 var (
 	loadOnce sync.Once
@@ -102,18 +71,24 @@ func Catalogs() ([]*Catalog, error) {
 	return loaded, loadErr
 }
 
+var fileVersion = regexp.MustCompile(`^vllm-(\d+\.\d+\.\d+)\.txt$`)
+
 func load(files fs.FS) ([]*Catalog, error) {
-	paths, err := fs.Glob(files, "catalogs/*.json")
+	paths, err := fs.Glob(files, "catalogs/*.txt")
 	if err != nil {
 		return nil, err
 	}
 	var out []*Catalog
 	for _, p := range paths {
+		m := fileVersion.FindStringSubmatch(path.Base(p))
+		if m == nil {
+			return nil, fmt.Errorf("%s: not named vllm-<version>.txt", p)
+		}
 		raw, err := fs.ReadFile(files, p)
 		if err != nil {
 			return nil, err
 		}
-		c, err := Parse(raw)
+		c, err := ParseHelp(m[1], string(raw))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", p, err)
 		}
@@ -123,24 +98,75 @@ func load(files fs.FS) ([]*Catalog, error) {
 	return out, nil
 }
 
-// Parse reads a list written by hack/vllm-flags.py.
-func Parse(raw []byte) (*Catalog, error) {
-	var c Catalog
-	if err := json.Unmarshal(raw, &c); err != nil {
-		return nil, err
-	}
-	if c.Version == "" || len(c.Flags) == 0 {
-		return nil, fmt.Errorf("not a flag list: no vllm version or no flags")
-	}
-	c.options = make(map[string]*Flag)
-	for _, f := range c.Flags {
+var (
+	choiceList    = regexp.MustCompile(`^\{([^{} ]*)\}`)
+	optionalValue = regexp.MustCompile(`^\[[A-Z0-9_]+\]$`)
+)
+
+// ParseHelp reads what hack/vllm-flags.sh writes: a "# image:" line, then
+// `vllm serve --help=all`. A flag's line starts with two spaces and a dash;
+// what follows two more spaces is its help text.
+func ParseHelp(version, help string) (*Catalog, error) {
+	c := &Catalog{Version: version, options: map[string]*Flag{}}
+	for _, line := range strings.Split(help, "\n") {
+		if img, ok := strings.CutPrefix(line, "# image: "); ok {
+			c.Image = strings.TrimSpace(img)
+			continue
+		}
+		if !strings.HasPrefix(line, "  -") {
+			continue
+		}
+		usage := strings.TrimSpace(line)
+		if i := strings.Index(usage, "  "); i >= 0 {
+			usage = usage[:i]
+		}
+		parts := strings.Split(usage, ", -")
+		for i := 1; i < len(parts); i++ {
+			parts[i] = "-" + parts[i]
+		}
+		f := &Flag{}
+		for i, p := range parts {
+			name, metavar, _ := strings.Cut(p, " ")
+			f.Options = append(f.Options, name)
+			if i == 0 {
+				f.Value, f.Choices = valueOf(metavar)
+			}
+		}
+		if f.Name() == "-h" || f.Name() == "--help" {
+			continue // it prints the help and exits: not for a pod
+		}
 		for _, o := range f.Options {
+			if strings.HasPrefix(o, "--") && f.Dest == "" {
+				f.Dest = strings.ReplaceAll(strings.TrimPrefix(o, "--"), "-", "_")
+			}
 			c.options[o] = f
 			c.names = append(c.names, o)
 		}
+		c.Flags = append(c.Flags, f)
+	}
+	if len(c.Flags) == 0 || c.options["--port"] == nil {
+		return nil, fmt.Errorf("not the help of vllm serve --help=all: no --port")
 	}
 	sort.Strings(c.names)
-	return &c, nil
+	return c, nil
+}
+
+// valueOf reads a metavar: none, [X], X [X ...], [X ...], {a,b} or X.
+func valueOf(metavar string) (kind string, choices []string) {
+	if m := choiceList.FindStringSubmatch(metavar); m != nil && (metavar == m[0] || strings.HasPrefix(metavar, m[0]+" [")) {
+		choices = strings.Split(m[1], ",")
+	}
+	switch {
+	case metavar == "":
+		return NoValue, nil
+	case strings.HasPrefix(metavar, "[") && strings.HasSuffix(metavar, " ...]"):
+		return AnyNumber, choices
+	case strings.HasSuffix(metavar, " ...]"):
+		return OneOrMore, choices
+	case optionalValue.MatchString(metavar):
+		return Optional, nil
+	}
+	return OneValue, choices
 }
 
 // Flag is the flag spelled exactly so, or nil.
@@ -148,20 +174,15 @@ func (c *Catalog) Flag(option string) *Flag { return c.options[option] }
 
 // FlagOf is the flag that sets dest, or nil.
 func (c *Catalog) FlagOf(dest string) *Flag {
-	for _, f := range c.Flags {
-		if f.Dest == dest {
-			return f
-		}
-	}
-	return nil
+	return c.options["--"+strings.ReplaceAll(dest, "_", "-")]
 }
 
 var vllmTag = regexp.MustCompile(`^v(\d+\.\d+\.\d+)(-[A-Za-z0-9_.-]+)?$`)
 
 // ForImage is the list for an image's vLLM. exact says it is the image's
-// own version: the image is the one a list was written from, or a vllm
-// build (a repository named vllm*, not under lmcache/) tagged vX.Y.Z with a
-// list for X.Y.Z. Otherwise it is the newest list, and why says what is not
+// own version: the image is the one a list was read from, or a vllm build
+// (a repository named vllm*, not under lmcache/) tagged vX.Y.Z with a list
+// for X.Y.Z. Otherwise it is the newest list, and why says what is not
 // known; the check's findings are then only warnings.
 func ForImage(image string) (c *Catalog, exact bool, why string) {
 	all, err := Catalogs()

@@ -418,12 +418,19 @@ image fully, write its list where the hub is built and release it:
 
 ```sh
 hack/vllm-flags.sh registry-internal/vllm/vllm-openai:v0.33.0   # podman, no network for the image
-go test ./internal/vllmflags/                                    # the hub against vLLM's verdicts
+go test ./internal/vllmflags/
 ```
 
-The script writes `internal/vllmflags/catalogs/vllm-<version>.json` and
-`testdata/verdicts-<version>.json`. A disagreement in the test is a rule to
-fix before the list ships.
+The script writes `vllm serve --help=all` of the image to
+`internal/vllmflags/catalogs/vllm-<version>.txt`, after a line naming the
+image. The tests check that the hub's own flags (`--port`,
+`--served-model-name`, the parallel flags) are in every list.
+
+**The pod stops although the check passed.** The check knows only what
+`vllm serve --help` shows (since 0.38.0): a value of the wrong type, a bad
+key in a JSON config, or a combination vLLM refuses (EPLB without expert
+parallel, batched tokens below the length with chunked prefill off) stops
+the pod when it starts. Its log says which; fix the values and save again.
 
 A file edited by hand shows on the page as it is; a file Argo CD cannot
 deploy (wrong namespace, not YAML) shows what is wrong in red. Removing a

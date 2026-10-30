@@ -523,9 +523,10 @@ Argo CD does the rest. Nothing goes to a cluster from the hub.
 | **New model** | `operators/<name>/<name>.yaml` (a copy of another model's app config) and its recipe, and optionally its deployment on a cluster | As Deploy |
 
 Before each commit the hub checks the vLLM command the values make (since
-0.36.0): the command KServe and the chart build, read as vLLM reads it, with
-the flags of the image's vLLM version and the checks vLLM runs before it
-loads a model, plus a flag set twice and the GPUs a pod asks for. An error
+0.36.0; since 0.38.0 against `vllm serve --help` only): the command KServe
+and the chart build, against the flags the help of the image's vLLM version
+lists (a flag it lacks, a missing value, a value outside the choices it
+shows), plus a flag set twice and the GPUs a pod asks for. An error
 refuses the save; the form shows the findings and the command as it
 changes. vLLM itself says nothing before the pod starts, and takes a flag
 set twice from the last place.

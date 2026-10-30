@@ -5,6 +5,7 @@ image tag (`ghcr.io/roiblum1/aigw-ui:<version>`).
 
 | Version | Date | Summary |
 |---|---|---|
+| [0.38.0](v0.38.0.md) | not released yet | The vLLM check on the Deployments page is `vllm serve --help` only: each version's flag list is its help text, and a command is checked for flags the help does not list, missing values and values outside its choices, besides the hub's own rules; value types, JSON config keys and vLLM's combination checks are left to the pod's start |
 | [0.37.0](v0.37.0.md) | not released yet | A tenant can be linked to an LDAP group (optional): its members sign in on `/my-usage` with the hub cluster's OpenShift login, make a personal key of their own and see each other's usage; leaving the group revokes the key; the gateways count each key, shown per person to members and admins |
 | [0.36.1](v0.36.1.md) | not released yet | People on Windows set up Claude Code and Oh My Pi from the hub, with an installer and `aigw-token` in PowerShell; every machine set up from the hub follows it, running the installer again by itself when the hub serves other client files or weekly |
 | [0.36.0](v0.36.0.md) | 2026-10-25 | The Deployments page checks the vLLM command before it commits: the command KServe and the chart build, read as vLLM 0.32.0 reads it (its flags, values and combinations), a flag set twice and the GPUs a pod asks for; a save with an error is refused |

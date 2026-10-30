@@ -251,13 +251,16 @@ operator name (its directory and Application) and a namespace; its object
 names (SCC, storage, LMCache engine) are renamed after it. Plan its disks
 with the site: two models on the same nodes need their own volume names.
 
-**The vLLM check.** Under the flags, the form shows what vLLM would make of
-the command the pods will run, about half a second after each change:
-"vLLM takes it", or each problem with where it came from. A misspelt flag
-names the nearest one; a value vLLM refuses, a combination it stops on
-(data-parallel sizes, EPLB without expert parallel, batched tokens below
-the length with chunked prefill off), a flag set twice (the recipe's
-`llmisvc.args` win over this shape's flags), fewer GPUs than tensor × ranks.
+**The vLLM check.** Under the flags, the form checks the command the pods
+will run against `vllm serve --help` of the image's vLLM, about half a
+second after each change: "vLLM knows every flag", or each problem with
+where it came from. A misspelt flag names the nearest one; also a flag
+without its value, a value for a switch, a value outside the choices the
+help lists, a flag set twice (the recipe's `llmisvc.args` win over this
+shape's flags), fewer GPUs than tensor × ranks. It does not check a value's
+type, the keys of a JSON config, or combinations vLLM refuses (EPLB without
+expert parallel, batched tokens below the length): the pod stops on those
+when it starts.
 "The command vLLM gets" lists every word, KServe's and the chart's in grey.
 A recipe edit is checked on each cluster that runs the model. A save with an
 error is refused. "vLLM version unknown": the image does not say its

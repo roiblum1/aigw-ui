@@ -297,11 +297,11 @@ function FlagCheckView({ c, many }: { c: FlagCheck; many: boolean }) {
         {errors.length > 0 ? (
           <span className="badge error">{errors.length === 1 ? "1 to fix" : `${errors.length} to fix`}</span>
         ) : (
-          <span className="badge synced">{c.exact ? "vLLM takes it" : "no error known"}</span>
+          <span className="badge synced">{c.exact ? "vLLM knows every flag" : "no error known"}</span>
         )}
         {warnings.length > 0 && <span className="badge pending">{warnings.length === 1 ? "1 warning" : `${warnings.length} warnings`}</span>}
         <span className="detail">
-          {c.exact ? `vLLM ${c.vllm}'s own flags` : `vLLM ${c.vllm}'s flags, as warnings: ${c.note}`}
+          {c.exact ? `against vllm serve --help of vLLM ${c.vllm}` : `against vLLM ${c.vllm}'s --help, as warnings: ${c.note}`}
         </span>
       </div>
       {c.problems.length > 0 && (
