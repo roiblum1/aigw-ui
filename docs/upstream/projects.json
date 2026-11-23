@@ -10,8 +10,8 @@
         "site/versioned_docs/version-{minor}"
       ],
       "static": "site/static",
-      "ref": "v1.2.0",
-      "version": "v1.2.0"
+      "ref": "v1.3.0",
+      "version": "v1.3.0"
     },
     {
       "id": "envoy-gateway",
@@ -23,8 +23,8 @@
         "site/content/en/v{minor}"
       ],
       "static": "site/static",
-      "ref": "v1.9.3",
-      "version": "v1.9.3"
+      "ref": "v1.10.0",
+      "version": "v1.10.0"
     },
     {
       "id": "kserve",
@@ -37,8 +37,8 @@
         "versioned_docs/version-{version}"
       ],
       "static": "static",
-      "ref": "2d116c72fa2bf8ef6c6d5d2f4334c645c52cc60e",
-      "version": "0.20"
+      "ref": "6c8bfde27f92ff7f7c44c5dee6ff19e1b1312780",
+      "version": "0.21"
     },
     {
       "id": "vllm",
@@ -49,8 +49,8 @@
       "roots": [
         "docs"
       ],
-      "ref": "v0.32.0",
-      "version": "v0.32.0"
+      "ref": "v0.34.0",
+      "version": "v0.34.0"
     },
     {
       "id": "llm-d",
